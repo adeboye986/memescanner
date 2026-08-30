@@ -801,70 +801,84 @@ class SolanaService
     }
     
     /**
-     * Best-effort Pump.fun developer activity analysis.
+     * Fetch the oldest transactions touching an address using Helius'
+     * getTransactionsForAddress archival RPC.
      *
-     * The creator is inferred from the oldest Pump.fun transaction
-     * involving the mint. We then scan newer mint transactions and
-     * look for Pump.fun sell instructions signed by that wallet.
+     * This avoids walking through thousands of recent signatures when
+     * all we need is the mint's creation transaction.
+     */
+    public function getOldestTransactionsForAddress(
+        string $address,
+        int $limit = 40
+    ): array {
+        $limit = max(1, min($limit, 1000));
+
+        $result = $this->rpcRequest(
+            'getTransactionsForAddress',
+            [
+                $address,
+                [
+                    'transactionDetails' => 'signatures',
+                    'sortOrder' => 'asc',
+                    'limit' => $limit,
+                ],
+            ]
+        );
+
+        $data = $result['data'] ?? [];
+
+        return is_array($data)
+            ? $data
+            : [];
+    }
+
+    /**
+     * Best-effort developer activity analysis for Pump.fun tokens.
      *
-     * This is an informational signal, not a scam verdict.
+     * Phase 1:
+     * - paginate mint signatures toward the oldest history using cheap
+     *   getSignaturesForAddress calls;
+     * - inspect only a small tail of the oldest transactions to find
+     *   the Pump.fun creation transaction and creator wallet.
+     *
+     * Phase 2:
+     * - scan recent creator-wallet transactions;
+     * - compare the creator's pre/post balance for this mint;
+     * - classify a likely sale when the creator's token balance falls
+     *   and either a sell instruction is present or native SOL rises.
+     *
+     * This works across bonding-curve and post-graduation activity
+     * without relying only on Pump.fun Sell instruction names.
      */
     public function analyzePumpFunDeveloper(
         string $mint,
-        int $maxSignatures = 500
+        int $creatorTxLimit = 250
     ): array {
-        $allSignatures = [];
-        $before = null;
-        $historyExhausted = false;
-
-        while (count($allSignatures) < $maxSignatures) {
-            $remaining = $maxSignatures - count($allSignatures);
-            $pageLimit = min(100, $remaining);
-
-            $page = $this->getSignaturesForAddress(
-                $mint,
-                $pageLimit,
-                $before
-            );
-
-            if (empty($page)) {
-                $historyExhausted = true;
-                break;
-            }
-
-            $allSignatures = array_merge(
-                $allSignatures,
-                $page
-            );
-
-            $last = end($page);
-            $before = $last['signature'] ?? null;
-
-            if (count($page) < $pageLimit) {
-                $historyExhausted = true;
-                break;
-            }
-
-            if (!$before) {
-                break;
-            }
-        }
-
-        if (empty($allSignatures)) {
-            throw new RuntimeException(
-                'No transaction history found for token.'
-            );
-        }
+        $creatorTxLimit =
+            max(25, min($creatorTxLimit, 1000));
 
         /*
-         * RPC returns newest -> oldest.
-         * Search from the oldest transaction toward the present
-         * for the Pump.fun creation transaction.
+         * Helius archival RPC lets us ask for the oldest activity
+         * directly, so we no longer need to page through 10,000+
+         * recent mint signatures.
          */
+        $oldestTransactions =
+            $this->getOldestTransactionsForAddress(
+                $mint,
+                40
+            );
+
+        if (empty($oldestTransactions)) {
+            throw new RuntimeException(
+                'No historical transactions found for token.'
+            );
+        }
+
         $creator = null;
         $creationSignature = null;
+        $creationTransactionsInspected = 0;
 
-        foreach (array_reverse($allSignatures) as $entry) {
+        foreach ($oldestTransactions as $entry) {
             $signature = $entry['signature'] ?? null;
 
             if (!$signature) {
@@ -881,28 +895,49 @@ class SolanaService
                 continue;
             }
 
+            $creationTransactionsInspected++;
+
             $logs = implode(
                 "\n",
                 $tx['meta']['logMessages'] ?? []
             );
 
+            $keys =
+                $tx['transaction']['message']['accountKeys']
+                ?? [];
+
+            $touchesPumpFun = false;
+
+            foreach ($keys as $key) {
+                $address = is_string($key)
+                    ? $key
+                    : ($key['pubkey'] ?? null);
+
+                if ($address === self::PUMP_FUN_PROGRAM) {
+                    $touchesPumpFun = true;
+                    break;
+                }
+            }
+
+            if (!$touchesPumpFun) {
+                continue;
+            }
+
             $isPumpCreation =
                 str_contains($logs, 'Instruction: Create')
                 || str_contains($logs, 'CreateV2')
-                || str_contains($logs, 'Instruction: CreateV2');
+                || str_contains(
+                    $logs,
+                    'Instruction: CreateV2'
+                );
 
             if (!$isPumpCreation) {
                 continue;
             }
 
-            $keys =
-                $tx['transaction']['message']['accountKeys']
-                ?? [];
-
             /*
-             * Prefer a writable signer that is a normal System
-             * Program wallet. This avoids treating programs/PDAs
-             * as the developer.
+             * Pump.fun creation has one or more writable signers.
+             * Prefer a normal System Program wallet and skip the mint.
              */
             foreach ($keys as $key) {
                 if (is_string($key)) {
@@ -910,22 +945,33 @@ class SolanaService
                 }
 
                 $address = $key['pubkey'] ?? null;
-                $isSigner = (bool) ($key['signer'] ?? false);
-                $isWritable = (bool) ($key['writable'] ?? false);
+                $isSigner =
+                    (bool) ($key['signer'] ?? false);
+                $isWritable =
+                    (bool) ($key['writable'] ?? false);
 
-                if (!$address || !$isSigner || !$isWritable) {
+                if (
+                    !$address
+                    || $address === $mint
+                    || !$isSigner
+                    || !$isWritable
+                ) {
                     continue;
                 }
 
                 try {
-                    $info = $this->getParsedAccountInfo($address);
+                    $info =
+                        $this->getParsedAccountInfo(
+                            $address
+                        );
                 } catch (\Throwable $e) {
                     continue;
                 }
 
                 if (
                     ($info['owner'] ?? null)
-                    === '11111111111111111111111111111111'
+                    ===
+                    '11111111111111111111111111111111'
                 ) {
                     $creator = $address;
                     $creationSignature = $signature;
@@ -941,24 +987,42 @@ class SolanaService
                 'creator' => null,
                 'creation_signature' => null,
                 'dev_sold' => null,
+                'dev_token_outflow' => null,
                 'sell_count' => 0,
+                'outflow_count' => 0,
                 'sell_signatures' => [],
-                'signatures_scanned' => count($allSignatures),
-                'history_exhausted' => $historyExhausted,
-                'reason' => 'Unable to identify Pump.fun creator wallet.',
+                'outflow_signatures' => [],
+                'oldest_transactions_returned' =>
+                    count($oldestTransactions),
+                'creation_transactions_inspected' =>
+                    $creationTransactionsInspected,
+                'creator_transactions_scanned' => 0,
+                'reason' =>
+                    'Unable to identify Pump.fun creator wallet from oldest transactions.',
             ];
         }
 
-        $sellSignatures = [];
-
         /*
-         * Scan transactions after creation for Pump.fun sell
-         * instructions where the creator wallet is a signer.
+         * Once the creator is known, scan only the creator wallet's
+         * recent activity instead of every transaction touching mint.
          */
-        foreach ($allSignatures as $entry) {
+        $creatorSignatures =
+            $this->getSignaturesForAddress(
+                $creator,
+                $creatorTxLimit
+            );
+
+        $sellEvents = [];
+        $outflowEvents = [];
+        $creatorTransactionsScanned = 0;
+
+        foreach ($creatorSignatures as $entry) {
             $signature = $entry['signature'] ?? null;
 
-            if (!$signature || $signature === $creationSignature) {
+            if (
+                !$signature
+                || $signature === $creationSignature
+            ) {
                 continue;
             }
 
@@ -972,17 +1036,31 @@ class SolanaService
                 continue;
             }
 
-            $logs = implode(
-                "\n",
-                $tx['meta']['logMessages'] ?? []
-            );
+            $creatorTransactionsScanned++;
 
-            $isSell =
-                str_contains($logs, 'SellV2')
-                || str_contains($logs, 'V2SellExactInPumpFun')
-                || str_contains($logs, 'Instruction: Sell');
+            $preToken =
+                $this->sumOwnerMintTokenBalance(
+                    $tx['meta']['preTokenBalances'] ?? [],
+                    $creator,
+                    $mint
+                );
 
-            if (!$isSell) {
+            $postToken =
+                $this->sumOwnerMintTokenBalance(
+                    $tx['meta']['postTokenBalances'] ?? [],
+                    $creator,
+                    $mint
+                );
+
+            if ($preToken === null && $postToken === null) {
+                continue;
+            }
+
+            $preToken = $preToken ?? 0.0;
+            $postToken = $postToken ?? 0.0;
+            $tokenDelta = $postToken - $preToken;
+
+            if ($tokenDelta >= -0.000000001) {
                 continue;
             }
 
@@ -990,29 +1068,125 @@ class SolanaService
                 $tx['transaction']['message']['accountKeys']
                 ?? [];
 
+            $creatorIndex = null;
             $creatorSigned = false;
 
-            foreach ($keys as $key) {
+            foreach ($keys as $index => $key) {
                 $address = is_string($key)
                     ? $key
                     : ($key['pubkey'] ?? null);
 
-                $isSigner = is_string($key)
-                    ? false
+                if ($address !== $creator) {
+                    continue;
+                }
+
+                $creatorIndex = $index;
+
+                $creatorSigned = is_string($key)
+                    ? ($index === 0)
                     : (bool) ($key['signer'] ?? false);
 
-                if (
-                    $address === $creator
-                    && $isSigner
-                ) {
-                    $creatorSigned = true;
-                    break;
-                }
+                break;
             }
 
-            if ($creatorSigned) {
-                $sellSignatures[] = $signature;
+            if (!$creatorSigned) {
+                continue;
             }
+
+            $preLamports =
+                $creatorIndex !== null
+                    ? (
+                        $tx['meta']['preBalances'][$creatorIndex]
+                        ?? null
+                    )
+                    : null;
+
+            $postLamports =
+                $creatorIndex !== null
+                    ? (
+                        $tx['meta']['postBalances'][$creatorIndex]
+                        ?? null
+                    )
+                    : null;
+
+            $solDelta = null;
+
+            if (
+                $preLamports !== null
+                && $postLamports !== null
+            ) {
+                $solDelta =
+                    (
+                        (float) $postLamports
+                        - (float) $preLamports
+                    )
+                    / 1_000_000_000;
+            }
+
+            $logs = implode(
+                "\n",
+                $tx['meta']['logMessages'] ?? []
+            );
+
+            $hasSellInstruction =
+                str_contains($logs, 'SellV2')
+                || str_contains(
+                    $logs,
+                    'V2SellExactInPumpFun'
+                )
+                || str_contains(
+                    $logs,
+                    'Instruction: Sell'
+                );
+
+            $event = [
+                'signature' => $signature,
+                'token_amount_before' =>
+                    round($preToken, 6),
+                'token_amount_after' =>
+                    round($postToken, 6),
+                'token_delta' =>
+                    round($tokenDelta, 6),
+                'sol_delta' =>
+                    $solDelta !== null
+                        ? round($solDelta, 9)
+                        : null,
+                'sell_instruction' =>
+                    $hasSellInstruction,
+            ];
+
+            $outflowEvents[] = $event;
+
+            if (
+                $hasSellInstruction
+                || ($solDelta !== null && $solDelta > 0)
+            ) {
+                $sellEvents[] = $event;
+            }
+        }
+
+        $currentDevBalance =
+            $this->getOwnerMintBalance(
+                $creator,
+                $mint
+            );
+
+        $supplyData = $this->getTokenSupply($mint);
+
+        $totalSupply = (float) (
+            $supplyData['uiAmountString']
+            ?? $supplyData['uiAmount']
+            ?? 0
+        );
+
+        $currentDevPercentage = null;
+
+        if (
+            $currentDevBalance !== null
+            && $totalSupply > 0
+        ) {
+            $currentDevPercentage =
+                ($currentDevBalance / $totalSupply) * 100;
         }
 
         return [
@@ -1020,16 +1194,147 @@ class SolanaService
             'mint' => $mint,
             'creator' => $creator,
             'creation_signature' => $creationSignature,
-            'dev_sold' => !empty($sellSignatures),
-            'sell_count' => count($sellSignatures),
-            'sell_signatures' => array_slice(
-                $sellSignatures,
-                0,
-                10
+            'dev_sold' => !empty($sellEvents),
+            'dev_token_outflow' =>
+                !empty($outflowEvents),
+            'sell_count' => count($sellEvents),
+            'outflow_count' => count($outflowEvents),
+
+            'sell_signatures' => array_values(
+                array_column(
+                    array_slice($sellEvents, 0, 10),
+                    'signature'
+                )
             ),
-            'signatures_scanned' => count($allSignatures),
-            'history_exhausted' => $historyExhausted,
+
+            'outflow_signatures' => array_values(
+                array_column(
+                    array_slice($outflowEvents, 0, 10),
+                    'signature'
+                )
+            ),
+
+            'sell_events' =>
+                array_slice($sellEvents, 0, 10),
+
+            'outflow_events' =>
+                array_slice($outflowEvents, 0, 10),
+
+            'current_dev_token_balance' =>
+                $currentDevBalance !== null
+                    ? round($currentDevBalance, 6)
+                    : null,
+
+            'current_dev_percentage' =>
+                $currentDevPercentage !== null
+                    ? round($currentDevPercentage, 4)
+                    : null,
+
+            'oldest_transactions_returned' =>
+                count($oldestTransactions),
+
+            'creation_transactions_inspected' =>
+                $creationTransactionsInspected,
+
+            'creator_transactions_scanned' =>
+                $creatorTransactionsScanned,
+
+            'creator_tx_limit' =>
+                $creatorTxLimit,
+
+            /*
+             * false means we inspected only the most recent creator
+             * transactions, so "Dev Sold: NO" should be read as
+             * "no sale detected in scanned history".
+             */
+            'scan_complete_for_creator' =>
+                count($creatorSignatures)
+                < $creatorTxLimit,
         ];
+    }
+
+    /**
+     * Sum token balance entries belonging to one owner/mint.
+     *
+     * Returns null when that owner/mint does not appear in the balance
+     * array, which lets callers distinguish "zero" from "not present".
+     */
+    private function sumOwnerMintTokenBalance(
+        array $balances,
+        string $owner,
+        string $mint
+    ): ?float {
+        $found = false;
+        $total = 0.0;
+
+        foreach ($balances as $balance) {
+            if (
+                ($balance['owner'] ?? null) !== $owner
+                || ($balance['mint'] ?? null) !== $mint
+            ) {
+                continue;
+            }
+
+            $found = true;
+
+            $ui =
+                $balance['uiTokenAmount']
+                ?? [];
+
+            $total += (float) (
+                $ui['uiAmountString']
+                ?? $ui['uiAmount']
+                ?? 0
+            );
+        }
+
+        return $found ? $total : null;
+    }
+
+    /**
+     * Current balance of one mint across all token accounts owned by
+     * the developer wallet.
+     */
+    public function getOwnerMintBalance(
+        string $owner,
+        string $mint
+    ): ?float {
+        $result = $this->rpcRequest(
+            'getTokenAccountsByOwner',
+            [
+                $owner,
+                [
+                    'mint' => $mint,
+                ],
+                [
+                    'encoding' => 'jsonParsed',
+                    'commitment' => 'confirmed',
+                ],
+            ]
+        );
+
+        $accounts = $result['value'] ?? [];
+
+        if (!is_array($accounts)) {
+            return null;
+        }
+
+        $total = 0.0;
+
+        foreach ($accounts as $account) {
+            $amount =
+                $account['account']['data']['parsed']['info']
+                    ['tokenAmount']
+                ?? [];
+
+            $total += (float) (
+                $amount['uiAmountString']
+                ?? $amount['uiAmount']
+                ?? 0
+            );
+        }
+
+        return $total;
     }
 
     private function classifyOwner(
