@@ -4,9 +4,11 @@ namespace App\Console\Commands;
 
 use App\Models\PaperPosition;
 use App\Models\PaperPositionSnapshot;
+use App\Models\PaperWallet;
 use App\Services\DexScreenerService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 
 class TrackPaperPositions extends Command
 {
@@ -303,29 +305,216 @@ class TrackPaperPositions extends Command
 
         $strategyClosed = $remainingFraction <= 0.000001;
 
-        $position->update([
-            'last_market_cap' => $marketCap,
-            'last_price' => $price,
-            'last_checked_at' => now(),
-            'peak_market_cap' => $peakMc,
-            'peak_multiple' => $peakMultiple,
-            'max_drawdown_percent' => $maxDrawdown,
-            'milestones' => $milestones,
+        /*
+         * VIRTUAL SOL WALLET ACCOUNTING
+         *
+         * For every new simulated exit:
+         * - return the simulated SOL proceeds to available balance;
+         * - reduce invested balance by the original cost basis sold;
+         * - add realized P/L to the wallet;
+         * - update position-level realized SOL and trade P/L.
+         *
+         * Wallet + position updates are wrapped in one DB transaction so
+         * they either both succeed or both roll back.
+         */
+        $initialInvestmentSol =
+            max(0.0, (float) ($position->initial_investment_sol ?? 0));
 
-            'remaining_fraction' => $remainingFraction,
-            'realized_value_multiple' => $realizedValue,
-            'strategy_value_multiple' => $strategyValueMultiple,
-            'strategy_return_percent' => $strategyReturnPercent,
+        $positionRealizedSol =
+            max(0.0, (float) ($position->realized_sol ?? 0));
 
-            'tp_50_hit' => $tp50Hit,
-            'tp_2x_hit' => $tp2xHit,
-            'stop_loss_hit' => $stopLossHit,
-            'trailing_stop_hit' => $trailingStopHit,
-            'exit_events' => $exitEvents,
+        $positionTradePnlSol =
+            (float) ($position->trade_pnl_sol ?? 0);
 
-            'status' => $strategyClosed ? 'closed' : 'open',
-            'closed_at' => $strategyClosed ? now() : null,
-        ]);
+        $walletSolReturned = 0.0;
+        $walletCostBasisReleased = 0.0;
+        $walletRealizedPnl = 0.0;
+
+        if ($initialInvestmentSol > 0 && !empty($strategyEvents)) {
+            foreach ($strategyEvents as &$strategyEvent) {
+                $soldFraction = max(
+                    0.0,
+                    min(
+                        1.0,
+                        (float) ($strategyEvent['sold_fraction'] ?? 0)
+                    )
+                );
+
+                $fillMultiple = max(
+                    0.0,
+                    (float) ($strategyEvent['fill_multiple'] ?? 0)
+                );
+
+                $costBasisSold =
+                    $initialInvestmentSol * $soldFraction;
+
+                $solReturned =
+                    $costBasisSold * $fillMultiple;
+
+                $realizedPnl =
+                    $solReturned - $costBasisSold;
+
+                $strategyEvent['cost_basis_sol'] =
+                    round($costBasisSold, 8);
+
+                $strategyEvent['sol_returned'] =
+                    round($solReturned, 8);
+
+                $strategyEvent['realized_pnl_sol'] =
+                    round($realizedPnl, 8);
+
+                $strategyEvent['wallet_applied'] = true;
+
+                $walletSolReturned += $solReturned;
+                $walletCostBasisReleased += $costBasisSold;
+                $walletRealizedPnl += $realizedPnl;
+            }
+
+            unset($strategyEvent);
+
+            /*
+             * Replace the just-created exit-event copies with the enriched
+             * versions so the JSON audit trail also records SOL proceeds.
+             */
+            foreach ($strategyEvents as $enrichedEvent) {
+                foreach ($exitEvents as $index => $exitEvent) {
+                    if (
+                        ($exitEvent['type'] ?? null)
+                            === ($enrichedEvent['type'] ?? null)
+                        && ($exitEvent['triggered_at'] ?? null)
+                            === ($enrichedEvent['triggered_at'] ?? null)
+                    ) {
+                        $exitEvents[$index] = $enrichedEvent;
+                        break;
+                    }
+                }
+            }
+
+            $positionRealizedSol += $walletSolReturned;
+            $positionTradePnlSol += $walletRealizedPnl;
+        }
+
+        $remainingInvestmentSol =
+            $initialInvestmentSol * $remainingFraction;
+
+        DB::transaction(function () use (
+            $position,
+            $marketCap,
+            $price,
+            $peakMc,
+            $peakMultiple,
+            $maxDrawdown,
+            $milestones,
+            $remainingFraction,
+            $realizedValue,
+            $strategyValueMultiple,
+            $strategyReturnPercent,
+            $tp50Hit,
+            $tp2xHit,
+            $stopLossHit,
+            $trailingStopHit,
+            $exitEvents,
+            $strategyClosed,
+            $positionRealizedSol,
+            $positionTradePnlSol,
+            $remainingInvestmentSol,
+            $walletSolReturned,
+            $walletCostBasisReleased,
+            $walletRealizedPnl
+        ): void {
+            $lockedPosition = PaperPosition::query()
+                ->whereKey($position->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            /*
+             * If this tracker is ever run concurrently, do not apply the
+             * same exit event to the virtual wallet twice.
+             */
+            $existingExitTypes = collect(
+                $lockedPosition->exit_events ?? []
+            )->pluck('type')->filter()->all();
+
+            $newExitTypes = collect($exitEvents)
+                ->pluck('type')
+                ->filter()
+                ->all();
+
+            $hasAlreadyAppliedExit =
+                count(array_intersect(
+                    $existingExitTypes,
+                    $newExitTypes
+                )) > 0
+                && count($existingExitTypes) >= count($newExitTypes);
+
+            if (
+                $walletSolReturned > 0
+                && !$hasAlreadyAppliedExit
+            ) {
+                $wallet = PaperWallet::query()
+                    ->where('name', 'default')
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $wallet->available_balance_sol =
+                    (float) $wallet->available_balance_sol
+                    + $walletSolReturned;
+
+                $wallet->invested_balance_sol =
+                    max(
+                        0.0,
+                        (float) $wallet->invested_balance_sol
+                        - $walletCostBasisReleased
+                    );
+
+                $wallet->realized_pnl_sol =
+                    (float) $wallet->realized_pnl_sol
+                    + $walletRealizedPnl;
+
+                $wallet->save();
+            }
+
+            $lockedPosition->update([
+                'last_market_cap' => $marketCap,
+                'last_price' => $price,
+                'last_checked_at' => now(),
+                'peak_market_cap' => $peakMc,
+                'peak_multiple' => $peakMultiple,
+                'max_drawdown_percent' => $maxDrawdown,
+                'milestones' => $milestones,
+
+                'remaining_fraction' => $remainingFraction,
+                'realized_value_multiple' => $realizedValue,
+                'strategy_value_multiple' => $strategyValueMultiple,
+                'strategy_return_percent' => $strategyReturnPercent,
+
+                'tp_50_hit' => $tp50Hit,
+                'tp_2x_hit' => $tp2xHit,
+                'stop_loss_hit' => $stopLossHit,
+                'trailing_stop_hit' => $trailingStopHit,
+                'exit_events' => $exitEvents,
+
+                'remaining_investment_sol' =>
+                    $remainingInvestmentSol,
+
+                'realized_sol' =>
+                    $positionRealizedSol,
+
+                'trade_pnl_sol' =>
+                    $positionTradePnlSol,
+
+                'status' =>
+                    $strategyClosed ? 'closed' : 'open',
+
+                'closed_at' =>
+                    $strategyClosed ? now() : null,
+            ]);
+
+            $position->setRawAttributes(
+                $lockedPosition->getAttributes(),
+                true
+            );
+        });
 
         PaperPositionSnapshot::create([
             'paper_position_id' => $position->id,
@@ -399,7 +588,7 @@ class TrackPaperPositions extends Command
 
         $this->info(
             sprintf(
-                'PAPER: %s | Entry $%s | Now $%s | Token %+.2f%% | %.2fx | Peak %.2fx | Strategy %+.2f%% | Remaining %.0f%%',
+                'PAPER: %s | Entry $%s | Now $%s | Token %+.2f%% | %.2fx | Peak %.2fx | Strategy %+.2f%% | Remaining %.0f%% | Realized %.4f SOL',
                 $position->symbol,
                 number_format($entryMc, 2),
                 number_format($marketCap, 2),
@@ -407,7 +596,8 @@ class TrackPaperPositions extends Command
                 $multiple,
                 $peakMultiple,
                 $strategyReturnPercent,
-                $remainingFraction * 100
+                $remainingFraction * 100,
+                $positionRealizedSol
             )
         );
 
@@ -432,6 +622,16 @@ class TrackPaperPositions extends Command
                         (float) $event['sold_fraction'] * 100,
                         0
                     ) . "%\n" .
+                    "🪙 SOL Returned: " .
+                    number_format(
+                        (float) ($event['sol_returned'] ?? 0),
+                        4
+                    ) . " SOL\n" .
+                    "💹 Realized P/L: " .
+                    sprintf(
+                        '%+.4f SOL',
+                        (float) ($event['realized_pnl_sol'] ?? 0)
+                    ) . "\n" .
                     "📦 Remaining: " .
                     number_format(
                         $remainingFraction * 100,
