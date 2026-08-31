@@ -61,5 +61,8 @@ return [
 
         'max_chase_percent' =>
             env('MOMENTUM_MAX_CHASE_PERCENT', 35),
+
+        'paper_trade_size_sol' => env('PAPER_TRADE_SIZE_SOL', 0.10),
     ],
+    
 ];

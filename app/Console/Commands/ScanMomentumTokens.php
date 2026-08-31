@@ -9,6 +9,7 @@ use App\Services\DexScreenerService;
 use App\Services\GoPlusService;
 use App\Services\TelegramService;
 use App\Services\SolanaService;
+use App\Services\PaperTradingService;
 use Illuminate\Console\Command;
 
 class ScanMomentumTokens extends Command
@@ -23,7 +24,8 @@ class ScanMomentumTokens extends Command
         GoPlusService $goplus,
         DexScreenerService $dexscreener,
         TelegramService $telegram,
-        SolanaService $solana
+        SolanaService $solana,
+        PaperTradingService $paperTrading
     ): int {
         $this->info('Fetching DexScreener momentum candidates...');
 
@@ -666,40 +668,55 @@ class ScanMomentumTokens extends Command
                     ];
 
                     if ($paperStatus === 'simulated_buy') {
-                        PaperPosition::firstOrCreate(
-                            [
+                        try {
+                            $paperPosition = $paperTrading->buy([
                                 'address' => $address,
-                                'status' => 'open',
-                            ],
-                            [
                                 'symbol' => $symbol,
                                 'name' => $name,
-                                'entry_market_cap' => $paperMarketCap,
-                                'entry_price' =>
-                                    $paperEntry['entry_price'] ?? null,
-                                'entry_liquidity' =>
-                                    $paperEntry['liquidity_usd'] ?? null,
+
                                 'discovery_market_cap' =>
                                     $discoveryMarketCap,
+
+                                'entry_market_cap' =>
+                                    $paperMarketCap,
+
+                                'entry_price' =>
+                                    $paperEntry['entry_price'] ?? null,
+
+                                'entry_liquidity' =>
+                                    $paperEntry['liquidity_usd'] ?? null,
+
                                 'move_since_discovery_percent' =>
                                     $paperMovePercent,
-                                'entry_at' => now(),
-                                'last_market_cap' => $paperMarketCap,
-                                'last_price' =>
-                                    $paperEntry['entry_price'] ?? null,
-                                'peak_market_cap' => $paperMarketCap,
-                                'peak_multiple' => 1,
-                                'max_drawdown_percent' => 0,
-                                'milestones' => [],
+
                                 'meta' => [
                                     'pair_address' =>
                                         $paperEntry['pair_address'] ?? null,
+
                                     'dex' =>
                                         $paperEntry['dex'] ?? null,
-                                    'source' => 'momentum_fast_paper',
+
+                                    'source' =>
+                                        'momentum_fast_paper',
                                 ],
-                            ]
-                        );
+                            ]);
+
+                            $this->info(
+                                sprintf(
+                                    'PAPER BUY: %s | %.4f SOL | Entry MC $%s',
+                                    $symbol,
+                                    $paperPosition->initial_investment_sol,
+                                    number_format($paperMarketCap, 2)
+                                )
+                            );
+                        } catch (\Throwable $e) {
+                            $this->warn(
+                                'PAPER BUY FAILED: ' .
+                                $symbol .
+                                ' | ' .
+                                $e->getMessage()
+                            );
+                        }
                     }
 
                     $this->info(
