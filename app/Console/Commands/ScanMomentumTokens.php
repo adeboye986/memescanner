@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\TokenScan;
+use App\Models\PaperPosition;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
 use App\Services\GoPlusService;
@@ -663,6 +664,43 @@ class ScanMomentumTokens extends Command
                         'entry_decided_at' =>
                             now()->toIso8601String(),
                     ];
+
+                    if ($paperStatus === 'simulated_buy') {
+                        PaperPosition::firstOrCreate(
+                            [
+                                'address' => $address,
+                                'status' => 'open',
+                            ],
+                            [
+                                'symbol' => $symbol,
+                                'name' => $name,
+                                'entry_market_cap' => $paperMarketCap,
+                                'entry_price' =>
+                                    $paperEntry['entry_price'] ?? null,
+                                'entry_liquidity' =>
+                                    $paperEntry['liquidity_usd'] ?? null,
+                                'discovery_market_cap' =>
+                                    $discoveryMarketCap,
+                                'move_since_discovery_percent' =>
+                                    $paperMovePercent,
+                                'entry_at' => now(),
+                                'last_market_cap' => $paperMarketCap,
+                                'last_price' =>
+                                    $paperEntry['entry_price'] ?? null,
+                                'peak_market_cap' => $paperMarketCap,
+                                'peak_multiple' => 1,
+                                'max_drawdown_percent' => 0,
+                                'milestones' => [],
+                                'meta' => [
+                                    'pair_address' =>
+                                        $paperEntry['pair_address'] ?? null,
+                                    'dex' =>
+                                        $paperEntry['dex'] ?? null,
+                                    'source' => 'momentum_fast_paper',
+                                ],
+                            ]
+                        );
+                    }
 
                     $this->info(
                         sprintf(
