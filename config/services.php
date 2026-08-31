@@ -52,4 +52,14 @@ return [
             'https://api.mainnet-beta.solana.com'
         ),
     ],
+
+    'trading' => [
+        'paper_trading' => env('PAPER_TRADING', true),
+
+        'fast_paper_alerts' =>
+            env('FAST_PAPER_ALERTS', true),
+
+        'max_chase_percent' =>
+            env('MOMENTUM_MAX_CHASE_PERCENT', 35),
+    ],
 ];

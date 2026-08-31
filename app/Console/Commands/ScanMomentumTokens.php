@@ -57,6 +57,25 @@ class ScanMomentumTokens extends Command
             0,
             (int) config('services.birdeye.momentum_budget', 1)
         );
+
+        $paperTradingEnabled = (bool) config(
+            'services.trading.paper_trading',
+            true
+        );
+
+        $fastPaperAlertsEnabled = (bool) config(
+            'services.trading.fast_paper_alerts',
+            true
+        );
+
+        $maxChasePercent = max(
+            0,
+            (float) config(
+                'services.trading.max_chase_percent',
+                35
+            )
+        );
+
         $dexCandidates = [];
 
         foreach ($profiles as $profile) {
@@ -156,6 +175,8 @@ class ScanMomentumTokens extends Command
                 'buy_5m_count' => $buys5m,
                 'sell_5m_count' => $sells5m,
                 'price_change_5m' => $priceChange5m,
+                'discovery_market_cap' => $marketCap,
+                'discovered_at' => now()->toIso8601String(),
                 'discovery_source' => 'dexscreener',
                 'profile' => $profile,
                 'dex' => $discoveryDex,
@@ -538,6 +559,210 @@ class ScanMomentumTokens extends Command
 
             $item['holder_analysis'] = $holderAnalysis;
             $item['holder_risk'] = $holderRisk;
+
+            $paperEntry = null;
+
+            if ($paperTradingEnabled) {
+                try {
+                    $paperDex =
+                        $dexscreener->analyzeToken($address);
+
+                    $paperMarketCap =
+                        (float) ($paperDex['market_cap'] ?? 0);
+
+                    $discoveryMarketCap =
+                        (float) (
+                            $item['discovery_market_cap']
+                            ?? $item['market_cap']
+                            ?? 0
+                        );
+
+                    $paperMovePercent = null;
+
+                    if (
+                        $discoveryMarketCap > 0
+                        && $paperMarketCap > 0
+                    ) {
+                        $paperMovePercent =
+                            (
+                                (
+                                    $paperMarketCap
+                                    - $discoveryMarketCap
+                                )
+                                / $discoveryMarketCap
+                            ) * 100;
+                    }
+
+                    $paperStatus = 'simulated_buy';
+                    $paperReason = 'Fast-entry gate passed.';
+
+                    if (!($paperDex['available'] ?? false)) {
+                        $paperStatus = 'skipped';
+                        $paperReason =
+                            'Dex pair unavailable at entry.';
+                    } elseif (
+                        !(
+                            $paperDex[
+                                'requested_token_is_base'
+                            ] ?? false
+                        )
+                    ) {
+                        $paperStatus = 'skipped';
+                        $paperReason =
+                            'Requested token is not base.';
+                    } elseif (
+                        $paperMarketCap < 5000
+                        || $paperMarketCap > 100000
+                    ) {
+                        $paperStatus = 'skipped';
+                        $paperReason =
+                            'Current market cap outside entry range.';
+                    } elseif (
+                        $paperMovePercent !== null
+                        && $paperMovePercent > $maxChasePercent
+                    ) {
+                        $paperStatus = 'skipped_chase';
+                        $paperReason =
+                            sprintf(
+                                'Already moved +%.2f%% since discovery; max chase is %.2f%%.',
+                                $paperMovePercent,
+                                $maxChasePercent
+                            );
+                    }
+
+                    $paperEntry = [
+                        'enabled' => true,
+                        'status' => $paperStatus,
+                        'reason' => $paperReason,
+                        'discovery_market_cap' =>
+                            $discoveryMarketCap,
+                        'entry_market_cap' =>
+                            $paperMarketCap > 0
+                                ? $paperMarketCap
+                                : null,
+                        'move_since_discovery_percent' =>
+                            $paperMovePercent,
+                        'max_chase_percent' =>
+                            $maxChasePercent,
+                        'entry_price' =>
+                            $paperDex['price_usd']
+                            ?? $paperDex['price']
+                            ?? null,
+                        'liquidity_usd' =>
+                            $paperDex['liquidity_usd']
+                            ?? null,
+                        'pair_address' =>
+                            $paperDex['pair_address']
+                            ?? null,
+                        'dex' =>
+                            $paperDex['dex']
+                            ?? null,
+                        'discovered_at' =>
+                            $item['discovered_at']
+                            ?? null,
+                        'entry_decided_at' =>
+                            now()->toIso8601String(),
+                    ];
+
+                    $this->info(
+                        sprintf(
+                            'FAST PAPER: %s | %s | Discovery MC: $%s | Entry MC: %s | Move: %s',
+                            $symbol,
+                            strtoupper($paperStatus),
+                            number_format(
+                                $discoveryMarketCap,
+                                2
+                            ),
+                            $paperMarketCap > 0
+                                ? '$' . number_format(
+                                    $paperMarketCap,
+                                    2
+                                )
+                                : 'N/A',
+                            $paperMovePercent !== null
+                                ? sprintf(
+                                    '%+.2f%%',
+                                    $paperMovePercent
+                                )
+                                : 'N/A'
+                        )
+                    );
+
+                    if (
+                        $fastPaperAlertsEnabled
+                        && $paperStatus === 'simulated_buy'
+                    ) {
+                        $fastMessage =
+                            "⚡ <b>FAST PAPER ENTRY</b>\n\n" .
+                            "<b>{$symbol}</b> — {$name}\n\n" .
+                            "🧪 <b>Mode:</b> PAPER ONLY\n" .
+                            "💰 <b>Discovery MC:</b> $" .
+                            number_format(
+                                $discoveryMarketCap,
+                                2
+                            ) .
+                            "\n" .
+                            "🎯 <b>Paper Entry MC:</b> $" .
+                            number_format(
+                                $paperMarketCap,
+                                2
+                            ) .
+                            "\n" .
+                            "🏃 <b>Move Since Discovery:</b> " .
+                            (
+                                $paperMovePercent !== null
+                                    ? sprintf(
+                                        '%+.2f%%',
+                                        $paperMovePercent
+                                    )
+                                    : 'N/A'
+                            ) .
+                            "\n" .
+                            "🛑 <b>Max Chase:</b> " .
+                            number_format(
+                                $maxChasePercent,
+                                2
+                            ) .
+                            "%\n\n" .
+                            "📍 <b>Token Address</b>\n" .
+                            "<code>{$address}</code>\n\n" .
+                            "⏳ Deep security scan is still running.";
+
+                        try {
+                            $telegram->send($fastMessage);
+
+                            $this->info(
+                                "FAST PAPER TELEGRAM SENT: {$symbol}"
+                            );
+                        } catch (\Throwable $e) {
+                            $this->warn(
+                                "FAST PAPER TELEGRAM FAILED: {$symbol} | " .
+                                $e->getMessage()
+                            );
+                        }
+                    }
+
+                } catch (\Throwable $e) {
+                    $paperEntry = [
+                        'enabled' => true,
+                        'status' => 'unavailable',
+                        'reason' => $e->getMessage(),
+                        'discovery_market_cap' =>
+                            (float) (
+                                $item['discovery_market_cap']
+                                ?? $item['market_cap']
+                                ?? 0
+                            ),
+                        'entry_decided_at' =>
+                            now()->toIso8601String(),
+                    ];
+
+                    $this->warn(
+                        "FAST PAPER UNAVAILABLE: {$symbol} | " .
+                        $e->getMessage()
+                    );
+                }
+            }
 
             $this->info(
                 sprintf(
@@ -1119,6 +1344,60 @@ class ScanMomentumTokens extends Command
                 );
             }
 
+            /*
+             * Developer activity check.
+             *
+             * Informational risk/context signal only for now.
+             * It does not reject the token or alter momentum score.
+             */
+            $developerAnalysis = null;
+
+            try {
+                $this->info(
+                    "DEV CHECK: {$symbol} | identifying creator and sell activity..."
+                );
+
+                $developerAnalysis =
+                    $solana->analyzePumpFunDeveloper($address);
+
+                if ($developerAnalysis['available'] ?? false) {
+                    $devSold = (bool) (
+                        $developerAnalysis['dev_sold'] ?? false
+                    );
+
+                    $devSellCount = (int) (
+                        $developerAnalysis['sell_count'] ?? 0
+                    );
+
+                    $devHolding =
+                        $developerAnalysis['current_dev_percentage']
+                        ?? null;
+
+                    $this->info(
+                        sprintf(
+                            'DEV: %s | Sold: %s | Sells: %d | Holding: %s',
+                            $symbol,
+                            $devSold ? 'YES' : 'NO',
+                            $devSellCount,
+                            $devHolding !== null
+                                ? number_format((float) $devHolding, 2) . '%'
+                                : 'N/A'
+                        )
+                    );
+                } else {
+                    $this->warn(
+                        "DEV UNAVAILABLE: {$symbol} | " .
+                        ($developerAnalysis['reason']
+                            ?? 'creator analysis unavailable')
+                    );
+                }
+            } catch (\Throwable $e) {
+                $this->warn(
+                    "DEV UNAVAILABLE: {$symbol} | " .
+                    $e->getMessage()
+                );
+            }
+
             $finalLevel = match (true) {
                 $momentumScore >= 80 => 'strong',
                 $momentumScore >= 65 => 'candidate',
@@ -1177,7 +1456,9 @@ class ScanMomentumTokens extends Command
                         'holder_analysis' => $holderAnalysis,
                         'holder_risk' => $holderRisk,
                         'pre_birdeye_score' => $candidate['pre_birdeye_score'] ?? null,
+                        'paper_entry' => $paperEntry,
                         'dex_paid' => $dexPaidData,
+                        'developer_analysis' => $developerAnalysis,
                         'pump_fun_activity' => $pumpFeeAnalysis,
                         'pump_fun_score_adjustment' => $pumpFeeAdjustment,
                     ],
@@ -1259,7 +1540,9 @@ class ScanMomentumTokens extends Command
                     'holder_analysis' => $holderAnalysis,
                     'holder_risk' => $holderRisk,
                     'pre_birdeye_score' => $candidate['pre_birdeye_score'] ?? null,
+                    'paper_entry' => $paperEntry,
                     'dex_paid' => $dexPaidData,
+                    'developer_analysis' => $developerAnalysis,
                     'pump_fun_activity' => $pumpFeeAnalysis,
                     'pump_fun_score_adjustment' => $pumpFeeAdjustment,
                 ],
@@ -1352,6 +1635,59 @@ class ScanMomentumTokens extends Command
                     }
                 }
 
+                $developerText =
+                    "⚪ <b>Developer:</b> Unavailable";
+
+                if (
+                    $developerAnalysis !== null
+                    && ($developerAnalysis['available'] ?? false)
+                ) {
+                    $creator = (string) (
+                        $developerAnalysis['creator'] ?? ''
+                    );
+
+                    $creatorShort =
+                        strlen($creator) > 12
+                            ? substr($creator, 0, 6) .
+                                '...' .
+                                substr($creator, -4)
+                            : $creator;
+
+                    $devSold = (bool) (
+                        $developerAnalysis['dev_sold'] ?? false
+                    );
+
+                    $devSellCount = (int) (
+                        $developerAnalysis['sell_count'] ?? 0
+                    );
+
+                    $devHolding =
+                        $developerAnalysis['current_dev_percentage']
+                        ?? null;
+
+                    $devHoldingText =
+                        $devHolding !== null
+                            ? number_format(
+                                (float) $devHolding,
+                                2
+                            ) . '%'
+                            : 'N/A';
+
+                    $devSoldText =
+                        $devSold
+                            ? "⚠️ <b>Dev Sold:</b> YES ({$devSellCount} sells)"
+                            : "🟢 <b>Dev Sold:</b> NO detected";
+
+                    $developerText =
+                        "👨‍💻 <b>Dev:</b> " .
+                        "<code>{$creatorShort}</code>\n" .
+                        "{$devSoldText}\n" .
+                        "📦 <b>Dev Holding:</b> {$devHoldingText}";
+                } elseif ($developerAnalysis !== null) {
+                    $developerText =
+                        "⚪ <b>Developer:</b> Unverified";
+                }
+
                 $pumpText =
                     "⚪ <b>Pump.fun Activity:</b> Unavailable";
 
@@ -1396,6 +1732,49 @@ class ScanMomentumTokens extends Command
                         );
                 }
 
+                $paperEntryText =
+                    "⚪ <b>Paper Entry:</b> Disabled";
+
+                if ($paperEntry !== null) {
+                    $paperStatus =
+                        $paperEntry['status'] ?? 'unknown';
+
+                    $paperEntryMc =
+                        $paperEntry['entry_market_cap']
+                        ?? null;
+
+                    $paperMove =
+                        $paperEntry[
+                            'move_since_discovery_percent'
+                        ]
+                        ?? null;
+
+                    $paperEntryText =
+                        ($paperStatus === 'simulated_buy'
+                            ? "🧪 <b>Paper Entry:</b> SIMULATED BUY"
+                            : "⏭ <b>Paper Entry:</b> " .
+                                strtoupper($paperStatus)
+                        );
+
+                    if ($paperEntryMc !== null) {
+                        $paperEntryText .=
+                            "\n🎯 <b>Paper Entry MC:</b> $" .
+                            number_format(
+                                (float) $paperEntryMc,
+                                2
+                            );
+                    }
+
+                    if ($paperMove !== null) {
+                        $paperEntryText .=
+                            "\n🏃 <b>Move at Entry:</b> " .
+                            sprintf(
+                                '%+.2f%%',
+                                (float) $paperMove
+                            );
+                    }
+                }
+
                 $message =
                     "{$alertHeading}\n\n" .
 
@@ -1427,7 +1806,11 @@ class ScanMomentumTokens extends Command
                     number_format($freshChange, 2) .
                     "%\n\n" .
 
+                    "{$paperEntryText}\n\n" .
+
                     "{$securityText}\n\n" .
+
+                    "{$developerText}\n\n" .
 
                     "{$pumpText}\n\n" .
 
