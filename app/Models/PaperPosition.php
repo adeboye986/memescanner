@@ -27,6 +27,18 @@ class PaperPosition extends Model
         'peak_market_cap' => 'float',
         'peak_multiple' => 'float',
         'max_drawdown_percent' => 'float',
+
+        'remaining_fraction' => 'float',
+        'realized_value_multiple' => 'float',
+        'strategy_value_multiple' => 'float',
+        'strategy_return_percent' => 'float',
+
+        'tp_50_hit' => 'boolean',
+        'tp_2x_hit' => 'boolean',
+        'stop_loss_hit' => 'boolean',
+        'trailing_stop_hit' => 'boolean',
+
+        'exit_events' => 'array',
     ];
 
     public function snapshots(): HasMany
