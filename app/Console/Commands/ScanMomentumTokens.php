@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\TokenScan;
 use App\Models\PaperPosition;
+use App\Models\PaperWallet;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
 use App\Services\GoPlusService;
@@ -780,29 +781,54 @@ class ScanMomentumTokens extends Command
                         $fastPaperAlertsEnabled
                         && $paperBuyExecuted
                     ) {
+                        $paperWallet = PaperWallet::query()
+                            ->where('name', 'default')
+                            ->first();
+
+                        $walletAvailable =
+                            $paperWallet
+                                ? (float) $paperWallet->available_balance_sol
+                                : null;
+
+                        $walletInvested =
+                            $paperWallet
+                                ? (float) $paperWallet->invested_balance_sol
+                                : null;
+
+                        $walletText =
+                            $paperWallet
+                                ? "💳 <b>WALLET AFTER BUY</b>\n" .
+                                    "Available: <b>" .
+                                    number_format($walletAvailable, 4) .
+                                    " SOL</b>\n" .
+                                    "Invested: <b>" .
+                                    number_format($walletInvested, 4) .
+                                    " SOL</b>\n\n"
+                                : '';
+
                         $fastMessage =
-                            "⚡ <b>FAST PAPER ENTRY</b>\n\n" .
-                            "<b>{$symbol}</b> — {$name}\n\n" .
-                            "🧪 <b>Mode:</b> PAPER ONLY\n" .
-                            "💵 <b>Virtual Buy:</b> " .
+                            "🟢🟢🟢 <b>PAPER BUY EXECUTED</b> 🟢🟢🟢\n\n" .
+                            "💰 <b>{$symbol}</b> — {$name}\n\n" .
+                            "✅ <b>POSITION OPENED</b>\n" .
+                            "💵 <b>Bought:</b> " .
                             number_format(
                                 (float) $paperPosition->initial_investment_sol,
                                 4
                             ) .
                             " SOL\n" .
-                            "💰 <b>Discovery MC:</b> $" .
-                            number_format(
-                                $discoveryMarketCap,
-                                2
-                            ) .
-                            "\n" .
-                            "🎯 <b>Paper Entry MC:</b> $" .
+                            "🎯 <b>Entry MC:</b> $" .
                             number_format(
                                 $paperMarketCap,
                                 2
                             ) .
                             "\n" .
-                            "🏃 <b>Move Since Discovery:</b> " .
+                            "🔎 <b>Discovery MC:</b> $" .
+                            number_format(
+                                $discoveryMarketCap,
+                                2
+                            ) .
+                            "\n" .
+                            "📈 <b>Entry Move:</b> " .
                             (
                                 $paperMovePercent !== null
                                     ? sprintf(
@@ -811,15 +837,16 @@ class ScanMomentumTokens extends Command
                                     )
                                     : 'N/A'
                             ) .
-                            "\n" .
-                            "🛑 <b>Max Chase:</b> " .
-                            number_format(
-                                $maxChasePercent,
-                                2
-                            ) .
-                            "%\n\n" .
+                            "\n\n" .
+                            $walletText .
+                            "🛡️ <b>EXIT PLAN</b>\n" .
+                            "🔴 Stop Loss: <b>0.70x (-30%)</b>\n" .
+                            "🟡 TP1: <b>1.50x → Sell 25%</b>\n" .
+                            "🟢 TP2: <b>2.00x → Sell 25%</b>\n" .
+                            "🏃 Remaining 50%: <b>25% trailing stop</b>\n\n" .
                             "📍 <b>Token Address</b>\n" .
                             "<code>{$address}</code>\n\n" .
+                            "⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>\n" .
                             "⏳ Deep security scan is still running.";
 
                         try {

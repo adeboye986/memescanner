@@ -603,46 +603,105 @@ class TrackPaperPositions extends Command
 
         foreach ($strategyEvents as $event) {
             try {
+                $walletAfterExit = PaperWallet::query()
+                    ->where('name', 'default')
+                    ->first();
+
+                $eventType = $event['type'] ?? 'exit';
+
+                $heading = match ($eventType) {
+                    'stop_loss' =>
+                        '🔴🔴🔴 <b>PAPER SELL EXECUTED</b> 🔴🔴🔴',
+                    'take_profit_50' =>
+                        '💰💰 <b>PAPER TAKE PROFIT — TP1</b> 💰💰',
+                    'take_profit_2x' =>
+                        '🚀🚀 <b>PAPER TAKE PROFIT — TP2</b> 🚀🚀',
+                    'trailing_stop' =>
+                        '🏃🔴 <b>PAPER TRAILING EXIT</b> 🔴🏃',
+                    default =>
+                        '🔴 <b>PAPER SELL EXECUTED</b>',
+                };
+
+                $actionText = match ($eventType) {
+                    'stop_loss' => '🛑 <b>STOP LOSS TRIGGERED</b>',
+                    'take_profit_50' => '✅ <b>1.50x TARGET HIT</b>',
+                    'take_profit_2x' => '✅ <b>2.00x TARGET HIT</b>',
+                    'trailing_stop' => '🏃 <b>TRAILING STOP TRIGGERED</b>',
+                    default => '✅ <b>EXIT EXECUTED</b>',
+                };
+
+                $positionStatusText =
+                    $strategyClosed
+                        ? "❌ <b>POSITION CLOSED</b>"
+                        : "📦 <b>POSITION STILL OPEN: " .
+                            number_format(
+                                $remainingFraction * 100,
+                                0
+                            ) .
+                            "% remaining</b>";
+
+                $walletText =
+                    $walletAfterExit
+                        ? "💳 <b>WALLET AFTER SELL</b>\n" .
+                            "Available: <b>" .
+                            number_format(
+                                (float) $walletAfterExit->available_balance_sol,
+                                4
+                            ) .
+                            " SOL</b>\n" .
+                            "Invested: <b>" .
+                            number_format(
+                                (float) $walletAfterExit->invested_balance_sol,
+                                4
+                            ) .
+                            " SOL</b>\n" .
+                            "Realized P/L: <b>" .
+                            sprintf(
+                                '%+.4f SOL',
+                                (float) $walletAfterExit->realized_pnl_sol
+                            ) .
+                            "</b>\n\n"
+                        : '';
+
                 $telegram->send(
-                    "🧪 <b>PAPER EXIT: {$event['label']}</b>\n\n" .
-                    "<b>{$position->symbol}</b>\n" .
-                    "💰 Entry MC: $" .
+                    "{$heading}\n\n" .
+                    "💰 <b>{$position->symbol}</b>\n\n" .
+                    "{$actionText}\n\n" .
+                    "🎯 <b>Entry MC:</b> $" .
                     number_format($entryMc, 2) . "\n" .
-                    "📊 Current MC: $" .
+                    "📊 <b>Current MC:</b> $" .
                     number_format($marketCap, 2) . "\n" .
-                    "✖️ Observed: " .
+                    "✖️ <b>Observed:</b> " .
                     number_format($multiple, 2) . "x\n" .
-                    "💵 Simulated fill: " .
+                    "💵 <b>Simulated Fill:</b> " .
                     number_format(
                         (float) $event['fill_multiple'],
                         2
                     ) . "x\n" .
-                    "📤 Sold: " .
+                    "📤 <b>Sold:</b> " .
                     number_format(
                         (float) $event['sold_fraction'] * 100,
                         0
                     ) . "%\n" .
-                    "🪙 SOL Returned: " .
+                    "🪙 <b>SOL Returned:</b> " .
                     number_format(
                         (float) ($event['sol_returned'] ?? 0),
                         4
                     ) . " SOL\n" .
-                    "💹 Realized P/L: " .
+                    "💹 <b>Trade P/L on this exit:</b> " .
                     sprintf(
                         '%+.4f SOL',
                         (float) ($event['realized_pnl_sol'] ?? 0)
                     ) . "\n" .
-                    "📦 Remaining: " .
-                    number_format(
-                        $remainingFraction * 100,
-                        0
-                    ) . "%\n" .
-                    "📈 Strategy return: " .
+                    "📈 <b>Strategy Return:</b> " .
                     sprintf(
                         '%+.2f%%',
                         $strategyReturnPercent
-                    ) .
-                    "\n\n📍 <code>{$position->address}</code>"
+                    ) . "\n\n" .
+                    $walletText .
+                    "{$positionStatusText}\n\n" .
+                    "📍 <code>{$position->address}</code>\n\n" .
+                    "⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>"
                 );
             } catch (\Throwable $e) {
                 $this->warn(
