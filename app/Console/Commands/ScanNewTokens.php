@@ -9,11 +9,13 @@ use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
 use App\Services\EthereumScannerService;
 use App\Services\GoPlusService;
+use App\Services\NewTokenClassificationService;
 use App\Services\PaperTradeEntryService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Http\Client\ConnectionException;
 use InvalidArgumentException;
+use RuntimeException;
 use Throwable;
 
 class ScanNewTokens extends Command
@@ -22,7 +24,7 @@ class ScanNewTokens extends Command
 
     protected $description = 'Scan newly listed tokens on a supported blockchain';
 
-    public function handle(BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener, PaperTradeEntryService $entries, EthereumScannerService $ethereumScanner): int
+    public function handle(BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener, PaperTradeEntryService $entries, EthereumScannerService $ethereumScanner, NewTokenClassificationService $classifications): int
     {
         try {
             $chain = Chain::fromInput($this->option('chain'));
@@ -103,7 +105,7 @@ class ScanNewTokens extends Command
 
             try {
                 // Keep comfortably below our Birdeye account rate limit.
-                usleep(1200000); // 1.2 seconds
+                $this->pause(1200000); // 1.2 seconds
 
                 $overviewResponse = $birdeye->tokenOverview($address);
 
@@ -184,7 +186,7 @@ class ScanNewTokens extends Command
                 );
 
                 // GoPlus security screening.
-                usleep(2200000);
+                $this->pause(2200000);
 
                 $securityUnavailable = false;
 
@@ -274,7 +276,7 @@ class ScanNewTokens extends Command
 
                 if ($score >= $watchlistThreshold) {
                     // Get a fresh snapshot immediately before alerting.
-                    usleep(1200000);
+                    $this->pause(1200000);
 
                     $freshResponse = $birdeye->tokenOverview($address);
                     $fresh = $freshResponse['data'] ?? null;
@@ -400,6 +402,20 @@ class ScanNewTokens extends Command
                     $name = $fresh['name'] ?? $name;
                 }
 
+                $classification = $classifications->classify($score, $securityUnavailable, $alertThreshold);
+                $paperEntryDecision = [
+                    'classification' => $classification['classification'],
+                    'trade_eligible' => $classification['trade_eligible'],
+                    'paper_entry_status' => 'skipped',
+                    'paper_entry_reason' => match ($classification['classification']) {
+                        'unverified' => 'Security is unverified.',
+                        'watchlist' => 'Final classification is not Strong Candidate.',
+                        default => 'Entry checks have not run.',
+                    },
+                ];
+                $paperPosition = null;
+                $paperBuyExecuted = false;
+
                 $scan = TokenScan::create([
                     'chain' => $chain->value,
                     'address' => $address,
@@ -428,7 +444,7 @@ class ScanNewTokens extends Command
                         : $security['passed'],
                     'security_risks' => $security['risks'],
 
-                    'raw_data' => $token,
+                    'raw_data' => array_merge($token, ['scanner_decision' => $paperEntryDecision]),
 
                     'first_seen_at' => now(),
                     'last_scanned_at' => now(),
@@ -470,43 +486,72 @@ class ScanNewTokens extends Command
 
                     'dex_pair_age_minutes' => $dexData['pair_age_minutes'] ?? null,
 
-                    'raw_data' => $token,
+                    'raw_data' => array_merge($token, ['scanner_decision' => $paperEntryDecision]),
 
                     'scanned_at' => now(),
                 ]);
 
-                if ($score >= $watchlistThreshold && config('services.trading.paper_trading', true)) {
+                if ($classification['trade_eligible']) {
                     $entryMarketCap = (float) ($dexData['market_cap'] ?? 0);
                     $entryMove = $discoveryMarketCap > 0 && $entryMarketCap > 0
                         ? (($entryMarketCap - $discoveryMarketCap) / $discoveryMarketCap) * 100
                         : null;
                     $maxChase = (float) config('services.trading.max_chase_percent', 35);
 
-                    if (($dexData['available'] ?? false)
-                        && ($dexData['requested_token_is_base'] ?? false)
-                        && $entryMarketCap >= 2_000
-                        && $entryMarketCap <= 20_000
-                        && ($entryMove === null || ($entryMove > -30 && $entryMove <= $maxChase))) {
-                        $position = $entries->buy([
-                            'chain' => $chain->value,
-                            'address' => $address,
-                            'symbol' => $symbol,
-                            'name' => $name,
-                            'discovery_market_cap' => $discoveryMarketCap,
-                            'entry_market_cap' => $entryMarketCap,
-                            'entry_price' => $dexData['price_usd'] ?? null,
-                            'entry_liquidity' => $dexData['liquidity_usd'] ?? null,
-                            'move_since_discovery_percent' => $entryMove,
-                            'scanner' => 'new-token',
-                            'send_notification' => true,
-                            'meta' => ['source' => 'new_token_scan', 'pair_address' => $dexData['pair_address'] ?? null, 'dex' => $dexData['dex'] ?? null],
-                        ]);
+                    $paperEntryDecision['paper_entry_reason'] = match (true) {
+                        ! config('services.trading.paper_trading', true) => 'Paper trading is disabled.',
+                        ! ($dexData['available'] ?? false) => 'Dex pair unavailable at entry.',
+                        ! ($dexData['requested_token_is_base'] ?? false) => 'Requested token is not the Dex pair base token.',
+                        $entryMarketCap < 2_000 || $entryMarketCap > 20_000 => 'Current market cap is outside the new-token entry range.',
+                        $entryMove !== null && $entryMove <= -30 => 'Entry rejected by collapse protection.',
+                        $entryMove !== null && $entryMove > $maxChase => 'Entry rejected by chase protection.',
+                        default => 'Entry checks passed.',
+                    };
 
-                        $this->info($position->wasRecentlyCreated
-                            ? "PAPER BUY EXECUTED: {$symbol}"
-                            : "PAPER BUY SKIPPED: {$symbol} | position already open");
+                    if ($paperEntryDecision['paper_entry_reason'] !== 'Entry checks passed.') {
+                        $paperEntryDecision['paper_entry_status'] = 'rejected';
+                    }
+
+                    if ($paperEntryDecision['paper_entry_reason'] === 'Entry checks passed.') {
+                        try {
+                            $paperPosition = $entries->buy([
+                                'chain' => $chain->value,
+                                'address' => $address,
+                                'symbol' => $symbol,
+                                'name' => $name,
+                                'discovery_market_cap' => $discoveryMarketCap,
+                                'entry_market_cap' => $entryMarketCap,
+                                'entry_price' => $dexData['price_usd'] ?? null,
+                                'entry_liquidity' => $dexData['liquidity_usd'] ?? null,
+                                'move_since_discovery_percent' => $entryMove,
+                                'scanner' => 'new-token',
+                                'send_notification' => false,
+                                'meta' => [
+                                    'source' => 'new_token_scan',
+                                    'classification' => $classification['classification'],
+                                    'trade_eligible' => true,
+                                    'pair_address' => $dexData['pair_address'] ?? null,
+                                    'dex' => $dexData['dex'] ?? null,
+                                ],
+                            ]);
+                            $paperBuyExecuted = $paperPosition->wasRecentlyCreated;
+                            $paperEntryDecision['paper_entry_status'] = $paperBuyExecuted ? 'executed' : 'already_open';
+                            $paperEntryDecision['paper_entry_reason'] = $paperBuyExecuted
+                                ? 'Funded paper position created.'
+                                : 'A funded position is already open for this chain and address.';
+
+                            $this->info($paperBuyExecuted
+                                ? "PAPER BUY EXECUTED: {$symbol}"
+                                : "PAPER BUY SKIPPED: {$symbol} | position already open");
+                        } catch (Throwable $exception) {
+                            $paperEntryDecision['paper_entry_status'] = 'rejected';
+                            $paperEntryDecision['paper_entry_reason'] = $exception->getMessage();
+                            $this->warn("PAPER BUY REJECTED: {$symbol} | {$exception->getMessage()}");
+                        }
                     }
                 }
+
+                $this->persistScannerDecision($scan, $paperEntryDecision);
 
                 if ($score >= $watchlistThreshold) {
                     $marketCap = (float) ($token['marketCap'] ?? 0);
@@ -517,17 +562,12 @@ class ScanNewTokens extends Command
                     $wallets = (int) ($token['uniqueWallet5m'] ?? 0);
                     $change = (float) ($token['priceChange5mPercent'] ?? 0);
 
-                    $level = match (true) {
-                        $securityUnavailable && $score >= $alertThreshold => '⚠️ UNVERIFIED CANDIDATE',
-
-                        $securityUnavailable => '⚠️ UNVERIFIED WATCHLIST',
-
-                        $score >= 70 => '🔥 HIGH CONFIDENCE',
-
-                        $score >= $alertThreshold => '🟢 STRONG CANDIDATE',
-
-                        default => '🟡 WATCHLIST',
-                    };
+                    $level = $classification['label'];
+                    $entryMessage = $classification['trade_eligible']
+                        ? ($paperBuyExecuted
+                            ? 'Strong candidate — funded paper entry executed.'
+                            : 'Strong candidate — entry was not executed: '.$paperEntryDecision['paper_entry_reason'])
+                        : $classification['no_trade_message'];
 
                     $message =
                         "{$level}\n\n".
@@ -549,6 +589,7 @@ class ScanNewTokens extends Command
                         "Unique wallets 5m: {$wallets}\n".
                         'Price change 5m: '.number_format($change, 2)."%\n\n".
                         "<code>{$address}</code>\n\n".
+                        $entryMessage."\n\n".
                         '⚠️ Scanner alert only — not a buy recommendation.';
 
                     try {
@@ -558,6 +599,10 @@ class ScanNewTokens extends Command
                         $this->error(
                             "Telegram failed for {$symbol}: ".$e->getMessage()
                         );
+                    }
+
+                    if ($paperBuyExecuted && $paperPosition) {
+                        $entries->sendBuyNotification($paperPosition);
                     }
                 }
 
@@ -684,5 +729,34 @@ class ScanNewTokens extends Command
         }
 
         return max(0, min($score, 100));
+    }
+
+    private function pause(int $microseconds): void
+    {
+        if (! app()->environment('testing')) {
+            usleep($microseconds);
+        }
+    }
+
+    /** @param array<string, mixed> $decision */
+    private function persistScannerDecision(TokenScan $scan, array $decision): void
+    {
+        $rawData = is_array($scan->raw_data) ? $scan->raw_data : [];
+        $rawData['scanner_decision'] = $decision;
+
+        $scan->forceFill(['raw_data' => $rawData])->save();
+        $scan->refresh();
+
+        if (! is_array(data_get($scan->raw_data, 'scanner_decision'))) {
+            throw new RuntimeException("Scanner decision was not persisted for TokenScan {$scan->id}.");
+        }
+
+        $history = $scan->histories()->latest('id')->first();
+
+        if ($history) {
+            $historyRawData = is_array($history->raw_data) ? $history->raw_data : [];
+            $historyRawData['scanner_decision'] = $decision;
+            $history->forceFill(['raw_data' => $historyRawData])->save();
+        }
     }
 }

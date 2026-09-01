@@ -14,7 +14,7 @@ Artisan::command('inspire', function () {
 $paperTrackActivity = null;
 
 Schedule::command('tokens:paper-track')
-    ->everyMinute()
+    ->everyTenSeconds()
     ->withoutOverlapping()
     ->before(function () use (&$paperTrackActivity): void {
         $activities = app(SystemActivityService::class);

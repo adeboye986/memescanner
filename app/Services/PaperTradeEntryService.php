@@ -73,31 +73,37 @@ class PaperTradeEntryService
         });
 
         if ($position->wasRecentlyCreated && ($data['send_notification'] ?? false)) {
-            $this->sendNotification($position);
+            $this->sendBuyNotification($position);
         }
 
         return $position;
     }
 
-    private function sendNotification(PaperPosition $position): void
+    public function sendBuyNotification(PaperPosition $position): void
     {
         $wallet = PaperWallet::query()->where('name', 'default')->first();
         $discovery = (float) ($position->discovery_market_cap ?? 0);
         $entry = (float) $position->entry_market_cap;
+        $scanner = strtoupper(str_replace(['-', '_'], ' ', (string) data_get($position->meta, 'scanner', 'unknown')));
+        $entryMove = $position->move_since_discovery_percent !== null
+            ? sprintf('%+.2f%%', (float) $position->move_since_discovery_percent)
+            : 'N/A';
 
         try {
             $this->telegram->send(
                 "🟢🟢🟢 <b>PAPER BUY EXECUTED</b> 🟢🟢🟢\n\n".
-                '<b>Scanner:</b> '.strtoupper((string) data_get($position->meta, 'scanner', 'unknown'))."\n".
-                '<b>Chain:</b> '.Chain::fromInput($position->chain)->label()."\n".
-                "<b>{$position->symbol}</b> — {$position->name}\n".
-                "<code>{$position->address}</code>\n\n".
+                '<b>Scanner:</b> '.$scanner."\n".
+                '<b>Chain:</b> '.strtoupper($position->chain->value)."\n".
+                "<b>Symbol:</b> {$position->symbol}\n".
+                "<b>Name:</b> {$position->name}\n".
+                "<b>Token Address:</b> <code>{$position->address}</code>\n\n".
+                '<b>Initial Investment:</b> '.number_format((float) $position->initial_investment_sol, 4)." SOL\n".
                 '<b>Entry MC:</b> $'.number_format($entry, 2)."\n".
                 '<b>Discovery MC:</b> $'.number_format($discovery, 2)."\n".
-                '<b>Entry Move:</b> '.sprintf('%+.2f%%', (float) ($position->move_since_discovery_percent ?? 0))."\n".
-                '<b>Paper Investment:</b> '.number_format((float) $position->initial_investment_sol, 4)." SOL\n".
-                '<b>Wallet Available:</b> '.number_format((float) ($wallet?->available_balance_sol ?? 0), 4)." SOL\n\n".
-                "<b>EXIT PLAN</b>\n-5% / 0.95x: CLOSE 100%\n+100% / 2.00x: HOLD\n+150% / 2.50x: ARM PROTECTION\n+200% / 3.00x: CLOSE 100%\nProtected fallback to +100% / 2.00x: CLOSE 100%\n\n<b>No partial selling</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>",
+                '<b>Entry Move:</b> '.$entryMove."\n".
+                '<b>Wallet Available:</b> '.number_format((float) ($wallet?->available_balance_sol ?? 0), 4)." SOL\n".
+                '<b>Wallet Invested:</b> '.number_format((float) ($wallet?->invested_balance_sol ?? 0), 4)." SOL\n\n".
+                "<b>EXIT PLAN</b>\nStop Loss: -5% / 0.95x / CLOSE 100%\n1X Profit: +100% / 2.00x / HOLD\n1.50X Profit: +150% / 2.50x / ARM PROTECTION\n2X Profit: +200% / 3.00x / CLOSE 100%\nProtected floor after arming: +100% / 2.00x / CLOSE 100%\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>",
             );
         } catch (Throwable $exception) {
             report($exception);
