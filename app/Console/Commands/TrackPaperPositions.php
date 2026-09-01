@@ -33,6 +33,7 @@ class TrackPaperPositions extends Command
 
         if ($positions->isEmpty()) {
             $this->info('No open paper positions.');
+
             return self::SUCCESS;
         }
 
@@ -56,16 +57,18 @@ class TrackPaperPositions extends Command
             $dex = $dexscreener->analyzeToken($position->address);
         } catch (\Throwable $e) {
             $this->warn(
-                "PAPER TRACK UNAVAILABLE: {$position->symbol} | " .
+                "PAPER TRACK UNAVAILABLE: {$position->symbol} | ".
                 $e->getMessage()
             );
+
             return;
         }
 
-        if (!($dex['available'] ?? false)) {
+        if (! ($dex['available'] ?? false)) {
             $this->warn(
                 "PAPER TRACK UNAVAILABLE: {$position->symbol} | no Dex pair"
             );
+
             return;
         }
 
@@ -79,6 +82,7 @@ class TrackPaperPositions extends Command
             $this->warn(
                 "PAPER TRACK SKIP: {$position->symbol} | invalid market cap"
             );
+
             return;
         }
 
@@ -110,11 +114,9 @@ class TrackPaperPositions extends Command
         $newMilestones = [];
 
         $targets = [
-            'plus_25' => 1.25,
-            'plus_50' => 1.50,
-            'x2' => 2.00,
-            'x3' => 3.00,
-            'x5' => 5.00,
+            'profit_1x' => 2.00,
+            'protection_1_5x' => 2.50,
+            'profit_2x' => 3.00,
         ];
 
         foreach ($targets as $key => $targetMultiple) {
@@ -133,16 +135,25 @@ class TrackPaperPositions extends Command
         }
 
         /*
-         * PAPER EXIT STRATEGY
+         * PAPER EXIT STRATEGY — FULL-POSITION MODEL
          *
-         * Start: 100% virtual position
-         * - Stop loss: sell 100% at 0.70x (-30%) if hit before exits.
-         * - +50% / 1.50x: sell 25%.
-         * - 2.00x: sell another 25%.
-         * - Remaining 50%: after 2x is reached, trail 25% below peak.
+         * Entry value = 1.00x position value.
+         * +100% profit = 2.00x value.
+         * +150% profit = 2.50x value.
+         * +200% profit = 3.00x value.
          *
-         * Threshold fills are simulated at the threshold itself rather
-         * than the later polling price. This makes comparisons consistent.
+         * Rules:
+         * - Before protection is armed, -5% closes 100% at 0.95x.
+         * - Reaching +150% profit (2.50x) arms protection; sell 0%.
+         * - After protection is armed, +200% profit (3.00x) closes 100%.
+         * - After protection is armed, falling to +100% profit (2.00x)
+         *   closes 100%.
+         * - No partial exits and no trailing runner.
+         *
+         * Existing booleans are reused for compatibility:
+         * tp_50_hit = protection armed
+         * tp_2x_hit = full +200% target hit
+         * trailing_stop_hit = protected-floor exit hit
          */
         $remainingFraction =
             $position->remaining_fraction !== null
@@ -156,38 +167,40 @@ class TrackPaperPositions extends Command
 
         $exitEvents = $position->exit_events ?? [];
 
-        $tp50Hit = (bool) ($position->tp_50_hit ?? false);
-        $tp2xHit = (bool) ($position->tp_2x_hit ?? false);
+        $protectionArmed = (bool) ($position->tp_50_hit ?? false);
+        $fullTargetHit = (bool) ($position->tp_2x_hit ?? false);
         $stopLossHit = (bool) ($position->stop_loss_hit ?? false);
-        $trailingStopHit =
+        $protectedExitHit =
             (bool) ($position->trailing_stop_hit ?? false);
 
         $strategyEvents = [];
+        $protectionJustArmed = false;
 
-        /*
-         * Stop loss only applies while the position is still fully open.
-         * Once partial profit-taking has happened, the final remainder
-         * is managed by the trailing stop after 2x.
-         */
         if (
-            !$tp50Hit
-            && !$tp2xHit
-            && !$stopLossHit
-            && $multiple <= 0.70
+            ! $protectionArmed
+            && $peakMultiple >= 2.50
+            && $remainingFraction > 0
+        ) {
+            $protectionArmed = true;
+            $protectionJustArmed = true;
+        }
+
+        if (
+            ! $protectionArmed
+            && ! $stopLossHit
+            && $multiple <= 0.95
             && $remainingFraction > 0
         ) {
             $soldFraction = $remainingFraction;
-            $fillMultiple = 0.70;
+            $fillMultiple = 0.95;
 
-            $realizedValue +=
-                $soldFraction * $fillMultiple;
-
+            $realizedValue += $soldFraction * $fillMultiple;
             $remainingFraction = 0.0;
             $stopLossHit = true;
 
             $event = [
                 'type' => 'stop_loss',
-                'label' => 'STOP LOSS -30%',
+                'label' => 'STOP LOSS -5%',
                 'sold_fraction' => $soldFraction,
                 'fill_multiple' => $fillMultiple,
                 'observed_multiple' => $multiple,
@@ -200,23 +213,21 @@ class TrackPaperPositions extends Command
         }
 
         if (
-            !$stopLossHit
-            && !$tp50Hit
-            && $multiple >= 1.50
+            ! $stopLossHit
+            && ! $fullTargetHit
+            && $multiple >= 3.00
             && $remainingFraction > 0
         ) {
-            $soldFraction = min(0.25, $remainingFraction);
-            $fillMultiple = 1.50;
+            $soldFraction = $remainingFraction;
+            $fillMultiple = 3.00;
 
-            $realizedValue +=
-                $soldFraction * $fillMultiple;
-
-            $remainingFraction -= $soldFraction;
-            $tp50Hit = true;
+            $realizedValue += $soldFraction * $fillMultiple;
+            $remainingFraction = 0.0;
+            $fullTargetHit = true;
 
             $event = [
-                'type' => 'take_profit_50',
-                'label' => 'TAKE PROFIT +50%',
+                'type' => 'full_target_2x_profit',
+                'label' => 'FULL EXIT +200% PROFIT',
                 'sold_fraction' => $soldFraction,
                 'fill_multiple' => $fillMultiple,
                 'observed_multiple' => $multiple,
@@ -229,26 +240,26 @@ class TrackPaperPositions extends Command
         }
 
         if (
-            !$stopLossHit
-            && !$tp2xHit
-            && $multiple >= 2.00
+            $protectionArmed
+            && ! $fullTargetHit
+            && ! $protectedExitHit
+            && $multiple <= 2.00
             && $remainingFraction > 0
         ) {
-            $soldFraction = min(0.25, $remainingFraction);
+            $soldFraction = $remainingFraction;
             $fillMultiple = 2.00;
 
-            $realizedValue +=
-                $soldFraction * $fillMultiple;
-
-            $remainingFraction -= $soldFraction;
-            $tp2xHit = true;
+            $realizedValue += $soldFraction * $fillMultiple;
+            $remainingFraction = 0.0;
+            $protectedExitHit = true;
 
             $event = [
-                'type' => 'take_profit_2x',
-                'label' => 'TAKE PROFIT 2X',
+                'type' => 'protected_floor_exit',
+                'label' => 'PROTECTED EXIT +100% PROFIT',
                 'sold_fraction' => $soldFraction,
                 'fill_multiple' => $fillMultiple,
                 'observed_multiple' => $multiple,
+                'peak_multiple' => $peakMultiple,
                 'observed_market_cap' => $marketCap,
                 'triggered_at' => now()->toIso8601String(),
             ];
@@ -257,44 +268,9 @@ class TrackPaperPositions extends Command
             $strategyEvents[] = $event;
         }
 
-        /*
-         * Trail the remainder 25% below the highest observed market cap
-         * once the 2x take-profit has activated.
-         */
-        if (
-            $tp2xHit
-            && !$trailingStopHit
-            && $remainingFraction > 0
-            && $peakMultiple >= 2.00
-        ) {
-            $trailingTriggerMultiple =
-                $peakMultiple * 0.75;
-
-            if ($multiple <= $trailingTriggerMultiple) {
-                $soldFraction = $remainingFraction;
-                $fillMultiple = $trailingTriggerMultiple;
-
-                $realizedValue +=
-                    $soldFraction * $fillMultiple;
-
-                $remainingFraction = 0.0;
-                $trailingStopHit = true;
-
-                $event = [
-                    'type' => 'trailing_stop',
-                    'label' => 'TRAILING STOP 25%',
-                    'sold_fraction' => $soldFraction,
-                    'fill_multiple' => $fillMultiple,
-                    'observed_multiple' => $multiple,
-                    'peak_multiple' => $peakMultiple,
-                    'observed_market_cap' => $marketCap,
-                    'triggered_at' => now()->toIso8601String(),
-                ];
-
-                $exitEvents[] = $event;
-                $strategyEvents[] = $event;
-            }
-        }
+        $tp50Hit = $protectionArmed;
+        $tp2xHit = $fullTargetHit;
+        $trailingStopHit = $protectedExitHit;
 
         $strategyValueMultiple =
             $realizedValue
@@ -330,7 +306,7 @@ class TrackPaperPositions extends Command
         $walletCostBasisReleased = 0.0;
         $walletRealizedPnl = 0.0;
 
-        if ($initialInvestmentSol > 0 && !empty($strategyEvents)) {
+        if ($initialInvestmentSol > 0 && ! empty($strategyEvents)) {
             foreach ($strategyEvents as &$strategyEvent) {
                 $soldFraction = max(
                     0.0,
@@ -449,7 +425,7 @@ class TrackPaperPositions extends Command
 
             if (
                 $walletSolReturned > 0
-                && !$hasAlreadyAppliedExit
+                && ! $hasAlreadyAppliedExit
             ) {
                 $wallet = PaperWallet::query()
                     ->where('name', 'default')
@@ -494,20 +470,15 @@ class TrackPaperPositions extends Command
                 'trailing_stop_hit' => $trailingStopHit,
                 'exit_events' => $exitEvents,
 
-                'remaining_investment_sol' =>
-                    $remainingInvestmentSol,
+                'remaining_investment_sol' => $remainingInvestmentSol,
 
-                'realized_sol' =>
-                    $positionRealizedSol,
+                'realized_sol' => $positionRealizedSol,
 
-                'trade_pnl_sol' =>
-                    $positionTradePnlSol,
+                'trade_pnl_sol' => $positionTradePnlSol,
 
-                'status' =>
-                    $strategyClosed ? 'closed' : 'open',
+                'status' => $strategyClosed ? 'closed' : 'open',
 
-                'closed_at' =>
-                    $strategyClosed ? now() : null,
+                'closed_at' => $strategyClosed ? now() : null,
             ]);
 
             $position->setRawAttributes(
@@ -531,10 +502,8 @@ class TrackPaperPositions extends Command
                 'strategy' => [
                     'remaining_fraction' => $remainingFraction,
                     'realized_value_multiple' => $realizedValue,
-                    'strategy_value_multiple' =>
-                        $strategyValueMultiple,
-                    'strategy_return_percent' =>
-                        $strategyReturnPercent,
+                    'strategy_value_multiple' => $strategyValueMultiple,
+                    'strategy_return_percent' => $strategyReturnPercent,
                     'tp_50_hit' => $tp50Hit,
                     'tp_2x_hit' => $tp2xHit,
                     'stop_loss_hit' => $stopLossHit,
@@ -601,6 +570,25 @@ class TrackPaperPositions extends Command
             )
         );
 
+        if ($protectionJustArmed && $remainingFraction > 0) {
+            try {
+                $telegram->send(
+                    "🛡️ <b>PAPER PROFIT PROTECTION ARMED</b>\n\n".
+                    "<b>{$position->symbol}</b>\n\n".
+                    "📈 Peak reached: <b>+150% profit</b> (2.50x value)\n".
+                    "📤 Sold: <b>0%</b>\n".
+                    "🎯 Full target: <b>+200% profit</b> (3.00x value) → SELL 100%\n".
+                    "🛡️ Protected floor: <b>+100% profit</b> (2.00x value) → SELL 100%\n\n".
+                    "📍 <code>{$position->address}</code>\n\n".
+                    '⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>'
+                );
+            } catch (\Throwable $e) {
+                $this->warn(
+                    'PROTECTION ALERT TELEGRAM FAILED: '.$e->getMessage()
+                );
+            }
+        }
+
         foreach ($strategyEvents as $event) {
             try {
                 $walletAfterExit = PaperWallet::query()
@@ -610,102 +598,95 @@ class TrackPaperPositions extends Command
                 $eventType = $event['type'] ?? 'exit';
 
                 $heading = match ($eventType) {
-                    'stop_loss' =>
-                        '🔴🔴🔴 <b>PAPER SELL EXECUTED</b> 🔴🔴🔴',
-                    'take_profit_50' =>
-                        '💰💰 <b>PAPER TAKE PROFIT — TP1</b> 💰💰',
-                    'take_profit_2x' =>
-                        '🚀🚀 <b>PAPER TAKE PROFIT — TP2</b> 🚀🚀',
-                    'trailing_stop' =>
-                        '🏃🔴 <b>PAPER TRAILING EXIT</b> 🔴🏃',
-                    default =>
-                        '🔴 <b>PAPER SELL EXECUTED</b>',
+                    'stop_loss' => '🔴🔴🔴 <b>PAPER STOP LOSS — FULL EXIT</b> 🔴🔴🔴',
+                    'full_target_2x_profit' => '🚀🚀 <b>PAPER +200% TARGET — FULL EXIT</b> 🚀🚀',
+                    'protected_floor_exit' => '🛡️🔴 <b>PAPER PROTECTED FLOOR — FULL EXIT</b> 🔴🛡️',
+                    default => '🔴 <b>PAPER SELL EXECUTED</b>',
                 };
 
                 $actionText = match ($eventType) {
-                    'stop_loss' => '🛑 <b>STOP LOSS TRIGGERED</b>',
-                    'take_profit_50' => '✅ <b>1.50x TARGET HIT</b>',
-                    'take_profit_2x' => '✅ <b>2.00x TARGET HIT</b>',
-                    'trailing_stop' => '🏃 <b>TRAILING STOP TRIGGERED</b>',
+                    'stop_loss' => '🛑 <b>-5% STOP LOSS TRIGGERED</b>',
+                    'full_target_2x_profit' => '✅ <b>+200% PROFIT TARGET HIT</b>',
+                    'protected_floor_exit' => '🛡️ <b>+150% WAS REACHED; FELL BACK TO +100%</b>',
                     default => '✅ <b>EXIT EXECUTED</b>',
                 };
 
                 $positionStatusText =
                     $strategyClosed
-                        ? "❌ <b>POSITION CLOSED</b>"
-                        : "📦 <b>POSITION STILL OPEN: " .
+                        ? '❌ <b>POSITION CLOSED</b>'
+                        : '📦 <b>POSITION STILL OPEN: '.
                             number_format(
                                 $remainingFraction * 100,
                                 0
-                            ) .
-                            "% remaining</b>";
+                            ).
+                            '% remaining</b>';
 
                 $walletText =
                     $walletAfterExit
-                        ? "💳 <b>WALLET AFTER SELL</b>\n" .
-                            "Available: <b>" .
+                        ? "💳 <b>WALLET AFTER SELL</b>\n".
+                            'Available: <b>'.
                             number_format(
                                 (float) $walletAfterExit->available_balance_sol,
                                 4
-                            ) .
-                            " SOL</b>\n" .
-                            "Invested: <b>" .
+                            ).
+                            " SOL</b>\n".
+                            'Invested: <b>'.
                             number_format(
                                 (float) $walletAfterExit->invested_balance_sol,
                                 4
-                            ) .
-                            " SOL</b>\n" .
-                            "Realized P/L: <b>" .
+                            ).
+                            " SOL</b>\n".
+                            'Realized P/L: <b>'.
                             sprintf(
                                 '%+.4f SOL',
                                 (float) $walletAfterExit->realized_pnl_sol
-                            ) .
+                            ).
                             "</b>\n\n"
                         : '';
 
                 $telegram->send(
-                    "{$heading}\n\n" .
-                    "💰 <b>{$position->symbol}</b>\n\n" .
-                    "{$actionText}\n\n" .
-                    "🎯 <b>Entry MC:</b> $" .
-                    number_format($entryMc, 2) . "\n" .
-                    "📊 <b>Current MC:</b> $" .
-                    number_format($marketCap, 2) . "\n" .
-                    "✖️ <b>Observed:</b> " .
-                    number_format($multiple, 2) . "x\n" .
-                    "💵 <b>Simulated Fill:</b> " .
+                    "{$heading}\n\n".
+                    "💰 <b>{$position->symbol}</b>\n\n".
+                    "{$actionText}\n\n".
+                    '🎯 <b>Entry MC:</b> $'.
+                    number_format($entryMc, 2)."\n".
+                    '📊 <b>Current MC:</b> $'.
+                    number_format($marketCap, 2)."\n".
+                    '✖️ <b>Observed:</b> '.
+                    number_format($multiple, 2)."x\n".
+                    '💵 <b>Simulated Fill:</b> '.
                     number_format(
                         (float) $event['fill_multiple'],
                         2
-                    ) . "x\n" .
-                    "📤 <b>Sold:</b> " .
+                    )."x\n".
+                    '📤 <b>Sold:</b> '.
                     number_format(
                         (float) $event['sold_fraction'] * 100,
                         0
-                    ) . "%\n" .
-                    "🪙 <b>SOL Returned:</b> " .
+                    )."%\n".
+                    '🪙 <b>SOL Returned:</b> '.
                     number_format(
                         (float) ($event['sol_returned'] ?? 0),
                         4
-                    ) . " SOL\n" .
-                    "💹 <b>Trade P/L on this exit:</b> " .
+                    )." SOL\n".
+                    '💹 <b>Trade P/L on this exit:</b> '.
                     sprintf(
                         '%+.4f SOL',
                         (float) ($event['realized_pnl_sol'] ?? 0)
-                    ) . "\n" .
-                    "📈 <b>Strategy Return:</b> " .
+                    )."\n".
+                    '📈 <b>Strategy Return:</b> '.
                     sprintf(
                         '%+.2f%%',
                         $strategyReturnPercent
-                    ) . "\n\n" .
-                    $walletText .
-                    "{$positionStatusText}\n\n" .
-                    "📍 <code>{$position->address}</code>\n\n" .
-                    "⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>"
+                    )."\n\n".
+                    $walletText.
+                    "{$positionStatusText}\n\n".
+                    "📍 <code>{$position->address}</code>\n\n".
+                    '⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>'
                 );
             } catch (\Throwable $e) {
                 $this->warn(
-                    "PAPER EXIT TELEGRAM FAILED: " .
+                    'PAPER EXIT TELEGRAM FAILED: '.
                     $e->getMessage()
                 );
             }
@@ -713,39 +694,37 @@ class TrackPaperPositions extends Command
 
         foreach ($newMilestones as $key => $targetMultiple) {
             $label = match ($key) {
-                'plus_25' => '+25%',
-                'plus_50' => '+50%',
-                'x2' => '2X',
-                'x3' => '3X',
-                'x5' => '5X',
+                'profit_1x' => '1X PROFIT (+100%)',
+                'protection_1_5x' => '1.50X PROFIT (+150%)',
+                'profit_2x' => '2X PROFIT (+200%)',
                 default => strtoupper($key),
             };
 
             try {
                 $telegram->send(
-                    "🎯 <b>PAPER MILESTONE: {$label}</b>\n\n" .
-                    "<b>{$position->symbol}</b>\n" .
-                    "🧪 Paper only\n" .
-                    "💰 Entry MC: $" .
-                    number_format($entryMc, 2) . "\n" .
-                    "📈 Current MC: $" .
-                    number_format($marketCap, 2) . "\n" .
-                    "🚀 Token return: " .
-                    sprintf('%+.2f%%', $returnPercent) . "\n" .
-                    "✖️ Multiple: " .
-                    number_format($multiple, 2) . "x\n" .
-                    "🏔 Peak: " .
-                    number_format($peakMultiple, 2) . "x\n" .
-                    "📈 Strategy return: " .
+                    "🎯 <b>PAPER MILESTONE: {$label}</b>\n\n".
+                    "<b>{$position->symbol}</b>\n".
+                    "🧪 Paper only\n".
+                    '💰 Entry MC: $'.
+                    number_format($entryMc, 2)."\n".
+                    '📈 Current MC: $'.
+                    number_format($marketCap, 2)."\n".
+                    '🚀 Token return: '.
+                    sprintf('%+.2f%%', $returnPercent)."\n".
+                    '✖️ Multiple: '.
+                    number_format($multiple, 2)."x\n".
+                    '🏔 Peak: '.
+                    number_format($peakMultiple, 2)."x\n".
+                    '📈 Strategy return: '.
                     sprintf(
                         '%+.2f%%',
                         $strategyReturnPercent
-                    ) .
+                    ).
                     "\n\n📍 <code>{$position->address}</code>"
                 );
             } catch (\Throwable $e) {
                 $this->warn(
-                    "PAPER MILESTONE TELEGRAM FAILED: " .
+                    'PAPER MILESTONE TELEGRAM FAILED: '.
                     $e->getMessage()
                 );
             }
@@ -790,8 +769,7 @@ class TrackPaperPositions extends Command
             'liquidity' => $liquidity,
             'return_percent' => $returnPercent,
             'multiple' => $multiple,
-            'drawdown_from_peak_percent' =>
-                $drawdownFromPeak,
+            'drawdown_from_peak_percent' => $drawdownFromPeak,
             'raw_data' => [
                 'dex' => $dex,
                 'elapsed_seconds' => $elapsedSeconds,

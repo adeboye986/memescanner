@@ -2,15 +2,15 @@
 
 namespace App\Console\Commands;
 
-use App\Models\TokenScan;
-use App\Models\PaperPosition;
 use App\Models\PaperWallet;
+use App\Models\TokenScan;
+use App\Models\TokenScanHistory;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
 use App\Services\GoPlusService;
-use App\Services\TelegramService;
-use App\Services\SolanaService;
 use App\Services\PaperTradingService;
+use App\Services\SolanaService;
+use App\Services\TelegramService;
 use Illuminate\Console\Command;
 
 class ScanMomentumTokens extends Command
@@ -34,7 +34,7 @@ class ScanMomentumTokens extends Command
             $profiles = $dexscreener->latestSolanaProfiles(30);
         } catch (\Throwable $e) {
             $this->error(
-                'Dex discovery failed: ' . $e->getMessage()
+                'Dex discovery failed: '.$e->getMessage()
             );
 
             return self::FAILURE;
@@ -47,7 +47,7 @@ class ScanMomentumTokens extends Command
         }
 
         $this->info(
-            'Found ' . count($profiles) . ' Solana profiles.'
+            'Found '.count($profiles).' Solana profiles.'
         );
 
         /*
@@ -85,7 +85,7 @@ class ScanMomentumTokens extends Command
         foreach ($profiles as $profile) {
             $address = $profile['tokenAddress'] ?? null;
 
-            if (!$address) {
+            if (! $address) {
                 continue;
             }
 
@@ -97,16 +97,16 @@ class ScanMomentumTokens extends Command
                 $discoveryDex = $dexscreener->analyzeToken($address);
             } catch (\Throwable $e) {
                 $this->line(
-                    'DEX DISCOVERY SKIP: ' .
-                    $address .
-                    ' | ' .
+                    'DEX DISCOVERY SKIP: '.
+                    $address.
+                    ' | '.
                     $e->getMessage()
                 );
 
                 continue;
             }
 
-            if (!($discoveryDex['available'] ?? false)) {
+            if (! ($discoveryDex['available'] ?? false)) {
                 continue;
             }
 
@@ -114,10 +114,10 @@ class ScanMomentumTokens extends Command
              * Token-specific Dex metrics are only trusted when
              * the requested token is the selected pair's base token.
              */
-            if (!($discoveryDex['requested_token_is_base'] ?? false)) {
+            if (! ($discoveryDex['requested_token_is_base'] ?? false)) {
                 $this->line(
-                    'DEX DISCOVERY SKIP: ' .
-                    $address .
+                    'DEX DISCOVERY SKIP: '.
+                    $address.
                     ' | token is not base'
                 );
 
@@ -214,7 +214,7 @@ class ScanMomentumTokens extends Command
                     $symbol,
                     $dexRankScore,
                     number_format($marketCap, 2),
-                    ($liquidity !== null ? '$' . number_format((float) $liquidity, 2) : 'N/A'),
+                    ($liquidity !== null ? '$'.number_format((float) $liquidity, 2) : 'N/A'),
                     number_format($volume5m, 2),
                     $trades5m
                 )
@@ -285,7 +285,7 @@ class ScanMomentumTokens extends Command
                     $candidateItem['buy_5m_count'] ?? 0,
                     $candidateItem['sell_5m_count'] ?? 0,
                     $candidateItem['price_change_5m'] !== null
-                        ? number_format((float) $candidateItem['price_change_5m'], 2) . '%'
+                        ? number_format((float) $candidateItem['price_change_5m'], 2).'%'
                         : 'N/A'
                 )
             );
@@ -465,8 +465,7 @@ class ScanMomentumTokens extends Command
         $this->info('PRE-BIRDEYE RANKING:');
 
         foreach (
-            $holderCheckedCandidates
-            as $index => $candidate
+            $holderCheckedCandidates as $index => $candidate
         ) {
             $holderRisk =
                 $candidate['holder_risk'] ?? [];
@@ -519,8 +518,7 @@ class ScanMomentumTokens extends Command
         $holderCheckedCandidates = array_values(
             array_filter(
                 $holderCheckedCandidates,
-                fn (array $candidate) =>
-                    ($candidate['pre_birdeye_score'] ?? 0) >= 65
+                fn (array $candidate) => ($candidate['pre_birdeye_score'] ?? 0) >= 65
             )
         );
 
@@ -603,12 +601,12 @@ class ScanMomentumTokens extends Command
                     $paperPosition = null;
                     $paperBuyExecuted = false;
 
-                    if (!($paperDex['available'] ?? false)) {
+                    if (! ($paperDex['available'] ?? false)) {
                         $paperStatus = 'skipped';
                         $paperReason =
                             'Dex pair unavailable at entry.';
                     } elseif (
-                        !(
+                        ! (
                             $paperDex[
                                 'requested_token_is_base'
                             ] ?? false
@@ -651,34 +649,24 @@ class ScanMomentumTokens extends Command
                         'enabled' => true,
                         'status' => $paperStatus,
                         'reason' => $paperReason,
-                        'discovery_market_cap' =>
-                            $discoveryMarketCap,
-                        'entry_market_cap' =>
-                            $paperMarketCap > 0
+                        'discovery_market_cap' => $discoveryMarketCap,
+                        'entry_market_cap' => $paperMarketCap > 0
                                 ? $paperMarketCap
                                 : null,
-                        'move_since_discovery_percent' =>
-                            $paperMovePercent,
-                        'max_chase_percent' =>
-                            $maxChasePercent,
-                        'entry_price' =>
-                            $paperDex['price_usd']
+                        'move_since_discovery_percent' => $paperMovePercent,
+                        'max_chase_percent' => $maxChasePercent,
+                        'entry_price' => $paperDex['price_usd']
                             ?? $paperDex['price']
                             ?? null,
-                        'liquidity_usd' =>
-                            $paperDex['liquidity_usd']
+                        'liquidity_usd' => $paperDex['liquidity_usd']
                             ?? null,
-                        'pair_address' =>
-                            $paperDex['pair_address']
+                        'pair_address' => $paperDex['pair_address']
                             ?? null,
-                        'dex' =>
-                            $paperDex['dex']
+                        'dex' => $paperDex['dex']
                             ?? null,
-                        'discovered_at' =>
-                            $item['discovered_at']
+                        'discovered_at' => $item['discovered_at']
                             ?? null,
-                        'entry_decided_at' =>
-                            now()->toIso8601String(),
+                        'entry_decided_at' => now()->toIso8601String(),
                     ];
 
                     if ($paperStatus === 'simulated_buy') {
@@ -688,30 +676,22 @@ class ScanMomentumTokens extends Command
                                 'symbol' => $symbol,
                                 'name' => $name,
 
-                                'discovery_market_cap' =>
-                                    $discoveryMarketCap,
+                                'discovery_market_cap' => $discoveryMarketCap,
 
-                                'entry_market_cap' =>
-                                    $paperMarketCap,
+                                'entry_market_cap' => $paperMarketCap,
 
-                                'entry_price' =>
-                                    $paperEntry['entry_price'] ?? null,
+                                'entry_price' => $paperEntry['entry_price'] ?? null,
 
-                                'entry_liquidity' =>
-                                    $paperEntry['liquidity_usd'] ?? null,
+                                'entry_liquidity' => $paperEntry['liquidity_usd'] ?? null,
 
-                                'move_since_discovery_percent' =>
-                                    $paperMovePercent,
+                                'move_since_discovery_percent' => $paperMovePercent,
 
                                 'meta' => [
-                                    'pair_address' =>
-                                        $paperEntry['pair_address'] ?? null,
+                                    'pair_address' => $paperEntry['pair_address'] ?? null,
 
-                                    'dex' =>
-                                        $paperEntry['dex'] ?? null,
+                                    'dex' => $paperEntry['dex'] ?? null,
 
-                                    'source' =>
-                                        'momentum_fast_paper',
+                                    'source' => 'momentum_fast_paper',
                                 ],
                             ]);
 
@@ -742,9 +722,9 @@ class ScanMomentumTokens extends Command
                             $paperBuyExecuted = false;
 
                             $this->warn(
-                                'PAPER BUY FAILED: ' .
-                                $symbol .
-                                ' | ' .
+                                'PAPER BUY FAILED: '.
+                                $symbol.
+                                ' | '.
                                 $e->getMessage()
                             );
                         }
@@ -763,7 +743,7 @@ class ScanMomentumTokens extends Command
                                 2
                             ),
                             $paperMarketCap > 0
-                                ? '$' . number_format(
+                                ? '$'.number_format(
                                     $paperMarketCap,
                                     2
                                 )
@@ -797,38 +777,38 @@ class ScanMomentumTokens extends Command
 
                         $walletText =
                             $paperWallet
-                                ? "💳 <b>WALLET AFTER BUY</b>\n" .
-                                    "Available: <b>" .
-                                    number_format($walletAvailable, 4) .
-                                    " SOL</b>\n" .
-                                    "Invested: <b>" .
-                                    number_format($walletInvested, 4) .
+                                ? "💳 <b>WALLET AFTER BUY</b>\n".
+                                    'Available: <b>'.
+                                    number_format($walletAvailable, 4).
+                                    " SOL</b>\n".
+                                    'Invested: <b>'.
+                                    number_format($walletInvested, 4).
                                     " SOL</b>\n\n"
                                 : '';
 
                         $fastMessage =
-                            "🟢🟢🟢 <b>PAPER BUY EXECUTED</b> 🟢🟢🟢\n\n" .
-                            "💰 <b>{$symbol}</b> — {$name}\n\n" .
-                            "✅ <b>POSITION OPENED</b>\n" .
-                            "💵 <b>Bought:</b> " .
+                            "🟢🟢🟢 <b>PAPER BUY EXECUTED</b> 🟢🟢🟢\n\n".
+                            "💰 <b>{$symbol}</b> — {$name}\n\n".
+                            "✅ <b>POSITION OPENED</b>\n".
+                            '💵 <b>Bought:</b> '.
                             number_format(
                                 (float) $paperPosition->initial_investment_sol,
                                 4
-                            ) .
-                            " SOL\n" .
-                            "🎯 <b>Entry MC:</b> $" .
+                            ).
+                            " SOL\n".
+                            '🎯 <b>Entry MC:</b> $'.
                             number_format(
                                 $paperMarketCap,
                                 2
-                            ) .
-                            "\n" .
-                            "🔎 <b>Discovery MC:</b> $" .
+                            ).
+                            "\n".
+                            '🔎 <b>Discovery MC:</b> $'.
                             number_format(
                                 $discoveryMarketCap,
                                 2
-                            ) .
-                            "\n" .
-                            "📈 <b>Entry Move:</b> " .
+                            ).
+                            "\n".
+                            '📈 <b>Entry Move:</b> '.
                             (
                                 $paperMovePercent !== null
                                     ? sprintf(
@@ -836,18 +816,22 @@ class ScanMomentumTokens extends Command
                                         $paperMovePercent
                                     )
                                     : 'N/A'
-                            ) .
-                            "\n\n" .
-                            $walletText .
-                            "🛡️ <b>EXIT PLAN</b>\n" .
-                            "🔴 Stop Loss: <b>0.70x (-30%)</b>\n" .
-                            "🟡 TP1: <b>1.50x → Sell 25%</b>\n" .
-                            "🟢 TP2: <b>2.00x → Sell 25%</b>\n" .
-                            "🏃 Remaining 50%: <b>25% trailing stop</b>\n\n" .
-                            "📍 <b>Token Address</b>\n" .
-                            "<code>{$address}</code>\n\n" .
-                            "⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>\n" .
-                            "⏳ Deep security scan is still running.";
+                            ).
+                            "\n\n".
+                            $walletText.
+                            "🛡️ <b>EXIT PLAN</b>\n".
+                            "🔴 Stop Loss: <b>-5% → CLOSE 100%</b>\n".
+                            "⚪ 1X Profit (+100%): <b>HOLD</b>\n".
+                            "🟡 1.50X Profit (+150%): <b>ARM PROTECTION</b>\n".
+                            "🟢 2X Profit (+200%): <b>CLOSE 100%</b>\n\n".
+                            "🛡️ <b>PROTECTED EXIT</b>\n".
+                            "After +150% profit has been reached:\n".
+                            "If profit falls back to +100% → <b>CLOSE 100%</b>\n\n".
+                            "❌ <b>No partial selling</b>\n\n".
+                            "📍 <b>Token Address</b>\n".
+                            "<code>{$address}</code>\n\n".
+                            "⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>\n".
+                            '⏳ Deep security scan is still running.';
 
                         try {
                             $telegram->send($fastMessage);
@@ -857,7 +841,7 @@ class ScanMomentumTokens extends Command
                             );
                         } catch (\Throwable $e) {
                             $this->warn(
-                                "FAST PAPER TELEGRAM FAILED: {$symbol} | " .
+                                "FAST PAPER TELEGRAM FAILED: {$symbol} | ".
                                 $e->getMessage()
                             );
                         }
@@ -868,18 +852,16 @@ class ScanMomentumTokens extends Command
                         'enabled' => true,
                         'status' => 'unavailable',
                         'reason' => $e->getMessage(),
-                        'discovery_market_cap' =>
-                            (float) (
-                                $item['discovery_market_cap']
-                                ?? $item['market_cap']
-                                ?? 0
-                            ),
-                        'entry_decided_at' =>
-                            now()->toIso8601String(),
+                        'discovery_market_cap' => (float) (
+                            $item['discovery_market_cap']
+                            ?? $item['market_cap']
+                            ?? 0
+                        ),
+                        'entry_decided_at' => now()->toIso8601String(),
                     ];
 
                     $this->warn(
-                        "FAST PAPER UNAVAILABLE: {$symbol} | " .
+                        "FAST PAPER UNAVAILABLE: {$symbol} | ".
                         $e->getMessage()
                     );
                 }
@@ -903,7 +885,7 @@ class ScanMomentumTokens extends Command
                 $token =
                     $overviewResponse['data'] ?? null;
 
-                if (!$token) {
+                if (! $token) {
                     $this->warn(
                         "No overview data for {$symbol}"
                     );
@@ -913,7 +895,7 @@ class ScanMomentumTokens extends Command
 
             } catch (\Throwable $e) {
                 $this->warn(
-                    "Overview unavailable: {$symbol} | " .
+                    "Overview unavailable: {$symbol} | ".
                     $e->getMessage()
                 );
 
@@ -971,7 +953,7 @@ class ScanMomentumTokens extends Command
 
             if ($overviewLiquidity < 1000) {
                 $this->warn(
-                    "MOMENTUM REJECT: {$symbol} | liquidity $" .
+                    "MOMENTUM REJECT: {$symbol} | liquidity $".
                     number_format($overviewLiquidity, 2)
                 );
 
@@ -983,7 +965,7 @@ class ScanMomentumTokens extends Command
                 $overviewMarketCap > 100000
             ) {
                 $this->warn(
-                    "MOMENTUM REJECT: {$symbol} | MC $" .
+                    "MOMENTUM REJECT: {$symbol} | MC $".
                     number_format($overviewMarketCap, 2)
                 );
 
@@ -995,8 +977,8 @@ class ScanMomentumTokens extends Command
             */
             if ($priceChange <= -40) {
                 $this->warn(
-                    "MOMENTUM REJECT: {$symbol} | collapsing " .
-                    number_format($priceChange, 2) . '%'
+                    "MOMENTUM REJECT: {$symbol} | collapsing ".
+                    number_format($priceChange, 2).'%'
                 );
 
                 continue;
@@ -1007,8 +989,8 @@ class ScanMomentumTokens extends Command
             */
             if ($priceChange > 150) {
                 $this->warn(
-                    "MOMENTUM REJECT: {$symbol} | overheated +" .
-                    number_format($priceChange, 2) . '%'
+                    "MOMENTUM REJECT: {$symbol} | overheated +".
+                    number_format($priceChange, 2).'%'
                 );
 
                 continue;
@@ -1063,7 +1045,7 @@ class ScanMomentumTokens extends Command
                     'passed' => null,
                     'score' => null,
                     'risks' => [
-                        'GoPlus unavailable: ' . $e->getMessage()
+                        'GoPlus unavailable: '.$e->getMessage(),
                     ],
                 ];
 
@@ -1092,7 +1074,7 @@ class ScanMomentumTokens extends Command
                         'passed' => null,
                         'score' => null,
                         'risks' => [
-                            'No GoPlus security data returned'
+                            'No GoPlus security data returned',
                         ],
                     ];
 
@@ -1118,7 +1100,7 @@ class ScanMomentumTokens extends Command
                 }
             }
 
-            if (!$securityUnavailable) {
+            if (! $securityUnavailable) {
                 $this->info(
                     sprintf(
                         'SECURITY PASS: %s | Score: %s',
@@ -1143,8 +1125,9 @@ class ScanMomentumTokens extends Command
             try {
                 $initialDexData = $dexscreener->analyzeToken($address);
 
-                if (!($initialDexData['available'] ?? false)) {
+                if (! ($initialDexData['available'] ?? false)) {
                     $this->warn("DEX UNAVAILABLE: {$symbol} | no pair data");
+
                     continue;
                 }
 
@@ -1205,12 +1188,13 @@ class ScanMomentumTokens extends Command
                     'DEX SNAPSHOT: %s | DEX: %s | MC: %s | Liquidity: %s | Pair Age: %s min',
                     $symbol,
                     $dexName,
-                    $initialDexMarketCap !== null ? '$' . number_format($initialDexMarketCap, 2) : 'N/A',
-                    $initialDexLiquidity !== null ? '$' . number_format($initialDexLiquidity, 2) : 'N/A',
+                    $initialDexMarketCap !== null ? '$'.number_format($initialDexMarketCap, 2) : 'N/A',
+                    $initialDexLiquidity !== null ? '$'.number_format($initialDexLiquidity, 2) : 'N/A',
                     $pairAge !== null ? number_format($pairAge, 0) : 'N/A'
                 ));
             } catch (\Throwable $e) {
-                $this->warn("DEX UNAVAILABLE: {$symbol} | " . $e->getMessage());
+                $this->warn("DEX UNAVAILABLE: {$symbol} | ".$e->getMessage());
+
                 continue;
             }
 
@@ -1230,6 +1214,7 @@ class ScanMomentumTokens extends Command
                         number_format($initialDexMarketCap, 2),
                         $marketCapRatio
                     ));
+
                     continue;
                 }
             }
@@ -1240,12 +1225,14 @@ class ScanMomentumTokens extends Command
             try {
                 $dexData = $dexscreener->analyzeToken($address);
 
-                if (!($dexData['available'] ?? false)) {
+                if (! ($dexData['available'] ?? false)) {
                     $this->warn("DEX CONFIRMATION FAILED: {$symbol} | pair disappeared/unavailable");
+
                     continue;
                 }
             } catch (\Throwable $e) {
-                $this->warn("DEX CONFIRMATION FAILED: {$symbol} | " . $e->getMessage());
+                $this->warn("DEX CONFIRMATION FAILED: {$symbol} | ".$e->getMessage());
+
                 continue;
             }
 
@@ -1287,6 +1274,7 @@ class ScanMomentumTokens extends Command
                         number_format($freshDexMarketCap, 2),
                         $freshMarketCapRatio
                     ));
+
                     continue;
                 }
             }
@@ -1301,6 +1289,7 @@ class ScanMomentumTokens extends Command
                         $symbol,
                         $dexMarketCapChange
                     ));
+
                     continue;
                 }
 
@@ -1310,6 +1299,7 @@ class ScanMomentumTokens extends Command
                         $symbol,
                         $dexMarketCapChange
                     ));
+
                     continue;
                 }
             }
@@ -1333,6 +1323,7 @@ class ScanMomentumTokens extends Command
                         number_format($initialDexLiquidityValue, 2),
                         number_format($freshDexLiquidity, 2)
                     ));
+
                     continue;
                 }
             }
@@ -1344,8 +1335,8 @@ class ScanMomentumTokens extends Command
                 'DEX CONFIRMED: %s | score %d | Dex MC: %s | 8s MC move: %s',
                 $symbol,
                 $momentumScore,
-                $freshDexMarketCap > 0 ? '$' . number_format($freshDexMarketCap, 2) : 'N/A',
-                $dexMarketCapChange !== null ? number_format($dexMarketCapChange, 2) . '%' : 'N/A'
+                $freshDexMarketCap > 0 ? '$'.number_format($freshDexMarketCap, 2) : 'N/A',
+                $dexMarketCapChange !== null ? number_format($dexMarketCapChange, 2).'%' : 'N/A'
             ));
 
             /*
@@ -1369,16 +1360,16 @@ class ScanMomentumTokens extends Command
                     )
                 );
 
-                if (!empty($dexPaidData['types'])) {
+                if (! empty($dexPaidData['types'])) {
                     $this->line(
-                        'DEX PAID TYPES: ' .
+                        'DEX PAID TYPES: '.
                         implode(', ', $dexPaidData['types'])
                     );
                 }
 
             } catch (\Throwable $e) {
                 $this->warn(
-                    "DEX PAID UNAVAILABLE: {$symbol} | " .
+                    "DEX PAID UNAVAILABLE: {$symbol} | ".
                     $e->getMessage()
                 );
             }
@@ -1441,7 +1432,7 @@ class ScanMomentumTokens extends Command
 
             } catch (\Throwable $e) {
                 $this->warn(
-                    "PUMP ACTIVITY UNAVAILABLE: {$symbol} | " .
+                    "PUMP ACTIVITY UNAVAILABLE: {$symbol} | ".
                     $e->getMessage()
                 );
             }
@@ -1501,20 +1492,20 @@ class ScanMomentumTokens extends Command
                             $devSold ? 'YES' : 'NO',
                             $devSellCount,
                             $devHolding !== null
-                                ? number_format((float) $devHolding, 2) . '%'
+                                ? number_format((float) $devHolding, 2).'%'
                                 : 'N/A'
                         )
                     );
                 } else {
                     $this->warn(
-                        "DEV UNAVAILABLE: {$symbol} | " .
+                        "DEV UNAVAILABLE: {$symbol} | ".
                         ($developerAnalysis['reason']
                             ?? 'creator analysis unavailable')
                     );
                 }
             } catch (\Throwable $e) {
                 $this->warn(
-                    "DEV UNAVAILABLE: {$symbol} | " .
+                    "DEV UNAVAILABLE: {$symbol} | ".
                     $e->getMessage()
                 );
             }
@@ -1543,26 +1534,21 @@ class ScanMomentumTokens extends Command
                     'buys_1m' => $token['buy1m'] ?? 0,
                     'sells_1m' => $token['sell1m'] ?? 0,
 
-                    'unique_wallets_5m' =>
-                        $token['uniqueWallet5m'] ?? 0,
+                    'unique_wallets_5m' => $token['uniqueWallet5m'] ?? 0,
 
-                    'price_change_5m' =>
-                        $token['priceChange5mPercent'] ?? 0,
+                    'price_change_5m' => $token['priceChange5mPercent'] ?? 0,
 
                     'score' => $momentumScore,
 
-                    'security_score' =>
-                        $securityUnavailable
+                    'security_score' => $securityUnavailable
                             ? null
                             : ($security['score'] ?? null),
 
-                    'security_passed' =>
-                        $securityUnavailable
+                    'security_passed' => $securityUnavailable
                             ? false
                             : ($security['passed'] ?? false),
 
-                    'security_risks' =>
-                        $security['risks'] ?? [],
+                    'security_risks' => $security['risks'] ?? [],
 
                     'raw_data' => [
                         'dex_discovery' => $item,
@@ -1584,70 +1570,52 @@ class ScanMomentumTokens extends Command
                         'pump_fun_score_adjustment' => $pumpFeeAdjustment,
                     ],
 
-                    'first_seen_at' =>
-                        $existing?->first_seen_at ?? now(),
+                    'first_seen_at' => $existing?->first_seen_at ?? now(),
 
                     'last_scanned_at' => now(),
                 ]
             );
 
-            \App\Models\TokenScanHistory::create([
+            TokenScanHistory::create([
                 'token_scan_id' => $scan->id,
 
                 'address' => $address,
                 'symbol' => $symbol,
                 'name' => $name,
 
-                'snapshot_type' =>
-                    'momentum_discovery',
+                'snapshot_type' => 'momentum_discovery',
 
-                'price' =>
-                    $token['price'] ?? null,
+                'price' => $token['price'] ?? null,
 
-                'market_cap' =>
-                    $token['marketCap'] ?? null,
+                'market_cap' => $token['marketCap'] ?? null,
 
-                'liquidity' =>
-                    $token['liquidity'] ?? null,
+                'liquidity' => $token['liquidity'] ?? null,
 
-                'holders' =>
-                    $token['holder'] ?? 0,
+                'holders' => $token['holder'] ?? 0,
 
-                'volume_1m' =>
-                    $token['v1m'] ?? 0,
+                'volume_1m' => $token['v1m'] ?? 0,
 
-                'buys_1m' =>
-                    $token['buy1m'] ?? 0,
+                'buys_1m' => $token['buy1m'] ?? 0,
 
-                'sells_1m' =>
-                    $token['sell1m'] ?? 0,
+                'sells_1m' => $token['sell1m'] ?? 0,
 
-                'unique_wallets_5m' =>
-                    $token['uniqueWallet5m'] ?? 0,
+                'unique_wallets_5m' => $token['uniqueWallet5m'] ?? 0,
 
-                'price_change_5m' =>
-                    $token['priceChange5mPercent'] ?? 0,
+                'price_change_5m' => $token['priceChange5mPercent'] ?? 0,
 
-                'score' =>
-                    $momentumScore,
+                'score' => $momentumScore,
 
-                'dex_available' =>
-                    (bool) ($dexData['available'] ?? false),
+                'dex_available' => (bool) ($dexData['available'] ?? false),
 
-                'dex' =>
-                    $dexData['dex'] ?? null,
+                'dex' => $dexData['dex'] ?? null,
 
-                'dex_pair_address' =>
-                    $dexData['pair_address'] ?? null,
+                'dex_pair_address' => $dexData['pair_address'] ?? null,
 
-                'dex_market_cap' =>
-                    $dexData['market_cap'] ?? null,
+                'dex_market_cap' => $dexData['market_cap'] ?? null,
 
-                'dex_liquidity' =>
-                    $dexData['liquidity_usd'] ?? null,
+                'dex_liquidity' => $dexData['liquidity_usd'] ?? null,
 
-                'dex_pair_age_minutes' =>
-                    $dexData['pair_age_minutes'] ?? null,
+                'dex_pair_age_minutes' => $dexData['pair_age_minutes'] ?? null,
 
                 'raw_data' => [
                     'dex_discovery' => $item,
@@ -1680,7 +1648,7 @@ class ScanMomentumTokens extends Command
                 )
             );
 
-             /*
+            /*
             * Telegram alerts are only for confirmed
             * momentum candidates scoring 65 or higher.
             */
@@ -1710,20 +1678,18 @@ class ScanMomentumTokens extends Command
                     );
 
                 $alertHeading = match (true) {
-                    $momentumScore >= 80 =>
-                        '🔥 <b>STRONG MOMENTUM DETECTED</b>',
+                    $momentumScore >= 80 => '🔥 <b>STRONG MOMENTUM DETECTED</b>',
 
-                    default =>
-                        '🟢 <b>MOMENTUM CANDIDATE</b>',
+                    default => '🟢 <b>MOMENTUM CANDIDATE</b>',
                 };
 
                 if ($securityUnavailable) {
                     $securityText =
-                        "⚠️ <b>SECURITY: UNVERIFIED</b>\n" .
-                        "GoPlus security data was unavailable.";
+                        "⚠️ <b>SECURITY: UNVERIFIED</b>\n".
+                        'GoPlus security data was unavailable.';
                 } else {
                     $securityText =
-                        "✅ <b>Security:</b> GoPlus passed" .
+                        '✅ <b>Security:</b> GoPlus passed'.
                         (
                             isset($security['score'])
                                 ? " ({$security['score']}/100)"
@@ -1740,24 +1706,24 @@ class ScanMomentumTokens extends Command
                         );
                 }
 
-                $dexPaidText = "⚪ <b>DEX Paid:</b> Unavailable";
+                $dexPaidText = '⚪ <b>DEX Paid:</b> Unavailable';
 
                 if ($dexPaidData !== null) {
                     if ($dexPaidData['dex_paid'] ?? false) {
-                        $dexPaidTypes = !empty($dexPaidData['types'])
-                            ? ' (' . implode(', ', $dexPaidData['types']) . ')'
+                        $dexPaidTypes = ! empty($dexPaidData['types'])
+                            ? ' ('.implode(', ', $dexPaidData['types']).')'
                             : '';
 
                         $dexPaidText =
                             "🟢 <b>DEX Paid:</b> YES{$dexPaidTypes}";
                     } else {
                         $dexPaidText =
-                            "🔴 <b>DEX Paid:</b> NO";
+                            '🔴 <b>DEX Paid:</b> NO';
                     }
                 }
 
                 $developerText =
-                    "⚪ <b>Developer:</b> Unavailable";
+                    '⚪ <b>Developer:</b> Unavailable';
 
                 if (
                     $developerAnalysis !== null
@@ -1769,8 +1735,8 @@ class ScanMomentumTokens extends Command
 
                     $creatorShort =
                         strlen($creator) > 12
-                            ? substr($creator, 0, 6) .
-                                '...' .
+                            ? substr($creator, 0, 6).
+                                '...'.
                                 substr($creator, -4)
                             : $creator;
 
@@ -1791,26 +1757,26 @@ class ScanMomentumTokens extends Command
                             ? number_format(
                                 (float) $devHolding,
                                 2
-                            ) . '%'
+                            ).'%'
                             : 'N/A';
 
                     $devSoldText =
                         $devSold
                             ? "⚠️ <b>Dev Sold:</b> YES ({$devSellCount} sells)"
-                            : "🟢 <b>Dev Sold:</b> NO detected";
+                            : '🟢 <b>Dev Sold:</b> NO detected';
 
                     $developerText =
-                        "👨‍💻 <b>Dev:</b> " .
-                        "<code>{$creatorShort}</code>\n" .
-                        "{$devSoldText}\n" .
+                        '👨‍💻 <b>Dev:</b> '.
+                        "<code>{$creatorShort}</code>\n".
+                        "{$devSoldText}\n".
                         "📦 <b>Dev Holding:</b> {$devHoldingText}";
                 } elseif ($developerAnalysis !== null) {
                     $developerText =
-                        "⚪ <b>Developer:</b> Unverified";
+                        '⚪ <b>Developer:</b> Unverified';
                 }
 
                 $pumpText =
-                    "⚪ <b>Pump.fun Activity:</b> Unavailable";
+                    '⚪ <b>Pump.fun Activity:</b> Unavailable';
 
                 if ($pumpFeeAnalysis) {
                     $pumpStatus =
@@ -1824,27 +1790,27 @@ class ScanMomentumTokens extends Command
                     };
 
                     $pumpText =
-                        "{$pumpIcon} <b>Pump.fun Activity:</b> " .
-                        strtoupper($pumpStatus) . "\n" .
-                        "🔥 <b>Pump Fees:</b> " .
+                        "{$pumpIcon} <b>Pump.fun Activity:</b> ".
+                        strtoupper($pumpStatus)."\n".
+                        '🔥 <b>Pump Fees:</b> '.
                         number_format(
                             (float) (
                                 $pumpFeeAnalysis['total_pump_fees_sol']
                                 ?? 0
                             ),
                             4
-                        ) .
-                        " SOL\n" .
-                        "🔄 <b>On-chain Volume:</b> " .
+                        ).
+                        " SOL\n".
+                        '🔄 <b>On-chain Volume:</b> '.
                         number_format(
                             (float) (
                                 $pumpFeeAnalysis['total_volume_sol']
                                 ?? 0
                             ),
                             2
-                        ) .
-                        " SOL\n" .
-                        "🧾 <b>Pump Trades:</b> " .
+                        ).
+                        " SOL\n".
+                        '🧾 <b>Pump Trades:</b> '.
                         number_format(
                             (int) (
                                 $pumpFeeAnalysis['trades_processed']
@@ -1854,7 +1820,7 @@ class ScanMomentumTokens extends Command
                 }
 
                 $paperEntryText =
-                    "⚪ <b>Paper Entry:</b> Disabled";
+                    '⚪ <b>Paper Entry:</b> Disabled';
 
                 if ($paperEntry !== null) {
                     $paperStatus =
@@ -1872,14 +1838,14 @@ class ScanMomentumTokens extends Command
 
                     $paperEntryText =
                         ($paperStatus === 'simulated_buy'
-                            ? "🧪 <b>Paper Entry:</b> SIMULATED BUY"
-                            : "⏭ <b>Paper Entry:</b> " .
+                            ? '🧪 <b>Paper Entry:</b> SIMULATED BUY'
+                            : '⏭ <b>Paper Entry:</b> '.
                                 strtoupper($paperStatus)
                         );
 
                     if ($paperEntryMc !== null) {
                         $paperEntryText .=
-                            "\n🎯 <b>Paper Entry MC:</b> $" .
+                            "\n🎯 <b>Paper Entry MC:</b> $".
                             number_format(
                                 (float) $paperEntryMc,
                                 2
@@ -1888,7 +1854,7 @@ class ScanMomentumTokens extends Command
 
                     if ($paperMove !== null) {
                         $paperEntryText .=
-                            "\n🏃 <b>Move at Entry:</b> " .
+                            "\n🏃 <b>Move at Entry:</b> ".
                             sprintf(
                                 '%+.2f%%',
                                 (float) $paperMove
@@ -1897,51 +1863,51 @@ class ScanMomentumTokens extends Command
                 }
 
                 $message =
-                    "{$alertHeading}\n\n" .
+                    "{$alertHeading}\n\n".
 
-                    "<b>{$symbol}</b> — {$name}\n\n" .
+                    "<b>{$symbol}</b> — {$name}\n\n".
 
-                    "📊 <b>Momentum Score:</b> " .
-                    "{$momentumScore}/100\n" .
+                    '📊 <b>Momentum Score:</b> '.
+                    "{$momentumScore}/100\n".
 
-                    "💰 <b>Market Cap:</b> $" .
-                    number_format($freshMarketCap, 2) .
-                    "\n" .
+                    '💰 <b>Market Cap:</b> $'.
+                    number_format($freshMarketCap, 2).
+                    "\n".
 
-                    "💧 <b>Liquidity:</b> $" .
-                    number_format($freshLiquidity, 2) .
-                    "\n" .
+                    '💧 <b>Liquidity:</b> $'.
+                    number_format($freshLiquidity, 2).
+                    "\n".
 
-                    "👥 <b>Holders:</b> " .
-                    number_format($freshHolders) .
-                    "\n" .
+                    '👥 <b>Holders:</b> '.
+                    number_format($freshHolders).
+                    "\n".
 
-                    "🟢 <b>Buys 1m:</b> {$freshBuys}\n" .
-                    "🔴 <b>Sells 1m:</b> {$freshSells}\n" .
+                    "🟢 <b>Buys 1m:</b> {$freshBuys}\n".
+                    "🔴 <b>Sells 1m:</b> {$freshSells}\n".
 
-                    "👛 <b>Wallets 5m:</b> " .
-                    number_format($freshWallets) .
-                    "\n" .
+                    '👛 <b>Wallets 5m:</b> '.
+                    number_format($freshWallets).
+                    "\n".
 
-                    "📈 <b>Price Change 5m:</b> " .
-                    number_format($freshChange, 2) .
-                    "%\n\n" .
+                    '📈 <b>Price Change 5m:</b> '.
+                    number_format($freshChange, 2).
+                    "%\n\n".
 
-                    "{$paperEntryText}\n\n" .
+                    "{$paperEntryText}\n\n".
 
-                    "{$securityText}\n\n" .
+                    "{$securityText}\n\n".
 
-                    "{$developerText}\n\n" .
+                    "{$developerText}\n\n".
 
-                    "{$pumpText}\n\n" .
+                    "{$pumpText}\n\n".
 
-                    "{$dexPaidText}\n" .
-                    "🏦 <b>DEX:</b> {$dexText}\n\n" .
+                    "{$dexPaidText}\n".
+                    "🏦 <b>DEX:</b> {$dexText}\n\n".
 
-                    "📍 <b>Token Address</b>\n" .
-                    "<code>{$address}</code>\n\n" .
+                    "📍 <b>Token Address</b>\n".
+                    "<code>{$address}</code>\n\n".
 
-                    "⚠️ Momentum signal only — not financial advice.";
+                    '⚠️ Momentum signal only — not financial advice.';
 
                 try {
                     $telegram->send($message);
@@ -1955,7 +1921,7 @@ class ScanMomentumTokens extends Command
                     * Telegram failure must NOT undo the saved token.
                     */
                     $this->warn(
-                        "TELEGRAM FAILED: {$symbol} | " .
+                        "TELEGRAM FAILED: {$symbol} | ".
                         $e->getMessage()
                     );
                 }
@@ -1964,7 +1930,6 @@ class ScanMomentumTokens extends Command
             $this->newLine();
         }
 
-        
         $this->info('Momentum scan finished.');
 
         return self::SUCCESS;
