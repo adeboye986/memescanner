@@ -843,7 +843,7 @@ class ScanMomentumTokens extends Command
                             "\n\n".
                             $walletText.
                             "🛡️ <b>EXIT PLAN</b>\n".
-                            "🔴 Stop Loss: <b>-5% → CLOSE 100%</b>\n".
+                            "🔴 Stop Loss: <b>-10% → CLOSE 100%</b>\n".
                             "⚪ 1X Profit (+100%): <b>HOLD</b>\n".
                             "🟡 1.50X Profit (+150%): <b>ARM PROTECTION</b>\n".
                             "🟢 2X Profit (+200%): <b>CLOSE 100%</b>\n\n".

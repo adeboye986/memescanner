@@ -54,7 +54,7 @@ class ShowOpenPaperPositions extends Command
             $currentValue = $remainingCost * $currentMultiple;
             $unrealizedPnl = $currentValue - $remainingCost;
 
-            $stopLossMc = $entryMc * 0.95;
+            $stopLossMc = $entryMc * 0.90;
             $profit1xMc = $entryMc * 2.00;
             $protectionMc = $entryMc * 2.50;
             $profit2xMc = $entryMc * 3.00;
@@ -72,8 +72,8 @@ class ShowOpenPaperPositions extends Command
                 : 'Never';
 
             $nextAction = match (true) {
-                ! $protectionArmed && $currentMultiple <= 0.95 => 'STOP LOSS threshold reached — tracker should close 100%',
-                ! $protectionArmed && $currentMultiple < 2.50 => 'Hold 100% — waiting for +150% profit or -5% stop',
+                ! $protectionArmed && $currentMultiple <= 0.90 => 'STOP LOSS threshold reached — tracker should close 100%',
+                ! $protectionArmed && $currentMultiple < 2.50 => 'Hold 100% — waiting for +150% profit or -10% stop',
                 $protectionArmed && $currentMultiple >= 3.00 => '+200% profit target reached — tracker should close 100%',
                 $protectionArmed && $currentMultiple <= 2.00 => 'Protected floor reached — tracker should close 100%',
                 $protectionArmed => 'Protection armed — hold for +200% profit; exit if back to +100%',
@@ -101,7 +101,7 @@ class ShowOpenPaperPositions extends Command
                     ['Unrealized P/L', sprintf('%+.4f SOL', $unrealizedPnl)],
                     ['Realized SOL', number_format((float) ($position->realized_sol ?? 0), 4).' SOL'],
                     ['Realized P/L', sprintf('%+.4f SOL', (float) ($position->trade_pnl_sol ?? 0))],
-                    ['Stop Loss', '$'.number_format($stopLossMc, 2).' (-5% / close 100%)'],
+                    ['Stop Loss', '$'.number_format($stopLossMc, 2).' (-10% / close 100%)'],
                     ['1X Profit', '$'.number_format($profit1xMc, 2).' (+100% / hold)'],
                     [
                         'Protection',

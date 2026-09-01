@@ -58,7 +58,7 @@ class PaperTradingDashboardTest extends TestCase
             ->assertSee('OPEN')
             ->assertSee('+150.00%')
             ->assertSee('Protection armed')
-            ->assertSee('$95,000.00')
+            ->assertSee('$90,000.00')
             ->assertSee('$300,000.00')
             ->assertDontSee('UNFUNDED')
             ->assertDontSee('CLOSED')

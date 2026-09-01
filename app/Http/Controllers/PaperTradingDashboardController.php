@@ -65,7 +65,7 @@ class PaperTradingDashboardController extends Controller
             'unrealized_pnl' => $currentValue - $remainingCostBasis,
             'protection_armed' => (bool) ($position->tp_50_hit ?? false) || ($entryMarketCap > 0 && $peakMarketCap / $entryMarketCap >= 2.5),
             'levels' => [
-                'stop_loss' => $entryMarketCap * 0.95,
+                'stop_loss' => $entryMarketCap * 0.90,
                 'profit_1x' => $entryMarketCap * 2,
                 'protection' => $entryMarketCap * 2.5,
                 'profit_2x' => $entryMarketCap * 3,

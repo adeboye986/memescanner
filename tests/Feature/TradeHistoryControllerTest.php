@@ -78,7 +78,7 @@ class TradeHistoryControllerTest extends TestCase
     {
         $cases = [
             'MANUAL' => ['manual_close', 'Manual Close'],
-            'STOP' => ['stop_loss', 'Stop Loss (-5%)'],
+            'STOP' => ['stop_loss', 'Stop Loss (-10%)'],
             'TARGET' => ['full_target_2x_profit', 'Full Target (+200% Profit)'],
             'FLOOR' => ['protected_floor_exit', 'Protected Floor (+100% Profit)'],
             'LEGACY' => ['something_old', 'Other / Unknown'],

@@ -11,7 +11,7 @@ class PaperTradeHistoryService
     /** @var array<string, array{label: string, filter: string, mode: string}> */
     private const EXIT_TYPES = [
         'manual_close' => ['label' => 'Manual Close', 'filter' => 'manual', 'mode' => 'Manual'],
-        'stop_loss' => ['label' => 'Stop Loss (-5%)', 'filter' => 'stop-loss', 'mode' => 'Automatic'],
+        'stop_loss' => ['label' => 'Stop Loss (-10%)', 'filter' => 'stop-loss', 'mode' => 'Automatic'],
         'full_target_2x_profit' => ['label' => 'Full Target (+200% Profit)', 'filter' => 'full-target', 'mode' => 'Automatic'],
         'protected_floor_exit' => ['label' => 'Protected Floor (+100% Profit)', 'filter' => 'protected-floor', 'mode' => 'Automatic'],
         'tp_50' => ['label' => 'Legacy Take Profit', 'filter' => 'other', 'mode' => 'Automatic'],
@@ -160,7 +160,7 @@ class PaperTradeHistoryService
     {
         $breakdown = [
             'Manual Close' => 0,
-            'Stop Loss (-5%)' => 0,
+            'Stop Loss (-10%)' => 0,
             'Full Target (+200% Profit)' => 0,
             'Protected Floor (+100% Profit)' => 0,
             'Other / Unknown' => 0,

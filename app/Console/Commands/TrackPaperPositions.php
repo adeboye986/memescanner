@@ -144,7 +144,7 @@ class TrackPaperPositions extends Command
          * +200% profit = 3.00x value.
          *
          * Rules:
-         * - Before protection is armed, -5% closes 100% at 0.95x.
+         * - Before protection is armed, -10% closes 100% at 0.90x.
          * - Reaching +150% profit (2.50x) arms protection; sell 0%.
          * - After protection is armed, +200% profit (3.00x) closes 100%.
          * - After protection is armed, falling to +100% profit (2.00x)
@@ -189,11 +189,11 @@ class TrackPaperPositions extends Command
         if (
             ! $protectionArmed
             && ! $stopLossHit
-            && $multiple <= 0.95
+            && $multiple <= 0.90
             && $remainingFraction > 0
         ) {
             $soldFraction = $remainingFraction;
-            $fillMultiple = 0.95;
+            $fillMultiple = 0.90;
 
             $realizedValue += $soldFraction * $fillMultiple;
             $remainingFraction = 0.0;
@@ -201,7 +201,7 @@ class TrackPaperPositions extends Command
 
             $event = [
                 'type' => 'stop_loss',
-                'label' => 'STOP LOSS -5%',
+                'label' => 'STOP LOSS -10%',
                 'sold_fraction' => $soldFraction,
                 'fill_multiple' => $fillMultiple,
                 'observed_multiple' => $multiple,
@@ -606,7 +606,7 @@ class TrackPaperPositions extends Command
                 };
 
                 $actionText = match ($eventType) {
-                    'stop_loss' => '🛑 <b>-5% STOP LOSS TRIGGERED</b>',
+                    'stop_loss' => '🛑 <b>-10% STOP LOSS TRIGGERED</b>',
                     'full_target_2x_profit' => '✅ <b>+200% PROFIT TARGET HIT</b>',
                     'protected_floor_exit' => '🛡️ <b>+150% WAS REACHED; FELL BACK TO +100%</b>',
                     default => '✅ <b>EXIT EXECUTED</b>',

@@ -103,7 +103,7 @@ class PaperTradeEntryService
                 '<b>Entry Move:</b> '.$entryMove."\n".
                 '<b>Wallet Available:</b> '.number_format((float) ($wallet?->available_balance_sol ?? 0), 4)." SOL\n".
                 '<b>Wallet Invested:</b> '.number_format((float) ($wallet?->invested_balance_sol ?? 0), 4)." SOL\n\n".
-                "<b>EXIT PLAN</b>\nStop Loss: -5% / 0.95x / CLOSE 100%\n1X Profit: +100% / 2.00x / HOLD\n1.50X Profit: +150% / 2.50x / ARM PROTECTION\n2X Profit: +200% / 3.00x / CLOSE 100%\nProtected floor after arming: +100% / 2.00x / CLOSE 100%\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>",
+                "<b>EXIT PLAN</b>\nStop Loss: -10% / 0.90x / CLOSE 100%\n1X Profit: +100% / 2.00x / HOLD\n1.50X Profit: +150% / 2.50x / ARM PROTECTION\n2X Profit: +200% / 3.00x / CLOSE 100%\nProtected floor after arming: +100% / 2.00x / CLOSE 100%\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>",
             );
         } catch (Throwable $exception) {
             report($exception);
