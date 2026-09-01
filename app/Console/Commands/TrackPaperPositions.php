@@ -144,16 +144,20 @@ class TrackPaperPositions extends Command
          * +200% profit = 3.00x value.
          *
          * Rules:
-         * - Before protection is armed, -10% closes 100% at 0.90x.
-         * - Reaching +150% profit (2.50x) arms protection; sell 0%.
-         * - After protection is armed, +200% profit (3.00x) closes 100%.
-         * - After protection is armed, falling to +100% profit (2.00x)
-         *   closes 100%.
-         * - No partial exits and no trailing runner.
+         * - Before +100% profit is reached, -10% closes 100% at 0.90x.
+         * - Reaching +100% profit (2.00x) arms a +100% protected floor.
+         * - Between +100% and +200% profit, keep holding.
+         * - If the token falls back to +100% before reaching +200%, close
+         *   100% at the protected 2.00x floor.
+         * - Reaching +200% profit (3.00x) upgrades the protected floor to
+         *   +200%; do not sell just because the target was reached.
+         * - Above +200% profit, keep holding.
+         * - If the token later falls back to +200%, close 100% at 3.00x.
+         * - No partial exits.
          *
          * Existing booleans are reused for compatibility:
-         * tp_50_hit = protection armed
-         * tp_2x_hit = full +200% target hit
+         * tp_50_hit = +100% profit floor armed
+         * tp_2x_hit = +200% profit floor armed
          * trailing_stop_hit = protected-floor exit hit
          */
         $remainingFraction =
@@ -169,21 +173,32 @@ class TrackPaperPositions extends Command
         $exitEvents = $position->exit_events ?? [];
 
         $protectionArmed = (bool) ($position->tp_50_hit ?? false);
-        $fullTargetHit = (bool) ($position->tp_2x_hit ?? false);
+        $twoXProfitProtectionArmed = (bool) ($position->tp_2x_hit ?? false);
         $stopLossHit = (bool) ($position->stop_loss_hit ?? false);
         $protectedExitHit =
             (bool) ($position->trailing_stop_hit ?? false);
 
         $strategyEvents = [];
         $protectionJustArmed = false;
+        $twoXProtectionJustArmed = false;
 
         if (
             ! $protectionArmed
-            && $peakMultiple >= 2.50
+            && $peakMultiple >= 2.00
             && $remainingFraction > 0
         ) {
             $protectionArmed = true;
             $protectionJustArmed = true;
+        }
+
+        if (
+            $protectionArmed
+            && ! $twoXProfitProtectionArmed
+            && $peakMultiple >= 3.00
+            && $remainingFraction > 0
+        ) {
+            $twoXProfitProtectionArmed = true;
+            $twoXProtectionJustArmed = true;
         }
 
         if (
@@ -213,42 +228,24 @@ class TrackPaperPositions extends Command
             $strategyEvents[] = $event;
         }
 
-        if (
-            ! $stopLossHit
-            && ! $fullTargetHit
-            && $multiple >= 3.00
-            && $remainingFraction > 0
-        ) {
-            $soldFraction = $remainingFraction;
-            $fillMultiple = 3.00;
-
-            $realizedValue += $soldFraction * $fillMultiple;
-            $remainingFraction = 0.0;
-            $fullTargetHit = true;
-
-            $event = [
-                'type' => 'full_target_2x_profit',
-                'label' => 'FULL EXIT +200% PROFIT',
-                'sold_fraction' => $soldFraction,
-                'fill_multiple' => $fillMultiple,
-                'observed_multiple' => $multiple,
-                'observed_market_cap' => $marketCap,
-                'triggered_at' => now()->toIso8601String(),
-            ];
-
-            $exitEvents[] = $event;
-            $strategyEvents[] = $event;
-        }
+        $protectedFloorMultiple = match (true) {
+            $twoXProfitProtectionArmed => 3.00,
+            $protectionArmed => 2.00,
+            default => null,
+        };
 
         if (
-            $protectionArmed
-            && ! $fullTargetHit
+            $protectedFloorMultiple !== null
+            && ! $protectionJustArmed
+            && ! $twoXProtectionJustArmed
             && ! $protectedExitHit
-            && $multiple <= 2.00
+            && $multiple <= $protectedFloorMultiple
             && $remainingFraction > 0
         ) {
             $soldFraction = $remainingFraction;
-            $fillMultiple = 2.00;
+            $fillMultiple = $protectedFloorMultiple;
+            $protectedFloorProfitPercent =
+                (int) round(($protectedFloorMultiple - 1) * 100);
 
             $realizedValue += $soldFraction * $fillMultiple;
             $remainingFraction = 0.0;
@@ -256,7 +253,8 @@ class TrackPaperPositions extends Command
 
             $event = [
                 'type' => 'protected_floor_exit',
-                'label' => 'PROTECTED EXIT +100% PROFIT',
+                'label' => "PROTECTED EXIT +{$protectedFloorProfitPercent}% PROFIT",
+                'protected_floor_profit_percent' => $protectedFloorProfitPercent,
                 'sold_fraction' => $soldFraction,
                 'fill_multiple' => $fillMultiple,
                 'observed_multiple' => $multiple,
@@ -270,7 +268,7 @@ class TrackPaperPositions extends Command
         }
 
         $tp50Hit = $protectionArmed;
-        $tp2xHit = $fullTargetHit;
+        $tp2xHit = $twoXProfitProtectionArmed;
         $trailingStopHit = $protectedExitHit;
 
         $strategyValueMultiple =
@@ -574,18 +572,39 @@ class TrackPaperPositions extends Command
         if ($protectionJustArmed && $remainingFraction > 0) {
             try {
                 $telegram->send(
-                    "🛡️ <b>PAPER PROFIT PROTECTION ARMED</b>\n\n".
+                    "🛡️ <b>PAPER +100% PROFIT FLOOR ARMED</b>\n\n".
                     "<b>{$position->symbol}</b>\n\n".
-                    "📈 Peak reached: <b>+150% profit</b> (2.50x value)\n".
+                    "📈 +100% profit reached: <b>2.00x value</b>\n".
                     "📤 Sold: <b>0%</b>\n".
-                    "🎯 Full target: <b>+200% profit</b> (3.00x value) → SELL 100%\n".
-                    "🛡️ Protected floor: <b>+100% profit</b> (2.00x value) → SELL 100%\n\n".
+                    "🛡️ Protected floor: <b>+100% profit</b> (2.00x value)\n".
+                    "🚀 Keep holding while price remains above the floor.\n".
+                    "🎯 If +200% profit is reached, the floor upgrades to 3.00x.\n\n".
                     "📍 <code>{$position->address}</code>\n\n".
                     '⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>'
                 );
             } catch (\Throwable $e) {
                 $this->warn(
                     'PROTECTION ALERT TELEGRAM FAILED: '.$e->getMessage()
+                );
+            }
+        }
+
+        if ($twoXProtectionJustArmed && $remainingFraction > 0) {
+            try {
+                $telegram->send(
+                    "🛡️🚀 <b>PAPER +200% PROFIT FLOOR ARMED</b>\n\n".
+                    "<b>{$position->symbol}</b>\n\n".
+                    "📈 +200% profit reached: <b>3.00x value</b>\n".
+                    "📤 Sold: <b>0%</b>\n".
+                    "🛡️ Protected floor upgraded to: <b>+200% profit</b> (3.00x value)\n".
+                    "🚀 Position stays open while it keeps running.\n".
+                    "🔻 If it falls back to the protected floor, close 100%.\n\n".
+                    "📍 <code>{$position->address}</code>\n\n".
+                    '⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>'
+                );
+            } catch (\Throwable $e) {
+                $this->warn(
+                    'PROTECTION UPGRADE TELEGRAM FAILED: '.$e->getMessage()
                 );
             }
         }
@@ -605,10 +624,14 @@ class TrackPaperPositions extends Command
                     default => '🔴 <b>PAPER SELL EXECUTED</b>',
                 };
 
+                $protectedFloorProfitPercent =
+                    (int) ($event['protected_floor_profit_percent'] ?? 0);
+
                 $actionText = match ($eventType) {
                     'stop_loss' => '🛑 <b>-10% STOP LOSS TRIGGERED</b>',
                     'full_target_2x_profit' => '✅ <b>+200% PROFIT TARGET HIT</b>',
-                    'protected_floor_exit' => '🛡️ <b>+150% WAS REACHED; FELL BACK TO +100%</b>',
+                    'protected_floor_exit' =>
+                        "🛡️ <b>PROTECTED +{$protectedFloorProfitPercent}% PROFIT FLOOR TRIGGERED</b>",
                     default => '✅ <b>EXIT EXECUTED</b>',
                 };
 

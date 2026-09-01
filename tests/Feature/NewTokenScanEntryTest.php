@@ -70,7 +70,7 @@ class NewTokenScanEntryTest extends TestCase
         ]);
 
         $messages = [];
-        $this->mock(TelegramService::class)->shouldReceive('send')->times(5)
+        $this->mock(TelegramService::class)->shouldReceive('send')->times(6)
             ->withArgs(function (string $message) use (&$messages): bool {
                 $messages[] = $message;
 
@@ -79,7 +79,10 @@ class NewTokenScanEntryTest extends TestCase
 
         $this->artisan('tokens:scan')->assertSuccessful();
 
-        $this->assertSame(['STRONG'], PaperPosition::query()->pluck('symbol')->all());
+        $this->assertSame(
+            ['STRONG', 'REJECTED'],
+            PaperPosition::query()->orderBy('id')->pluck('symbol')->all()
+        );
         $this->assertStringContainsString('UNVERIFIED CANDIDATE', $messages[0]);
         $this->assertStringContainsString('Security unverified — no paper trade opened.', $messages[0]);
         $this->assertStringContainsString('WATCHLIST', $messages[1]);
@@ -90,17 +93,22 @@ class NewTokenScanEntryTest extends TestCase
         $this->assertStringContainsString('Chain:</b> SOLANA', $messages[3]);
         $this->assertStringContainsString('Wallet Invested:</b> 0.1000 SOL', $messages[3]);
         $this->assertStringContainsString('STRONG CANDIDATE', $messages[4]);
-        $this->assertStringContainsString('entry was not executed: Dex pair unavailable at entry.', $messages[4]);
+        $this->assertStringContainsString('provisional funded paper entry executed using fresh Birdeye data', $messages[4]);
+        $this->assertStringContainsString('PAPER BUY EXECUTED', $messages[5]);
         $this->assertSame('skipped', TokenScan::query()->where('address', 'watch')->sole()->raw_data['scanner_decision']['paper_entry_status']);
         $this->assertSame('Security is unverified.', TokenScan::query()->where('address', 'unverified')->sole()->raw_data['scanner_decision']['paper_entry_reason']);
         $this->assertSame('executed', TokenScan::query()->where('address', 'strong')->sole()->raw_data['scanner_decision']['paper_entry_status']);
-        $this->assertSame('rejected', TokenScan::query()->where('address', 'rejected')->sole()->raw_data['scanner_decision']['paper_entry_status']);
-        $this->assertSame('Dex pair unavailable at entry.', TokenScan::query()->where('address', 'rejected')->sole()->raw_data['scanner_decision']['paper_entry_reason']);
+        $provisionalScan = TokenScan::query()->where('address', 'rejected')->sole();
+        $this->assertSame('executed', $provisionalScan->raw_data['scanner_decision']['paper_entry_status']);
+        $this->assertSame(
+            'Funded provisional paper position created using fresh Birdeye data; Dex confirmation pending.',
+            $provisionalScan->raw_data['scanner_decision']['paper_entry_reason']
+        );
         TokenScan::query()->each(function (TokenScan $scan): void {
             $this->assertIsArray($scan->raw_data);
             $this->assertIsArray(data_get($scan->raw_data, 'scanner_decision'));
         });
-        $this->assertEqualsWithDelta(4.9, (float) PaperWallet::query()->sole()->available_balance_sol, 0.000001);
+        $this->assertEqualsWithDelta(4.8, (float) PaperWallet::query()->sole()->available_balance_sol, 0.000001);
     }
 
     public function test_historical_raw_data_remains_a_readable_array_without_double_encoding(): void

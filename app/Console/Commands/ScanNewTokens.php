@@ -492,20 +492,53 @@ class ScanNewTokens extends Command
                 ]);
 
                 if ($classification['trade_eligible']) {
-                    $entryMarketCap = (float) ($dexData['market_cap'] ?? 0);
+                    $dexAvailable = (bool) ($dexData['available'] ?? false);
+
+                    /*
+                    * For paper trading, Dex availability is not mandatory.
+                    *
+                    * If Dex has already indexed the token, use the Dex snapshot.
+                    * If Dex is not available yet, use the fresh Birdeye snapshot
+                    * as a provisional paper entry so we can measure very early trades.
+                    */
+                    $entrySource = $dexAvailable ? 'dex' : 'birdeye_provisional';
+
+                    $entryMarketCap = $dexAvailable
+                        ? (float) ($dexData['market_cap'] ?? 0)
+                        : (float) ($token['marketCap'] ?? 0);
+
+                    $entryPrice = $dexAvailable
+                        ? ($dexData['price_usd'] ?? null)
+                        : ($token['price'] ?? null);
+
+                    $entryLiquidity = $dexAvailable
+                        ? ($dexData['liquidity_usd'] ?? null)
+                        : ($token['liquidity'] ?? null);
+
                     $entryMove = $discoveryMarketCap > 0 && $entryMarketCap > 0
                         ? (($entryMarketCap - $discoveryMarketCap) / $discoveryMarketCap) * 100
                         : null;
+
                     $maxChase = (float) config('services.trading.max_chase_percent', 35);
 
                     $paperEntryDecision['paper_entry_reason'] = match (true) {
-                        ! config('services.trading.paper_trading', true) => 'Paper trading is disabled.',
-                        ! ($dexData['available'] ?? false) => 'Dex pair unavailable at entry.',
-                        ! ($dexData['requested_token_is_base'] ?? false) => 'Requested token is not the Dex pair base token.',
-                        $entryMarketCap < 2_000 || $entryMarketCap > 20_000 => 'Current market cap is outside the new-token entry range.',
-                        $entryMove !== null && $entryMove <= -30 => 'Entry rejected by collapse protection.',
-                        $entryMove !== null && $entryMove > $maxChase => 'Entry rejected by chase protection.',
-                        default => 'Entry checks passed.',
+                        ! config('services.trading.paper_trading', true) =>
+                            'Paper trading is disabled.',
+
+                        $dexAvailable && ! ($dexData['requested_token_is_base'] ?? false) =>
+                            'Requested token is not the Dex pair base token.',
+
+                        $entryMarketCap < 2_000 || $entryMarketCap > 20_000 =>
+                            'Current market cap is outside the new-token entry range.',
+
+                        $entryMove !== null && $entryMove <= -30 =>
+                            'Entry rejected by collapse protection.',
+
+                        $entryMove !== null && $entryMove > $maxChase =>
+                            'Entry rejected by chase protection.',
+
+                        default =>
+                            'Entry checks passed.',
                     };
 
                     if ($paperEntryDecision['paper_entry_reason'] !== 'Entry checks passed.') {
@@ -521,8 +554,8 @@ class ScanNewTokens extends Command
                                 'name' => $name,
                                 'discovery_market_cap' => $discoveryMarketCap,
                                 'entry_market_cap' => $entryMarketCap,
-                                'entry_price' => $dexData['price_usd'] ?? null,
-                                'entry_liquidity' => $dexData['liquidity_usd'] ?? null,
+                                'entry_price' => $entryPrice,
+                                'entry_liquidity' => $entryLiquidity,
                                 'move_since_discovery_percent' => $entryMove,
                                 'scanner' => 'new-token',
                                 'send_notification' => false,
@@ -530,23 +563,44 @@ class ScanNewTokens extends Command
                                     'source' => 'new_token_scan',
                                     'classification' => $classification['classification'],
                                     'trade_eligible' => true,
+
+                                    'entry_source' => $entrySource,
+
+                                    'dex_confirmation' => $dexAvailable
+                                        ? 'confirmed'
+                                        : 'pending',
+
                                     'pair_address' => $dexData['pair_address'] ?? null,
                                     'dex' => $dexData['dex'] ?? null,
                                 ],
                             ]);
+
                             $paperBuyExecuted = $paperPosition->wasRecentlyCreated;
-                            $paperEntryDecision['paper_entry_status'] = $paperBuyExecuted ? 'executed' : 'already_open';
+
+                            $paperEntryDecision['paper_entry_status'] = $paperBuyExecuted
+                                ? 'executed'
+                                : 'already_open';
+
                             $paperEntryDecision['paper_entry_reason'] = $paperBuyExecuted
-                                ? 'Funded paper position created.'
+                                ? (
+                                    $dexAvailable
+                                        ? 'Funded paper position created using Dex entry data.'
+                                        : 'Funded provisional paper position created using fresh Birdeye data; Dex confirmation pending.'
+                                )
                                 : 'A funded position is already open for this chain and address.';
 
-                            $this->info($paperBuyExecuted
-                                ? "PAPER BUY EXECUTED: {$symbol}"
-                                : "PAPER BUY SKIPPED: {$symbol} | position already open");
+                            $this->info(
+                                $paperBuyExecuted
+                                    ? "PAPER BUY EXECUTED: {$symbol} | Entry source: {$entrySource}"
+                                    : "PAPER BUY SKIPPED: {$symbol} | position already open"
+                            );
                         } catch (Throwable $exception) {
                             $paperEntryDecision['paper_entry_status'] = 'rejected';
                             $paperEntryDecision['paper_entry_reason'] = $exception->getMessage();
-                            $this->warn("PAPER BUY REJECTED: {$symbol} | {$exception->getMessage()}");
+
+                            $this->warn(
+                                "PAPER BUY REJECTED: {$symbol} | {$exception->getMessage()}"
+                            );
                         }
                     }
                 }
@@ -564,9 +618,15 @@ class ScanNewTokens extends Command
 
                     $level = $classification['label'];
                     $entryMessage = $classification['trade_eligible']
-                        ? ($paperBuyExecuted
-                            ? 'Strong candidate — funded paper entry executed.'
-                            : 'Strong candidate — entry was not executed: '.$paperEntryDecision['paper_entry_reason'])
+                        ? (
+                            $paperBuyExecuted
+                                ? (
+                                    ($dexData['available'] ?? false)
+                                        ? 'Strong candidate — funded paper entry executed using Dex-confirmed market data.'
+                                        : 'Strong candidate — provisional funded paper entry executed using fresh Birdeye data. Dex confirmation pending.'
+                                )
+                                : 'Strong candidate — entry was not executed: '.$paperEntryDecision['paper_entry_reason']
+                        )
                         : $classification['no_trade_message'];
 
                     $message =
