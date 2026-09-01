@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
+use App\Services\Chains\ChainManager;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 use Throwable;
@@ -11,7 +12,7 @@ use Throwable;
 class PaperTradeExitService
 {
     public function __construct(
-        private DexScreenerService $dexScreener,
+        private ChainManager $chains,
         private TelegramService $telegram,
     ) {}
 
@@ -21,7 +22,7 @@ class PaperTradeExitService
     public function closeManually(PaperPosition $position): array
     {
         try {
-            $dex = $this->dexScreener->analyzeToken($position->address);
+            $dex = $this->chains->for($position->chain)->marketData($position->address);
         } catch (Throwable $exception) {
             throw new RuntimeException(
                 'Could not fetch current Dex price: '.$exception->getMessage(),
@@ -160,6 +161,7 @@ class PaperTradeExitService
             $this->telegram->send(
                 "🛑🛑 <b>PAPER TRADE MANUALLY CLOSED</b> 🛑🛑\n\n".
                 "💰 <b>{$position->symbol}</b>\n\n".
+                '⛓️ <b>Chain:</b> '.$position->chain->label()."\n".
                 "👤 <b>Manual close requested</b>\n".
                 '📊 <b>Close MC:</b> $'.number_format($result['market_cap'], 2)."\n".
                 '✖️ <b>Fill:</b> '.number_format($result['multiple'], 2)."x\n".

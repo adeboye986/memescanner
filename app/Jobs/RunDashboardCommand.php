@@ -39,7 +39,8 @@ class RunDashboardCommand implements ShouldQueue
         $activities->start($activity);
 
         try {
-            $exitCode = Artisan::call($definition['command'], [], $output);
+            $options = $activity->chain ? ['--chain' => $activity->chain->value] : [];
+            $exitCode = Artisan::call($definition['command'], $options, $output);
             $activities->finish($activity, $exitCode, $output->fetch());
         } catch (Throwable $exception) {
             $activities->fail($activity, $exception, $output->fetch());

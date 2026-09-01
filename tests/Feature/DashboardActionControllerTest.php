@@ -28,11 +28,12 @@ class DashboardActionControllerTest extends TestCase
 
         $response
             ->assertRedirect()
-            ->assertSessionHas('success', 'Run Momentum Scan was queued.');
+            ->assertSessionHas('success', 'Run Momentum Scan — Solana was queued.');
 
         $activity = SystemActivity::query()->sole();
 
         $this->assertSame('momentum-scan', $activity->action);
+        $this->assertSame('solana', $activity->chain->value);
         $this->assertSame('tokens:momentum', $activity->command);
         $this->assertSame('pending', $activity->status);
         $this->assertSame('manual', $activity->triggered_by);

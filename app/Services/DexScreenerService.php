@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -12,40 +13,45 @@ class DexScreenerService
     public function latestSolanaProfiles(
         int $limit = 20
     ): array {
+        return $this->latestProfiles('solana', $limit);
+    }
+
+    public function latestProfiles(string $chainId, int $limit = 20): array
+    {
         $response = Http::connectTimeout(10)
             ->timeout(30)
             ->acceptJson()
             ->get(
-                $this->baseUrl .
+                $this->baseUrl.
                 '/token-profiles/latest/v1'
             );
 
-        if (!$response->successful()) {
+        if (! $response->successful()) {
             throw new RuntimeException(
-                'DexScreener profiles API error: ' .
-                $response->status() .
-                ' - ' .
+                'DexScreener profiles API error: '.
+                $response->status().
+                ' - '.
                 $response->body()
             );
         }
 
         $profiles = $response->json();
 
-        if (!is_array($profiles)) {
+        if (! is_array($profiles)) {
             return [];
         }
 
         /*
         * Only Solana tokens with an address.
         */
-        $solana = array_values(
+        $chainProfiles = array_values(
             array_filter(
                 $profiles,
-                function ($profile) {
+                function ($profile) use ($chainId) {
                     return
                         ($profile['chainId'] ?? null)
-                            === 'solana' &&
-                        !empty(
+                            === $chainId &&
+                        ! empty(
                             $profile['tokenAddress']
                         );
                 }
@@ -57,9 +63,9 @@ class DexScreenerService
         */
         $seen = [];
 
-        $solana = array_values(
+        $chainProfiles = array_values(
             array_filter(
-                $solana,
+                $chainProfiles,
                 function ($profile) use (&$seen) {
                     $address =
                         $profile['tokenAddress'];
@@ -76,13 +82,13 @@ class DexScreenerService
         );
 
         return array_slice(
-            $solana,
+            $chainProfiles,
             0,
             max(1, min($limit, 50))
         );
     }
 
-    public function tokenPairs(string $address): array
+    public function tokenPairs(string $address, string $chainId = 'solana'): array
     {
         $maxAttempts = 3;
 
@@ -92,8 +98,8 @@ class DexScreenerService
                     ->timeout(30)
                     ->acceptJson()
                     ->get(
-                        $this->baseUrl .
-                        '/token-pairs/v1/solana/' .
+                        $this->baseUrl.
+                        "/token-pairs/v1/{$chainId}/".
                         $address
                     );
 
@@ -106,18 +112,19 @@ class DexScreenerService
                     $attempt < $maxAttempts
                 ) {
                     sleep(3 * $attempt);
+
                     continue;
                 }
 
                 throw new RuntimeException(
-                    'DexScreener API error: ' .
-                    $response->status() .
-                    ' - ' .
+                    'DexScreener API error: '.
+                    $response->status().
+                    ' - '.
                     $response->body()
                 );
 
             } catch (
-                \Illuminate\Http\Client\ConnectionException $e
+                ConnectionException $e
             ) {
                 if ($attempt >= $maxAttempts) {
                     throw $e;
@@ -132,9 +139,9 @@ class DexScreenerService
         );
     }
 
-    public function bestPair(string $address): ?array
+    public function bestPair(string $address, string $chainId = 'solana'): ?array
     {
-        $pairs = $this->tokenPairs($address);
+        $pairs = $this->tokenPairs($address, $chainId);
 
         if (empty($pairs)) {
             return null;
@@ -155,10 +162,12 @@ class DexScreenerService
         $basePairs = array_values(
             array_filter(
                 $pairs,
-                function ($pair) use ($address) {
-                    return
-                        ($pair['baseToken']['address'] ?? null)
-                        === $address;
+                function ($pair) use ($address, $chainId) {
+                    return $this->addressesEqual(
+                        (string) ($pair['baseToken']['address'] ?? ''),
+                        $address,
+                        $chainId,
+                    );
                 }
             )
         );
@@ -171,7 +180,7 @@ class DexScreenerService
          * obtain pair/liquidity metadata.
          */
         $candidatePairs =
-            !empty($basePairs)
+            ! empty($basePairs)
                 ? $basePairs
                 : $pairs;
 
@@ -199,11 +208,11 @@ class DexScreenerService
         return $candidatePairs[0] ?? null;
     }
 
-    public function analyzeToken(string $address): array
+    public function analyzeToken(string $address, string $chainId = 'solana'): array
     {
-        $pair = $this->bestPair($address);
+        $pair = $this->bestPair($address, $chainId);
 
-        if (!$pair) {
+        if (! $pair) {
             return [
                 'available' => false,
                 'pair' => null,
@@ -215,9 +224,11 @@ class DexScreenerService
          * Check whether the requested token is the base
          * token of the selected pair.
          */
-        $requestedTokenIsBase =
-            ($pair['baseToken']['address'] ?? null)
-            === $address;
+        $requestedTokenIsBase = $this->addressesEqual(
+            (string) ($pair['baseToken']['address'] ?? ''),
+            $address,
+            $chainId,
+        );
 
         $createdAt =
             $pair['pairCreatedAt'] ?? null;
@@ -273,71 +284,56 @@ class DexScreenerService
             /*
              * Very important for downstream checks.
              */
-            'requested_token_is_base' =>
-                $requestedTokenIsBase,
+            'requested_token_is_base' => $requestedTokenIsBase,
 
-            'dex' =>
-                $pair['dexId'] ?? null,
+            'dex' => $pair['dexId'] ?? null,
 
-            'pair_address' =>
-                $pair['pairAddress'] ?? null,
+            'pair_address' => $pair['pairAddress'] ?? null,
 
             /*
              * Requested token identity.
              */
-            'requested_token_address' =>
-                $address,
+            'requested_token_address' => $address,
 
             /*
              * Pair identities for debugging.
              */
-            'base_token_address' =>
-                $pair['baseToken']['address'] ?? null,
+            'base_token_address' => $pair['baseToken']['address'] ?? null,
 
-            'base_token_symbol' =>
-                $pair['baseToken']['symbol'] ?? null,
+            'base_token_symbol' => $pair['baseToken']['symbol'] ?? null,
 
-            'quote_token_address' =>
-                $pair['quoteToken']['address'] ?? null,
+            'quote_token_address' => $pair['quoteToken']['address'] ?? null,
 
-            'quote_token_symbol' =>
-                $pair['quoteToken']['symbol'] ?? null,
+            'quote_token_symbol' => $pair['quoteToken']['symbol'] ?? null,
 
             /*
              * Only trusted when requested_token_is_base=true.
              */
-            'price_usd' =>
-                $priceUsd,
+            'price_usd' => $priceUsd,
 
-            'market_cap' =>
-                $marketCap,
+            'market_cap' => $marketCap,
 
-            'fdv' =>
-                $fdv,
+            'fdv' => $fdv,
 
             /*
              * Pair-level data is still useful even if the
              * requested token is the quote token.
              */
-            'liquidity_usd' =>
-                isset($pair['liquidity']['usd'])
+            'liquidity_usd' => isset($pair['liquidity']['usd'])
                     ? (float) $pair['liquidity']['usd']
                     : null,
 
-            'buys_5m' =>
-                (int) (
-                    $pair['txns']['m5']['buys'] ?? 0
-                ),
+            'buys_5m' => (int) (
+                $pair['txns']['m5']['buys'] ?? 0
+            ),
 
-            'sells_5m' =>
-                (int) (
-                    $pair['txns']['m5']['sells'] ?? 0
-                ),
+            'sells_5m' => (int) (
+                $pair['txns']['m5']['sells'] ?? 0
+            ),
 
-            'volume_5m' =>
-                (float) (
-                    $pair['volume']['m5'] ?? 0
-                ),
+            'volume_5m' => (float) (
+                $pair['volume']['m5'] ?? 0
+            ),
 
             /*
              * This is only directly meaningful for the
@@ -345,23 +341,18 @@ class DexScreenerService
              * should check requested_token_is_base first
              * before treating it as our token's movement.
              */
-            'price_change_5m' =>
-                $requestedTokenIsBase &&
+            'price_change_5m' => $requestedTokenIsBase &&
                 isset($pair['priceChange']['m5'])
                     ? (float) $pair['priceChange']['m5']
                     : null,
 
-            'pair_created_at' =>
-                $createdAt,
+            'pair_created_at' => $createdAt,
 
-            'pair_age_minutes' =>
-                $pairAgeMinutes,
+            'pair_age_minutes' => $pairAgeMinutes,
 
-            'url' =>
-                $pair['url'] ?? null,
+            'url' => $pair['url'] ?? null,
 
-            'raw' =>
-                $pair,
+            'raw' => $pair,
         ];
     }
 
@@ -375,8 +366,7 @@ class DexScreenerService
                 2,
                 500,
                 function ($exception, $request) {
-                    return $exception instanceof
-                        \Illuminate\Http\Client\ConnectionException;
+                    return $exception instanceof ConnectionException;
                 }
             )
             ->get(
@@ -389,7 +379,7 @@ class DexScreenerService
 
         $orders = $data['orders'] ?? [];
 
-        if (!is_array($orders)) {
+        if (! is_array($orders)) {
             $orders = [];
         }
 
@@ -411,7 +401,7 @@ class DexScreenerService
         );
 
         return [
-            'dex_paid' => !empty($paidOrders),
+            'dex_paid' => ! empty($paidOrders),
             'orders' => $paidOrders,
             'all_orders' => $orders,
             'order_count' => count($paidOrders),
@@ -426,5 +416,12 @@ class DexScreenerService
                 )
             ),
         ];
+    }
+
+    private function addressesEqual(string $left, string $right, string $chainId): bool
+    {
+        return $chainId === 'ethereum'
+            ? strtolower($left) === strtolower($right)
+            : $left === $right;
     }
 }

@@ -26,7 +26,8 @@ class PaperTradingDashboardController extends Controller
             'wallet' => $wallet,
             'positions' => $positions,
             'dashboardActions' => $commands->all(),
-            'latestActivity' => $activities->latestManualData(),
+            'currentActivity' => $activities->currentManualData(),
+            'recentActivities' => $activities->recentData(),
             'runningActions' => $activities->runningActions(),
             'systemStatus' => $activities->systemStatus(),
         ]);

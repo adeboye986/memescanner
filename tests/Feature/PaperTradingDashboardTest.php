@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
+use App\Models\SystemActivity;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
 
@@ -62,6 +63,41 @@ class PaperTradingDashboardTest extends TestCase
             ->assertDontSee('UNFUNDED')
             ->assertDontSee('CLOSED')
             ->assertViewHas('positions', fn ($positions): bool => $positions->first()['model']->is($openPosition));
+    }
+
+    public function test_dashboard_prioritizes_current_manual_activity_and_lists_recent_failures(): void
+    {
+        PaperWallet::query()->create(['name' => 'default']);
+        SystemActivity::factory()->create([
+            'label' => 'FAILED ACTIVITY',
+            'status' => 'failed',
+            'exit_code' => 1,
+            'output' => null,
+            'error_message' => 'Scanner failed',
+        ]);
+        SystemActivity::factory()->create([
+            'label' => 'SCHEDULED TRACKER',
+            'triggered_by' => 'scheduler',
+            'status' => 'running',
+            'finished_at' => null,
+        ]);
+        SystemActivity::factory()->create([
+            'label' => 'CURRENT MANUAL',
+            'triggered_by' => 'manual',
+            'status' => 'running',
+            'finished_at' => null,
+        ]);
+
+        $response = $this->get(route('dashboard'));
+
+        $response
+            ->assertOk()
+            ->assertSee('CURRENT MANUAL')
+            ->assertSee('FAILED ACTIVITY')
+            ->assertSee('SCHEDULED TRACKER')
+            ->assertSee('Scanner failed')
+            ->assertViewHas('currentActivity', fn (array $activity): bool => $activity['label'] === 'CURRENT MANUAL')
+            ->assertViewHas('recentActivities', fn (array $activities): bool => count($activities) === 3);
     }
 
     /**

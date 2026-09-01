@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Chain;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -10,6 +11,7 @@ class PaperPosition extends Model
     protected $guarded = [];
 
     protected $casts = [
+        'chain' => Chain::class,
         'milestones' => 'array',
         'meta' => 'array',
         'entry_at' => 'datetime',

@@ -10,7 +10,8 @@ class SystemActivityController extends Controller
     public function __invoke(SystemActivityService $activities): JsonResponse
     {
         return response()->json([
-            'activity' => $activities->latestManualData(),
+            'current_activity' => $activities->currentManualData(),
+            'recent_activities' => $activities->recentData(),
             'running_actions' => $activities->runningActions(),
             'system_status' => $activities->systemStatus(),
         ]);

@@ -4,6 +4,7 @@ use App\Http\Controllers\ClosePaperTradeController;
 use App\Http\Controllers\DashboardActionController;
 use App\Http\Controllers\PaperTradingDashboardController;
 use App\Http\Controllers\SystemActivityController;
+use App\Http\Controllers\TradeHistoryController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -17,3 +18,4 @@ Route::post('/dashboard/actions/{action}', DashboardActionController::class)
     ->name('dashboard.actions.store');
 Route::get('/dashboard/activity', SystemActivityController::class)
     ->name('dashboard.activity');
+Route::get('/trades', TradeHistoryController::class)->name('trades.index');

@@ -2,12 +2,13 @@
 
 namespace App\Console\Commands;
 
+use App\Chain;
 use App\Models\TokenScan;
+use App\Models\TokenScanHistory;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
-use Illuminate\Console\Command;
-use App\Models\TokenScanHistory;
 use App\Services\TelegramService;
+use Illuminate\Console\Command;
 
 class FollowUpTokens extends Command
 {
@@ -33,6 +34,7 @@ class FollowUpTokens extends Command
          * may strengthen after their initial discovery.
          */
         $tokens = TokenScan::query()
+            ->where('chain', Chain::Solana->value)
             ->where('first_seen_at', '>=', now()->subHour())
             ->where(function ($query) {
                 $query->whereNull('last_scanned_at')
@@ -54,7 +56,7 @@ class FollowUpTokens extends Command
         }
 
         $this->info(
-            'Found ' . $tokens->count() . ' token(s) to recheck.'
+            'Found '.$tokens->count().' token(s) to recheck.'
         );
 
         foreach ($tokens as $scan) {
@@ -74,7 +76,7 @@ class FollowUpTokens extends Command
                 $response = $birdeye->tokenOverview($address);
                 $token = $response['data'] ?? null;
 
-                if (!$token) {
+                if (! $token) {
                     $this->warn(
                         "FOLLOW-UP: {$symbol} | Birdeye data unavailable"
                     );
@@ -101,7 +103,7 @@ class FollowUpTokens extends Command
                     $dexData = $dexscreener->analyzeToken($address);
                 } catch (\Throwable $e) {
                     $this->warn(
-                        "DEXSCREENER UNAVAILABLE: {$symbol} | " .
+                        "DEXSCREENER UNAVAILABLE: {$symbol} | ".
                         $e->getMessage()
                     );
                 }
@@ -113,37 +115,37 @@ class FollowUpTokens extends Command
                     ? (($marketCap - $oldMarketCap) / $oldMarketCap) * 100
                     : 0;
 
-                    $previousStatus = $scan->follow_up_status;
+                $previousStatus = $scan->follow_up_status;
 
-                    /*
-                    * Deterioration takes priority.
-                    */
-                    $deteriorating =
-                        $score <= 20 ||
-                        $marketCapChange <= -30 ||
-                        $liquidity < 500 ||
-                        $holders < 5;
+                /*
+                * Deterioration takes priority.
+                */
+                $deteriorating =
+                    $score <= 20 ||
+                    $marketCapChange <= -30 ||
+                    $liquidity < 500 ||
+                    $holders < 5;
 
-                    /*
-                    * Strengthening requires several positive signals,
-                    * rather than score alone.
-                    */
-                    $strengthening =
-                        !$deteriorating &&
-                        $score >= 40 &&
-                        $marketCapChange >= 20 &&
-                        $holderChange >= 10 &&
-                        $liquidity >= 500;
+                /*
+                * Strengthening requires several positive signals,
+                * rather than score alone.
+                */
+                $strengthening =
+                    ! $deteriorating &&
+                    $score >= 40 &&
+                    $marketCapChange >= 20 &&
+                    $holderChange >= 10 &&
+                    $liquidity >= 500;
 
-                    if ($deteriorating) {
-                        $followUpStatus = 'deteriorating';
+                if ($deteriorating) {
+                    $followUpStatus = 'deteriorating';
 
-                    } elseif ($strengthening) {
-                        $followUpStatus = 'strengthening';
+                } elseif ($strengthening) {
+                    $followUpStatus = 'strengthening';
 
-                    } else {
-                        $followUpStatus = 'neutral';
-                    }
+                } else {
+                    $followUpStatus = 'neutral';
+                }
 
                 $this->newLine();
 
@@ -195,7 +197,7 @@ class FollowUpTokens extends Command
                                 2
                             ),
                             $dexData['liquidity_usd'] !== null
-                                ? '$' . number_format(
+                                ? '$'.number_format(
                                     (float) $dexData['liquidity_usd'],
                                     2
                                 )
@@ -228,31 +230,23 @@ class FollowUpTokens extends Command
                     'buys_1m' => $token['buy1m'] ?? null,
                     'sells_1m' => $token['sell1m'] ?? null,
 
-                    'unique_wallets_5m' =>
-                        $token['uniqueWallet5m'] ?? null,
+                    'unique_wallets_5m' => $token['uniqueWallet5m'] ?? null,
 
-                    'price_change_5m' =>
-                        $token['priceChange5mPercent'] ?? null,
+                    'price_change_5m' => $token['priceChange5mPercent'] ?? null,
 
                     'score' => $score,
 
-                    'dex_available' =>
-                        (bool) ($dexData['available'] ?? false),
+                    'dex_available' => (bool) ($dexData['available'] ?? false),
 
-                    'dex' =>
-                        $dexData['dex'] ?? null,
+                    'dex' => $dexData['dex'] ?? null,
 
-                    'dex_pair_address' =>
-                        $dexData['pair_address'] ?? null,
+                    'dex_pair_address' => $dexData['pair_address'] ?? null,
 
-                    'dex_market_cap' =>
-                        $dexData['market_cap'] ?? null,
+                    'dex_market_cap' => $dexData['market_cap'] ?? null,
 
-                    'dex_liquidity' =>
-                        $dexData['liquidity_usd'] ?? null,
+                    'dex_liquidity' => $dexData['liquidity_usd'] ?? null,
 
-                    'dex_pair_age_minutes' =>
-                        $dexData['pair_age_minutes'] ?? null,
+                    'dex_pair_age_minutes' => $dexData['pair_age_minutes'] ?? null,
 
                     'raw_data' => $token,
 
@@ -269,9 +263,9 @@ class FollowUpTokens extends Command
 
                         if ($dexData && ($dexData['available'] ?? false)) {
                             $dexText =
-                                "\nDex: <b>" .
-                                ($dexData['dex'] ?? 'Unknown') .
-                                "</b>\nDex MC: $" .
+                                "\nDex: <b>".
+                                ($dexData['dex'] ?? 'Unknown').
+                                "</b>\nDex MC: $".
                                 number_format(
                                     (float) ($dexData['market_cap'] ?? 0),
                                     2
@@ -279,70 +273,70 @@ class FollowUpTokens extends Command
                         }
 
                         $message =
-                            "🚀 <b>TOKEN STRENGTHENING</b>\n\n" .
-                            "<b>{$symbol}</b> — {$scan->name}\n\n" .
+                            "🚀 <b>TOKEN STRENGTHENING</b>\n\n".
+                            "<b>{$symbol}</b> — {$scan->name}\n\n".
 
-                            "Score: <b>{$oldScore} → {$score}</b>\n" .
+                            "Score: <b>{$oldScore} → {$score}</b>\n".
 
-                            "Market Cap: $" .
-                            number_format($oldMarketCap, 2) .
-                            " → $" .
-                            number_format($marketCap, 2) .
-                            " (" .
-                            sprintf('%+.2f', $marketCapChange) .
-                            "%)\n" .
+                            'Market Cap: $'.
+                            number_format($oldMarketCap, 2).
+                            ' → $'.
+                            number_format($marketCap, 2).
+                            ' ('.
+                            sprintf('%+.2f', $marketCapChange).
+                            "%)\n".
 
-                            "Holders: {$oldHolders} → {$holders} " .
-                            "(" . sprintf('%+d', $holderChange) . ")\n" .
+                            "Holders: {$oldHolders} → {$holders} ".
+                            '('.sprintf('%+d', $holderChange).")\n".
 
-                            "Liquidity: $" .
-                            number_format($liquidity, 2) . "\n" .
+                            'Liquidity: $'.
+                            number_format($liquidity, 2)."\n".
 
-                            "Buys 1m: " .
-                            (int) ($token['buy1m'] ?? 0) . "\n" .
+                            'Buys 1m: '.
+                            (int) ($token['buy1m'] ?? 0)."\n".
 
-                            "Sells 1m: " .
-                            (int) ($token['sell1m'] ?? 0) . "\n" .
+                            'Sells 1m: '.
+                            (int) ($token['sell1m'] ?? 0)."\n".
 
-                            "Wallets 5m: " .
-                            (int) ($token['uniqueWallet5m'] ?? 0) .
+                            'Wallets 5m: '.
+                            (int) ($token['uniqueWallet5m'] ?? 0).
 
-                            $dexText .
+                            $dexText.
 
-                            "\n\n<code>{$address}</code>\n\n" .
-                            "⚠️ Follow-up scanner alert only — not a buy recommendation.";
+                            "\n\n<code>{$address}</code>\n\n".
+                            '⚠️ Follow-up scanner alert only — not a buy recommendation.';
 
                     } else {
 
                         $message =
-                            "🔻 <b>TOKEN DETERIORATING</b>\n\n" .
-                            "<b>{$symbol}</b> — {$scan->name}\n\n" .
+                            "🔻 <b>TOKEN DETERIORATING</b>\n\n".
+                            "<b>{$symbol}</b> — {$scan->name}\n\n".
 
-                            "Score: <b>{$oldScore} → {$score}</b>\n" .
+                            "Score: <b>{$oldScore} → {$score}</b>\n".
 
-                            "Market Cap: $" .
-                            number_format($oldMarketCap, 2) .
-                            " → $" .
-                            number_format($marketCap, 2) .
-                            " (" .
-                            sprintf('%+.2f', $marketCapChange) .
-                            "%)\n" .
+                            'Market Cap: $'.
+                            number_format($oldMarketCap, 2).
+                            ' → $'.
+                            number_format($marketCap, 2).
+                            ' ('.
+                            sprintf('%+.2f', $marketCapChange).
+                            "%)\n".
 
-                            "Holders: {$oldHolders} → {$holders} " .
-                            "(" . sprintf('%+d', $holderChange) . ")\n" .
+                            "Holders: {$oldHolders} → {$holders} ".
+                            '('.sprintf('%+d', $holderChange).")\n".
 
-                            "Liquidity: $" .
-                            number_format($liquidity, 2) . "\n" .
+                            'Liquidity: $'.
+                            number_format($liquidity, 2)."\n".
 
-                            "Price change 5m: " .
+                            'Price change 5m: '.
                             number_format(
                                 (float) ($token['priceChange5mPercent'] ?? 0),
                                 2
-                            ) .
-                            "%\n\n" .
+                            ).
+                            "%\n\n".
 
-                            "<code>{$address}</code>\n\n" .
-                            "⚠️ Follow-up scanner alert only — not a sell recommendation.";
+                            "<code>{$address}</code>\n\n".
+                            '⚠️ Follow-up scanner alert only — not a sell recommendation.';
                     }
 
                     try {
@@ -356,7 +350,7 @@ class FollowUpTokens extends Command
 
                     } catch (\Throwable $e) {
                         $this->error(
-                            "Telegram follow-up failed for {$symbol}: " .
+                            "Telegram follow-up failed for {$symbol}: ".
                             $e->getMessage()
                         );
                     }
@@ -378,25 +372,22 @@ class FollowUpTokens extends Command
                     'buys_1m' => $token['buy1m'] ?? null,
                     'sells_1m' => $token['sell1m'] ?? null,
 
-                    'unique_wallets_5m' =>
-                        $token['uniqueWallet5m'] ?? null,
+                    'unique_wallets_5m' => $token['uniqueWallet5m'] ?? null,
 
-                    'price_change_5m' =>
-                        $token['priceChange5mPercent'] ?? null,
+                    'price_change_5m' => $token['priceChange5mPercent'] ?? null,
 
                     'score' => $score,
 
                     'follow_up_status' => $followUpStatus,
 
-                    'last_follow_up_alerted_at' =>
-                        $scan->last_follow_up_alerted_at,
+                    'last_follow_up_alerted_at' => $scan->last_follow_up_alerted_at,
                     'raw_data' => $token,
                     'last_scanned_at' => now(),
                 ]);
 
             } catch (\Throwable $e) {
                 $this->error(
-                    "FOLLOW-UP FAILED: {$symbol} | " . $e->getMessage()
+                    "FOLLOW-UP FAILED: {$symbol} | ".$e->getMessage()
                 );
             }
         }

@@ -5,7 +5,7 @@ namespace App\Console\Commands;
 use App\Models\PaperPosition;
 use App\Models\PaperPositionSnapshot;
 use App\Models\PaperWallet;
-use App\Services\DexScreenerService;
+use App\Services\Chains\ChainManager;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -19,13 +19,14 @@ class TrackPaperPositions extends Command
         'Track paper positions, milestones, peaks, drawdowns and simulated exits';
 
     public function handle(
-        DexScreenerService $dexscreener,
+        ChainManager $chains,
         TelegramService $telegram
     ): int {
         $limit = max(1, min((int) $this->option('limit'), 200));
 
         $positions = PaperPosition::query()
             ->where('status', 'open')
+            ->where('initial_investment_sol', '>', 0)
             ->orderByRaw('last_checked_at IS NULL DESC')
             ->orderBy('last_checked_at')
             ->limit($limit)
@@ -40,7 +41,7 @@ class TrackPaperPositions extends Command
         foreach ($positions as $position) {
             $this->trackOne(
                 $position,
-                $dexscreener,
+                $chains,
                 $telegram
             );
         }
@@ -50,11 +51,11 @@ class TrackPaperPositions extends Command
 
     private function trackOne(
         PaperPosition $position,
-        DexScreenerService $dexscreener,
+        ChainManager $chains,
         TelegramService $telegram
     ): void {
         try {
-            $dex = $dexscreener->analyzeToken($position->address);
+            $dex = $chains->for($position->chain)->marketData($position->address);
         } catch (\Throwable $e) {
             $this->warn(
                 "PAPER TRACK UNAVAILABLE: {$position->symbol} | ".

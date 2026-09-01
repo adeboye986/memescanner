@@ -97,13 +97,28 @@
                 ];
             @endphp
 
+            <label class="flex max-w-xs flex-col gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Chain
+                <select id="scanner-chain" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm font-semibold normal-case tracking-normal text-slate-100 focus:border-emerald-400 focus:outline-none">
+                    <option value="solana">Solana</option>
+                    <option value="ethereum">Ethereum</option>
+                </select>
+            </label>
+
             <div class="grid gap-3 sm:grid-cols-2">
                 @foreach ($dashboardActions as $action => $definition)
-                    <form method="POST" action="{{ route('dashboard.actions.store', $action) }}" class="dashboard-action-form {{ $action === 'paper-reconcile' ? 'sm:col-span-2' : '' }}" data-action="{{ $action }}">
+                    @php
+                        $isChainAction = in_array($action, ['token-scan', 'momentum-scan'], true);
+                        $actionKey = $isChainAction ? $action.':solana' : $action;
+                    @endphp
+                    <form method="POST" action="{{ route('dashboard.actions.store', $action) }}" class="dashboard-action-form {{ $action === 'paper-reconcile' ? 'sm:col-span-2' : '' }}" data-action="{{ $action }}" data-action-key="{{ $actionKey }}" @if($isChainAction) data-chain-action @endif>
                         @csrf
+                        @if ($isChainAction)
+                            <input type="hidden" name="chain" value="solana" data-chain-input>
+                        @endif
                         <button
                             type="submit"
-                            @disabled(in_array($action, $runningActions, true))
+                            @disabled(in_array($actionKey, $runningActions, true))
                             class="group flex w-full items-center justify-between gap-4 rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-4 text-left transition hover:border-slate-600 hover:bg-slate-800/80 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             <span>
@@ -111,7 +126,7 @@
                                 <span class="mt-1 block text-xs text-slate-500">{{ $actionDescriptions[$action] }}</span>
                             </span>
                             <span class="action-state shrink-0 text-xs font-semibold uppercase tracking-wider text-emerald-300">
-                                {{ in_array($action, $runningActions, true) ? 'Running' : 'Run' }}
+                                {{ in_array($actionKey, $runningActions, true) ? 'Running' : 'Run' }}
                             </span>
                         </button>
                     </form>
@@ -133,34 +148,53 @@
                 <span id="activity-live-indicator" class="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-400">Live</span>
             </div>
 
-            <div id="activity-empty" class="{{ $latestActivity ? 'hidden' : '' }} rounded-xl border border-dashed border-slate-700 px-5 py-8 text-center text-sm text-slate-500">
-                No dashboard operation has been triggered yet.
+            <div class="flex flex-col gap-3">
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Current Activity</p>
+                <div id="current-activity-empty" class="{{ $currentActivity ? 'hidden' : '' }} rounded-xl border border-dashed border-slate-700 px-5 py-6 text-center text-sm text-slate-500">
+                    No manual operation currently running.
+                </div>
+                <div id="current-activity-content" class="{{ $currentActivity ? '' : 'hidden' }} rounded-xl border border-blue-400/20 bg-blue-400/5 p-4">
+                    <div class="flex flex-wrap items-center justify-between gap-3">
+                        <h3 id="current-activity-label" class="font-semibold text-white">⚡ {{ $currentActivity['label'] ?? '' }}</h3>
+                        <span id="current-activity-status" class="rounded-full border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider text-blue-300">{{ $currentActivity['status'] ?? '' }}</span>
+                    </div>
+                    <div class="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
+                        <p><span class="text-slate-500">Started:</span> <span id="current-activity-started" class="font-medium text-slate-200">{{ $currentActivity['started_at'] ?? 'Waiting for worker' }}</span></p>
+                        <p><span class="text-slate-500">Running for:</span> <span id="current-activity-running" class="font-medium text-slate-200">{{ isset($currentActivity['running_seconds']) ? $currentActivity['running_seconds'].'s' : 'Pending' }}</span></p>
+                    </div>
+                </div>
             </div>
 
-            <div id="activity-content" class="{{ $latestActivity ? '' : 'hidden' }} flex flex-col gap-4">
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                    <h3 id="activity-label" class="font-semibold text-white">{{ $latestActivity['label'] ?? '' }}</h3>
-                    <span id="activity-status" @class([
-                        'rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wider',
-                        'border-slate-700 text-slate-300' => ! $latestActivity || in_array($latestActivity['status'], ['pending', 'running'], true),
-                        'border-emerald-400/20 bg-emerald-400/10 text-emerald-300' => ($latestActivity['status'] ?? null) === 'completed',
-                        'border-red-400/20 bg-red-400/10 text-red-300' => ($latestActivity['status'] ?? null) === 'failed',
-                    ])>{{ $latestActivity['status'] ?? '' }}</span>
+            <div class="flex flex-col gap-3 border-t border-slate-800 pt-4">
+                <div class="flex items-center justify-between gap-4">
+                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Recent Activity</p>
+                    <span class="text-xs text-slate-600">Latest {{ count($recentActivities) }}</span>
                 </div>
-
-                <dl class="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
-                    <div><dt class="text-xs uppercase tracking-wider text-slate-500">Started</dt><dd id="activity-started" class="mt-1 font-medium text-slate-200">{{ $latestActivity['started_at'] ?? '—' }}</dd></div>
-                    <div><dt class="text-xs uppercase tracking-wider text-slate-500">Finished</dt><dd id="activity-finished" class="mt-1 font-medium text-slate-200">{{ $latestActivity['finished_at'] ?? '—' }}</dd></div>
-                    <div><dt class="text-xs uppercase tracking-wider text-slate-500">Duration</dt><dd id="activity-duration" class="mt-1 font-medium text-slate-200">{{ isset($latestActivity['duration_seconds']) ? $latestActivity['duration_seconds'].'s' : '—' }}</dd></div>
-                    <div><dt class="text-xs uppercase tracking-wider text-slate-500">Exit Code</dt><dd id="activity-exit-code" class="mt-1 font-medium text-slate-200">{{ $latestActivity['exit_code'] ?? '—' }}</dd></div>
-                </dl>
-
-                <p id="activity-summary" class="rounded-lg bg-slate-950/70 px-4 py-3 text-sm leading-6 text-slate-400">{{ $latestActivity['summary'] ?? '' }}</p>
-
-                <details id="activity-output-details" class="group rounded-xl border border-slate-700 bg-slate-950/60">
-                    <summary class="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-300 marker:hidden">View Output</summary>
-                    <pre id="activity-output" class="max-h-80 overflow-auto border-t border-slate-800 p-4 font-mono text-xs leading-5 whitespace-pre-wrap text-slate-400">{{ $latestActivity['output'] ?? '' }}</pre>
-                </details>
+                <div id="recent-activity-list" class="flex max-h-80 flex-col gap-2 overflow-y-auto">
+                    @forelse ($recentActivities as $activity)
+                        <details class="group rounded-lg border border-slate-800 bg-slate-950/50">
+                            <summary class="grid cursor-pointer list-none grid-cols-[1fr_auto] items-center gap-3 px-3 py-3 marker:hidden">
+                                <span class="min-w-0">
+                                    <span class="block truncate text-sm font-semibold text-slate-200">{{ $activity['label'] }}</span>
+                                    <span class="mt-1 block text-xs text-slate-500">{{ ucfirst($activity['triggered_by']) }} · {{ $activity['relative_time'] }}</span>
+                                </span>
+                                <span class="text-right">
+                                    <span @class([
+                                        'block text-xs font-semibold uppercase tracking-wider',
+                                        'text-amber-300' => $activity['status'] === 'pending',
+                                        'text-blue-300' => $activity['status'] === 'running',
+                                        'text-emerald-300' => $activity['status'] === 'completed',
+                                        'text-red-300' => $activity['status'] === 'failed',
+                                    ])>{{ $activity['status'] }}</span>
+                                    <span class="mt-1 block text-xs text-slate-500">{{ $activity['duration_seconds'] !== null ? $activity['duration_seconds'].'s' : '—' }}</span>
+                                </span>
+                            </summary>
+                            <pre class="max-h-64 overflow-auto border-t border-slate-800 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-slate-400">{{ $activity['output'] ?: 'No output captured yet.' }}</pre>
+                        </details>
+                    @empty
+                        <p class="rounded-lg border border-dashed border-slate-800 px-4 py-5 text-center text-sm text-slate-600">No activity recorded yet.</p>
+                    @endforelse
+                </div>
             </div>
 
             <div class="grid gap-3 border-t border-slate-800 pt-4 text-xs sm:grid-cols-3">
@@ -194,6 +228,7 @@
                         <div class="min-w-0">
                             <div class="flex flex-wrap items-center gap-2">
                                 <h3 class="text-xl font-semibold text-white">{{ $position->symbol ?: 'Unknown token' }}</h3>
+                                <span class="rounded-full bg-violet-400/10 px-2.5 py-1 text-xs font-semibold uppercase text-violet-300">{{ $position->chain->label() }}</span>
                                 @if ($trade['protection_armed'])
                                     <span class="rounded-full bg-amber-400/10 px-2.5 py-1 text-xs font-semibold text-amber-300">Protection armed</span>
                                 @else

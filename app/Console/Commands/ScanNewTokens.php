@@ -2,23 +2,44 @@
 
 namespace App\Console\Commands;
 
+use App\Chain;
 use App\Models\TokenScan;
-use App\Services\BirdeyeService;
-use App\Services\GoPlusService;
-use App\Services\TelegramService;
-use App\Services\DexScreenerService;
-use Illuminate\Console\Command;
-use Throwable;
 use App\Models\TokenScanHistory;
+use App\Services\BirdeyeService;
+use App\Services\DexScreenerService;
+use App\Services\EthereumScannerService;
+use App\Services\GoPlusService;
+use App\Services\PaperTradeEntryService;
+use App\Services\TelegramService;
+use Illuminate\Console\Command;
+use Illuminate\Http\Client\ConnectionException;
+use InvalidArgumentException;
+use Throwable;
 
 class ScanNewTokens extends Command
 {
-    protected $signature = 'tokens:scan';
+    protected $signature = 'tokens:scan {--chain=solana : Blockchain to scan (solana or ethereum)}';
 
-    protected $description = 'Scan newly listed Solana tokens from Birdeye';
+    protected $description = 'Scan newly listed tokens on a supported blockchain';
 
-    public function handle( BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener ): int
+    public function handle(BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener, PaperTradeEntryService $entries, EthereumScannerService $ethereumScanner): int
     {
+        try {
+            $chain = Chain::fromInput($this->option('chain'));
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage());
+
+            return self::FAILURE;
+        }
+
+        if ($chain === Chain::Ethereum) {
+            $this->warn('Ethereum security status: Solana-specific Birdeye, GoPlus, holder, developer-sale, and Pump.fun checks are unavailable and are not reported as passed.');
+            $result = $ethereumScanner->scan('new-token');
+            $this->info(sprintf('Ethereum new-token scan finished: %d profiles, %d qualified, %d paper buys.', $result['profiles'], $result['qualified'], $result['positions']));
+
+            return self::SUCCESS;
+        }
+
         $this->info('Fetching new Solana listings...');
 
         $watchlistThreshold = 40;
@@ -28,9 +49,9 @@ class ScanNewTokens extends Command
 
         try {
             $response = $birdeye->newListings();
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $this->error(
-                'Could not fetch Birdeye listings: ' . $e->getMessage()
+                'Could not fetch Birdeye listings: '.$e->getMessage()
             );
 
             return self::FAILURE;
@@ -44,14 +65,14 @@ class ScanNewTokens extends Command
             return self::SUCCESS;
         }
 
-        $this->info('Found ' . count($items) . ' listings.');
+        $this->info('Found '.count($items).' listings.');
 
         $seenAddresses = [];
 
         foreach ($items as $listing) {
             $address = $listing['address'] ?? null;
 
-            if (!$address || isset($seenAddresses[$address])) {
+            if (! $address || isset($seenAddresses[$address])) {
                 continue;
             }
 
@@ -61,8 +82,9 @@ class ScanNewTokens extends Command
             $name = $listing['name'] ?? 'Unknown';
 
             // Already scanned
-            if (TokenScan::where('address', $address)->exists()) {
+            if (TokenScan::where('chain', $chain->value)->where('address', $address)->exists()) {
                 $this->line("Skipping existing token: {$address}");
+
                 continue;
             }
 
@@ -71,8 +93,8 @@ class ScanNewTokens extends Command
             // Cheap discovery-stage filter
             if ($liquidity < 100) {
                 $this->line(
-                    'Skipping low liquidity: ' .
-                    ($listing['symbol'] ?? $address) .
+                    'Skipping low liquidity: '.
+                    ($listing['symbol'] ?? $address).
                     " ({$liquidity})"
                 );
 
@@ -80,7 +102,7 @@ class ScanNewTokens extends Command
             }
 
             try {
-                 // Keep comfortably below our Birdeye account rate limit.
+                // Keep comfortably below our Birdeye account rate limit.
                 usleep(1200000); // 1.2 seconds
 
                 $overviewResponse = $birdeye->tokenOverview($address);
@@ -90,18 +112,20 @@ class ScanNewTokens extends Command
                 $symbol = $token['symbol'] ?? $symbol;
                 $name = $token['name'] ?? $name;
 
-                if (!$token) {
+                if (! $token) {
                     $this->warn("No overview data for {$address}");
+
                     continue;
                 }
 
                 $marketCap = (float) ($token['marketCap'] ?? 0);
+                $discoveryMarketCap = $marketCap;
                 $overviewLiquidity = (float) ($token['liquidity'] ?? 0);
 
                 // Hard filter: market cap must actually exist.
                 if ($marketCap <= 0) {
                     $this->line(
-                        'Skipping missing market cap: ' .
+                        'Skipping missing market cap: '.
                         ($token['symbol'] ?? $listing['symbol'] ?? $address)
                     );
 
@@ -149,7 +173,6 @@ class ScanNewTokens extends Command
                     continue;
                 }
 
-
                 $this->info(
                     sprintf(
                         'PASSED BASIC FILTERS: %s | MC: $%s | Liquidity: $%s | Holders: %d',
@@ -167,7 +190,7 @@ class ScanNewTokens extends Command
 
                 try {
                     $security = $goplus->evaluateToken($address);
-                } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                } catch (ConnectionException $e) {
                     $securityUnavailable = true;
 
                     $security = [
@@ -180,7 +203,7 @@ class ScanNewTokens extends Command
                         "SECURITY UNAVAILABLE: {$symbol} | continuing as unverified"
                     );
 
-                } catch (\Throwable $e) {
+                } catch (Throwable $e) {
                     $securityUnavailable = true;
 
                     $security = [
@@ -256,8 +279,9 @@ class ScanNewTokens extends Command
                     $freshResponse = $birdeye->tokenOverview($address);
                     $fresh = $freshResponse['data'] ?? null;
 
-                    if (!$fresh) {
+                    if (! $fresh) {
                         $this->warn("Alert cancelled: {$symbol} fresh overview unavailable");
+
                         continue;
                     }
 
@@ -277,17 +301,19 @@ class ScanNewTokens extends Command
 
                     if ($freshMarketCap < 2000 || $freshMarketCap > 20000) {
                         $this->warn(
-                            "Alert cancelled: {$symbol} MC changed to $" .
+                            "Alert cancelled: {$symbol} MC changed to $".
                             number_format($freshMarketCap, 2)
                         );
+
                         continue;
                     }
 
                     if ($freshLiquidity < 500) {
                         $this->warn(
-                            "Alert cancelled: {$symbol} liquidity changed to $" .
+                            "Alert cancelled: {$symbol} liquidity changed to $".
                             number_format($freshLiquidity, 2)
                         );
+
                         continue;
                     }
 
@@ -295,6 +321,7 @@ class ScanNewTokens extends Command
                         $this->warn(
                             "Alert cancelled: {$symbol} holders changed to {$freshHolders}"
                         );
+
                         continue;
                     }
 
@@ -321,6 +348,7 @@ class ScanNewTokens extends Command
                         $this->warn(
                             "Alert cancelled: {$symbol} score dropped to {$freshScore}"
                         );
+
                         continue;
                     }
 
@@ -331,9 +359,9 @@ class ScanNewTokens extends Command
 
                     try {
                         $dexData = $dexscreener->analyzeToken($address);
-                    } catch (\Throwable $e) {
+                    } catch (Throwable $e) {
                         $this->warn(
-                            "DEXSCREENER UNAVAILABLE: {$symbol} | " . $e->getMessage()
+                            "DEXSCREENER UNAVAILABLE: {$symbol} | ".$e->getMessage()
                         );
                     }
 
@@ -347,7 +375,7 @@ class ScanNewTokens extends Command
                                     2
                                 ),
                                 $dexData['liquidity_usd'] !== null
-                                    ? '$' . number_format(
+                                    ? '$'.number_format(
                                         (float) $dexData['liquidity_usd'],
                                         2
                                     )
@@ -373,6 +401,7 @@ class ScanNewTokens extends Command
                 }
 
                 $scan = TokenScan::create([
+                    'chain' => $chain->value,
                     'address' => $address,
                     'symbol' => $token['symbol'] ?? $listing['symbol'] ?? null,
                     'name' => $token['name'] ?? $listing['name'] ?? null,
@@ -423,36 +452,61 @@ class ScanNewTokens extends Command
                     'buys_1m' => $token['buy1m'] ?? null,
                     'sells_1m' => $token['sell1m'] ?? null,
 
-                    'unique_wallets_5m' =>
-                        $token['uniqueWallet5m'] ?? null,
+                    'unique_wallets_5m' => $token['uniqueWallet5m'] ?? null,
 
-                    'price_change_5m' =>
-                        $token['priceChange5mPercent'] ?? null,
+                    'price_change_5m' => $token['priceChange5mPercent'] ?? null,
 
                     'score' => $score,
 
-                    'dex_available' =>
-                        (bool) ($dexData['available'] ?? false),
+                    'dex_available' => (bool) ($dexData['available'] ?? false),
 
-                    'dex' =>
-                        $dexData['dex'] ?? null,
+                    'dex' => $dexData['dex'] ?? null,
 
-                    'dex_pair_address' =>
-                        $dexData['pair_address'] ?? null,
+                    'dex_pair_address' => $dexData['pair_address'] ?? null,
 
-                    'dex_market_cap' =>
-                        $dexData['market_cap'] ?? null,
+                    'dex_market_cap' => $dexData['market_cap'] ?? null,
 
-                    'dex_liquidity' =>
-                        $dexData['liquidity_usd'] ?? null,
+                    'dex_liquidity' => $dexData['liquidity_usd'] ?? null,
 
-                    'dex_pair_age_minutes' =>
-                        $dexData['pair_age_minutes'] ?? null,
+                    'dex_pair_age_minutes' => $dexData['pair_age_minutes'] ?? null,
 
                     'raw_data' => $token,
 
                     'scanned_at' => now(),
                 ]);
+
+                if ($score >= $watchlistThreshold && config('services.trading.paper_trading', true)) {
+                    $entryMarketCap = (float) ($dexData['market_cap'] ?? 0);
+                    $entryMove = $discoveryMarketCap > 0 && $entryMarketCap > 0
+                        ? (($entryMarketCap - $discoveryMarketCap) / $discoveryMarketCap) * 100
+                        : null;
+                    $maxChase = (float) config('services.trading.max_chase_percent', 35);
+
+                    if (($dexData['available'] ?? false)
+                        && ($dexData['requested_token_is_base'] ?? false)
+                        && $entryMarketCap >= 2_000
+                        && $entryMarketCap <= 20_000
+                        && ($entryMove === null || ($entryMove > -30 && $entryMove <= $maxChase))) {
+                        $position = $entries->buy([
+                            'chain' => $chain->value,
+                            'address' => $address,
+                            'symbol' => $symbol,
+                            'name' => $name,
+                            'discovery_market_cap' => $discoveryMarketCap,
+                            'entry_market_cap' => $entryMarketCap,
+                            'entry_price' => $dexData['price_usd'] ?? null,
+                            'entry_liquidity' => $dexData['liquidity_usd'] ?? null,
+                            'move_since_discovery_percent' => $entryMove,
+                            'scanner' => 'new-token',
+                            'send_notification' => true,
+                            'meta' => ['source' => 'new_token_scan', 'pair_address' => $dexData['pair_address'] ?? null, 'dex' => $dexData['dex'] ?? null],
+                        ]);
+
+                        $this->info($position->wasRecentlyCreated
+                            ? "PAPER BUY EXECUTED: {$symbol}"
+                            : "PAPER BUY SKIPPED: {$symbol} | position already open");
+                    }
+                }
 
                 if ($score >= $watchlistThreshold) {
                     $marketCap = (float) ($token['marketCap'] ?? 0);
@@ -464,50 +518,45 @@ class ScanNewTokens extends Command
                     $change = (float) ($token['priceChange5mPercent'] ?? 0);
 
                     $level = match (true) {
-                        $securityUnavailable && $score >= $alertThreshold
-                            => '⚠️ UNVERIFIED CANDIDATE',
+                        $securityUnavailable && $score >= $alertThreshold => '⚠️ UNVERIFIED CANDIDATE',
 
-                        $securityUnavailable
-                            => '⚠️ UNVERIFIED WATCHLIST',
+                        $securityUnavailable => '⚠️ UNVERIFIED WATCHLIST',
 
-                        $score >= 70
-                            => '🔥 HIGH CONFIDENCE',
+                        $score >= 70 => '🔥 HIGH CONFIDENCE',
 
-                        $score >= $alertThreshold
-                            => '🟢 STRONG CANDIDATE',
+                        $score >= $alertThreshold => '🟢 STRONG CANDIDATE',
 
-                        default
-                            => '🟡 WATCHLIST',
+                        default => '🟡 WATCHLIST',
                     };
 
                     $message =
-                        "{$level}\n\n" .
-                        "🚨 <b>New Solana Candidate</b>\n\n" .
-                        "<b>{$symbol}</b> — {$name}\n\n" .
-                        "Score: <b>{$score}/100</b>\n" .
-                        "Security: <b>" .
+                        "{$level}\n\n".
+                        "🚨 <b>New Solana Candidate</b>\n\n".
+                        "<b>{$symbol}</b> — {$name}\n\n".
+                        "Score: <b>{$score}/100</b>\n".
+                        'Security: <b>'.
                         (
                             $securityUnavailable
                                 ? '⚠️ UNVERIFIED'
-                                : $security['score'] . '/100'
-                        ) .
-                        "</b>\n\n" .
-                        "Market Cap: $" . number_format($marketCap, 2) . "\n" .
-                        "Liquidity: $" . number_format($liquidity, 2) . "\n" .
-                        "Holders: {$holders}\n" .
-                        "Buys 1m: {$buys}\n" .
-                        "Sells 1m: {$sells}\n" .
-                        "Unique wallets 5m: {$wallets}\n" .
-                        "Price change 5m: " . number_format($change, 2) . "%\n\n" .
-                        "<code>{$address}</code>\n\n" .
-                        "⚠️ Scanner alert only — not a buy recommendation.";
+                                : $security['score'].'/100'
+                        ).
+                        "</b>\n\n".
+                        'Market Cap: $'.number_format($marketCap, 2)."\n".
+                        'Liquidity: $'.number_format($liquidity, 2)."\n".
+                        "Holders: {$holders}\n".
+                        "Buys 1m: {$buys}\n".
+                        "Sells 1m: {$sells}\n".
+                        "Unique wallets 5m: {$wallets}\n".
+                        'Price change 5m: '.number_format($change, 2)."%\n\n".
+                        "<code>{$address}</code>\n\n".
+                        '⚠️ Scanner alert only — not a buy recommendation.';
 
                     try {
                         $telegram->send($message);
                         $this->info("Telegram alert sent for {$symbol}");
                     } catch (Throwable $e) {
                         $this->error(
-                            "Telegram failed for {$symbol}: " . $e->getMessage()
+                            "Telegram failed for {$symbol}: ".$e->getMessage()
                         );
                     }
                 }
@@ -523,7 +572,7 @@ class ScanNewTokens extends Command
                     )
                 );
 
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 $this->error(
                     "{$symbol}: {$e->getMessage()}"
                 );

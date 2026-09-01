@@ -2,23 +2,27 @@
 
 namespace App\Console\Commands;
 
+use App\Chain;
 use App\Models\PaperWallet;
 use App\Models\TokenScan;
 use App\Models\TokenScanHistory;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
+use App\Services\EthereumScannerService;
 use App\Services\GoPlusService;
-use App\Services\PaperTradingService;
+use App\Services\PaperTradeEntryService;
 use App\Services\SolanaService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
+use InvalidArgumentException;
 
 class ScanMomentumTokens extends Command
 {
     protected $signature = 'tokens:momentum
+                        {--chain=solana : Blockchain to scan (solana or ethereum)}
                         {--dry-run : Run DexScreener discovery/ranking without Birdeye, GoPlus, database writes, or Telegram}';
 
-    protected $description = 'Scan Solana tokens showing early momentum';
+    protected $description = 'Scan supported-chain tokens showing early momentum';
 
     public function handle(
         BirdeyeService $birdeye,
@@ -26,8 +30,25 @@ class ScanMomentumTokens extends Command
         DexScreenerService $dexscreener,
         TelegramService $telegram,
         SolanaService $solana,
-        PaperTradingService $paperTrading
+        PaperTradeEntryService $paperTrading,
+        EthereumScannerService $ethereumScanner,
     ): int {
+        try {
+            $chain = Chain::fromInput($this->option('chain'));
+        } catch (InvalidArgumentException $exception) {
+            $this->error($exception->getMessage());
+
+            return self::FAILURE;
+        }
+
+        if ($chain === Chain::Ethereum) {
+            $this->warn('Ethereum security status: Solana-specific Birdeye, GoPlus, holder, developer-sale, and Pump.fun checks are unavailable and are not reported as passed.');
+            $result = $ethereumScanner->scan('momentum');
+            $this->info(sprintf('Ethereum momentum scan finished: %d profiles, %d qualified, %d paper buys.', $result['profiles'], $result['qualified'], $result['positions']));
+
+            return self::SUCCESS;
+        }
+
         $this->info('Fetching DexScreener momentum candidates...');
 
         try {
@@ -193,7 +214,7 @@ class ScanMomentumTokens extends Command
              * Don't send a fresh momentum-discovery alert for
              * something that is already actively tracked.
              */
-            $existing = TokenScan::where('address', $address)->first();
+            $existing = TokenScan::where('chain', $chain->value)->where('address', $address)->first();
 
             if (
                 $existing &&
@@ -672,6 +693,7 @@ class ScanMomentumTokens extends Command
                     if ($paperStatus === 'simulated_buy') {
                         try {
                             $paperPosition = $paperTrading->buy([
+                                'chain' => $chain->value,
                                 'address' => $address,
                                 'symbol' => $symbol,
                                 'name' => $name,
@@ -693,6 +715,7 @@ class ScanMomentumTokens extends Command
 
                                     'source' => 'momentum_fast_paper',
                                 ],
+                                'scanner' => 'momentum',
                             ]);
 
                             $paperBuyExecuted =
@@ -1518,6 +1541,7 @@ class ScanMomentumTokens extends Command
 
             $scan = TokenScan::updateOrCreate(
                 [
+                    'chain' => $chain->value,
                     'address' => $address,
                 ],
                 [

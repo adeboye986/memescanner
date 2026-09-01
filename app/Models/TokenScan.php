@@ -2,12 +2,14 @@
 
 namespace App\Models;
 
+use App\Chain;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class TokenScan extends Model
 {
     protected $fillable = [
+        'chain',
         'address',
         'symbol',
         'name',
@@ -32,6 +34,7 @@ class TokenScan extends Model
     ];
 
     protected $casts = [
+        'chain' => Chain::class,
         'raw_data' => 'array',
         'first_seen_at' => 'datetime',
         'last_scanned_at' => 'datetime',

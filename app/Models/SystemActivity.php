@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Chain;
 use Database\Factories\SystemActivityFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -13,6 +14,7 @@ class SystemActivity extends Model
 
     protected $fillable = [
         'action',
+        'chain',
         'command',
         'label',
         'status',
@@ -28,6 +30,7 @@ class SystemActivity extends Model
     protected function casts(): array
     {
         return [
+            'chain' => Chain::class,
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
             'duration_seconds' => 'integer',

@@ -24,6 +24,10 @@ if (closeModal instanceof HTMLDialogElement && closeForm instanceof HTMLFormElem
 
 const activitySection = document.querySelector('#system-activity');
 const actionForms = document.querySelectorAll('.dashboard-action-form');
+const scannerChain = document.querySelector('#scanner-chain');
+let latestRunningActions = Array.from(actionForms)
+    .filter((form) => form.querySelector('button')?.disabled)
+    .map((form) => form.dataset.actionKey ?? form.dataset.action);
 
 actionForms.forEach((form) => {
     form.addEventListener('submit', () => {
@@ -96,9 +100,11 @@ const updateTrackerBadge = (status) => {
 };
 
 const updateActionButtons = (runningActions) => {
+    latestRunningActions = runningActions;
+
     actionForms.forEach((form) => {
-        const action = form.dataset.action;
-        const isRunning = runningActions.includes(action);
+        const actionKey = form.dataset.actionKey ?? form.dataset.action;
+        const isRunning = runningActions.includes(actionKey);
         const button = form.querySelector('button');
         const state = form.querySelector('.action-state');
 
@@ -112,40 +118,96 @@ const updateActionButtons = (runningActions) => {
     });
 };
 
-const updateActivity = (activity) => {
-    document.querySelector('#activity-empty')?.classList.toggle('hidden', activity !== null);
-    document.querySelector('#activity-content')?.classList.toggle('hidden', activity === null);
+if (scannerChain instanceof HTMLSelectElement) {
+    scannerChain.addEventListener('change', () => {
+        document.querySelectorAll('[data-chain-action]').forEach((form) => {
+            const input = form.querySelector('[data-chain-input]');
+
+            if (input instanceof HTMLInputElement) {
+                input.value = scannerChain.value;
+            }
+
+            form.dataset.actionKey = `${form.dataset.action}:${scannerChain.value}`;
+        });
+
+        updateActionButtons(latestRunningActions);
+    });
+}
+
+const updateCurrentActivity = (activity) => {
+    document.querySelector('#current-activity-empty')?.classList.toggle('hidden', activity !== null);
+    document.querySelector('#current-activity-content')?.classList.toggle('hidden', activity === null);
 
     if (!activity) {
         return;
     }
 
-    setText('#activity-label', activity.label);
-    setText('#activity-status', activity.status);
-    const statusBadge = document.querySelector('#activity-status');
+    setText('#current-activity-label', `⚡ ${activity.label}`);
+    setText('#current-activity-status', activity.status);
+    setText('#current-activity-started', activity.started_at ?? 'Waiting for worker');
+    setText('#current-activity-running', activity.running_seconds === null ? 'Pending' : `${activity.running_seconds}s`);
+};
 
-    if (statusBadge) {
-        statusBadge.classList.remove(
-            'border-slate-700', 'text-slate-300',
-            'border-emerald-400/20', 'bg-emerald-400/10', 'text-emerald-300',
-            'border-red-400/20', 'bg-red-400/10', 'text-red-300',
-        );
+const renderRecentActivities = (activities) => {
+    const list = document.querySelector('#recent-activity-list');
 
-        const statusTones = {
-            completed: ['border-emerald-400/20', 'bg-emerald-400/10', 'text-emerald-300'],
-            failed: ['border-red-400/20', 'bg-red-400/10', 'text-red-300'],
-            pending: ['border-slate-700', 'text-slate-300'],
-            running: ['border-slate-700', 'text-slate-300'],
-        };
-
-        statusBadge.classList.add(...(statusTones[activity.status] ?? statusTones.pending));
+    if (!list) {
+        return;
     }
-    setText('#activity-started', activity.started_at ?? '—');
-    setText('#activity-finished', activity.finished_at ?? '—');
-    setText('#activity-duration', activity.duration_seconds === null ? '—' : `${activity.duration_seconds}s`);
-    setText('#activity-exit-code', activity.exit_code === null ? '—' : activity.exit_code);
-    setText('#activity-summary', activity.summary || 'No output yet.');
-    setText('#activity-output', activity.output || 'No output yet.');
+
+    list.replaceChildren();
+
+    if (activities.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'rounded-lg border border-dashed border-slate-800 px-4 py-5 text-center text-sm text-slate-600';
+        empty.textContent = 'No activity recorded yet.';
+        list.append(empty);
+
+        return;
+    }
+
+    const statusColors = {
+        pending: 'text-amber-300',
+        running: 'text-blue-300',
+        completed: 'text-emerald-300',
+        failed: 'text-red-300',
+    };
+
+    activities.forEach((activity) => {
+        const details = document.createElement('details');
+        details.className = 'group rounded-lg border border-slate-800 bg-slate-950/50';
+
+        const summary = document.createElement('summary');
+        summary.className = 'grid cursor-pointer list-none grid-cols-[1fr_auto] items-center gap-3 px-3 py-3 marker:hidden';
+
+        const identity = document.createElement('span');
+        identity.className = 'min-w-0';
+        const label = document.createElement('span');
+        label.className = 'block truncate text-sm font-semibold text-slate-200';
+        label.textContent = activity.label;
+        const context = document.createElement('span');
+        context.className = 'mt-1 block text-xs text-slate-500';
+        context.textContent = `${activity.triggered_by.charAt(0).toUpperCase()}${activity.triggered_by.slice(1)} · ${activity.relative_time}`;
+        identity.append(label, context);
+
+        const result = document.createElement('span');
+        result.className = 'text-right';
+        const status = document.createElement('span');
+        status.className = `block text-xs font-semibold uppercase tracking-wider ${statusColors[activity.status] ?? 'text-slate-300'}`;
+        status.textContent = activity.status;
+        const duration = document.createElement('span');
+        duration.className = 'mt-1 block text-xs text-slate-500';
+        duration.textContent = activity.duration_seconds === null ? '—' : `${activity.duration_seconds}s`;
+        result.append(status, duration);
+
+        const output = document.createElement('pre');
+        output.className = 'max-h-64 overflow-auto border-t border-slate-800 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-slate-400';
+        output.textContent = activity.output || 'No output captured yet.';
+
+        summary.append(identity, result);
+        details.append(summary, output);
+        list.append(details);
+    });
 };
 
 const pollActivity = async () => {
@@ -164,7 +226,8 @@ const pollActivity = async () => {
 
         const data = await response.json();
 
-        updateActivity(data.activity);
+        updateCurrentActivity(data.current_activity);
+        renderRecentActivities(data.recent_activities);
         updateActionButtons(data.running_actions);
         updateTrackerBadge(data.system_status.status);
         setText('#last-tracker-check', relativeTime(data.system_status.last_tracker_check));
