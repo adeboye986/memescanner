@@ -154,6 +154,9 @@ class TrackPaperPositions extends Command
          * - Above +200% profit, keep holding.
          * - If the token later falls back to +200%, close 100% at 3.00x.
          * - No partial exits.
+         * - Protected levels are triggers, not guaranteed fills. Once a
+         *   trigger is crossed, paper accounting uses the market multiple
+         *   actually observed by the tracker as the simulated fill.
          *
          * Existing booleans are reused for compatibility:
          * tp_50_hit = +100% profit floor armed
@@ -208,7 +211,8 @@ class TrackPaperPositions extends Command
             && $remainingFraction > 0
         ) {
             $soldFraction = $remainingFraction;
-            $fillMultiple = 0.90;
+            $triggerMultiple = 0.90;
+            $fillMultiple = $multiple;
 
             $realizedValue += $soldFraction * $fillMultiple;
             $remainingFraction = 0.0;
@@ -218,7 +222,10 @@ class TrackPaperPositions extends Command
                 'type' => 'stop_loss',
                 'label' => 'STOP LOSS -10%',
                 'sold_fraction' => $soldFraction,
+                'trigger_multiple' => $triggerMultiple,
+                'trigger_market_cap' => $entryMc * $triggerMultiple,
                 'fill_multiple' => $fillMultiple,
+                'fill_market_cap' => $entryMc * $fillMultiple,
                 'observed_multiple' => $multiple,
                 'observed_market_cap' => $marketCap,
                 'triggered_at' => now()->toIso8601String(),
@@ -243,7 +250,8 @@ class TrackPaperPositions extends Command
             && $remainingFraction > 0
         ) {
             $soldFraction = $remainingFraction;
-            $fillMultiple = $protectedFloorMultiple;
+            $triggerMultiple = $protectedFloorMultiple;
+            $fillMultiple = $multiple;
             $protectedFloorProfitPercent =
                 (int) round(($protectedFloorMultiple - 1) * 100);
 
@@ -256,7 +264,10 @@ class TrackPaperPositions extends Command
                 'label' => "PROTECTED EXIT +{$protectedFloorProfitPercent}% PROFIT",
                 'protected_floor_profit_percent' => $protectedFloorProfitPercent,
                 'sold_fraction' => $soldFraction,
+                'trigger_multiple' => $triggerMultiple,
+                'trigger_market_cap' => $entryMc * $triggerMultiple,
                 'fill_multiple' => $fillMultiple,
+                'fill_market_cap' => $entryMc * $fillMultiple,
                 'observed_multiple' => $multiple,
                 'peak_multiple' => $peakMultiple,
                 'observed_market_cap' => $marketCap,
@@ -678,6 +689,11 @@ class TrackPaperPositions extends Command
                     number_format($marketCap, 2)."\n".
                     '✖️ <b>Observed:</b> '.
                     number_format($multiple, 2)."x\n".
+                    '🎯 <b>Trigger Floor:</b> '.
+                    number_format(
+                        (float) ($event['trigger_multiple'] ?? $event['fill_multiple']),
+                        2
+                    )."x\n".
                     '💵 <b>Simulated Fill:</b> '.
                     number_format(
                         (float) $event['fill_multiple'],

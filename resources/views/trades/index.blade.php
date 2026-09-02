@@ -155,18 +155,75 @@
 
                 <dl class="grid gap-px bg-slate-800 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
                     @php
-                        $metrics = [
-                            ['Initial Investment', number_format((float) $position->initial_investment_sol, 4).' SOL'],
-                            ['Entry Market Cap', '$'.number_format((float) $position->entry_market_cap, 2)],
-                            ['Final / Exit Market Cap', $trade['final_market_cap'] !== null ? '$'.number_format($trade['final_market_cap'], 2) : 'N/A'],
-                            ['Entry Time', $position->entry_at?->format('M j, Y H:i:s') ?? 'N/A'],
-                            ['Closed Time', $position->closed_at?->format('M j, Y H:i:s') ?? 'N/A'],
-                            ['Duration', $trade['duration'] ?? 'N/A'],
-                            ['Peak Multiple', (float) $position->peak_multiple > 0 ? number_format((float) $position->peak_multiple, 2).'x' : 'N/A'],
-                            ['Highest Profit', $trade['highest_profit_percent'] !== null ? sprintf('%+.2f%%', $trade['highest_profit_percent']) : 'N/A'],
-                            ['Exit Mode', $trade['exit_mode']],
-                        ];
-                    @endphp
+                    $metrics = [
+                        [
+                            'Initial Investment',
+                            number_format((float) $position->initial_investment_sol, 4).' SOL'
+                        ],
+                        [
+                            'Entry Market Cap',
+                            '$'.number_format((float) $position->entry_market_cap, 2)
+                        ],
+                        [
+                            'Trigger Market Cap',
+                            $trade['trigger_market_cap'] !== null
+                                ? '$'.number_format($trade['trigger_market_cap'], 2)
+                                : 'N/A'
+                        ],
+                        [
+                            'Observed Market Cap',
+                            $trade['observed_market_cap'] !== null
+                                ? '$'.number_format($trade['observed_market_cap'], 2)
+                                : 'N/A'
+                        ],
+                        [
+                            'Simulated Fill Market Cap',
+                            $trade['fill_market_cap'] !== null
+                                ? '$'.number_format($trade['fill_market_cap'], 2)
+                                : 'N/A'
+                        ],
+                        [
+                            'Trigger Multiple',
+                            $trade['trigger_multiple'] !== null
+                                ? number_format($trade['trigger_multiple'], 2).'x'
+                                : 'N/A'
+                        ],
+                        [
+                            'Actual Fill Multiple',
+                            $trade['fill_multiple'] !== null
+                                ? number_format($trade['fill_multiple'], 2).'x'
+                                : 'N/A'
+                        ],
+                        [
+                            'Entry Time',
+                            $position->entry_at?->format('M j, Y H:i:s') ?? 'N/A'
+                        ],
+                        [
+                            'Closed Time',
+                            $position->closed_at?->format('M j, Y H:i:s') ?? 'N/A'
+                        ],
+                        [
+                            'Duration',
+                            $trade['duration'] ?? 'N/A'
+                        ],
+                        [
+                            'Peak Multiple',
+                            (float) $position->peak_multiple > 0
+                                ? number_format((float) $position->peak_multiple, 2).'x'
+                                : 'N/A'
+                        ],
+                        [
+                            'Highest Profit',
+                            $trade['highest_profit_percent'] !== null
+                                ? sprintf('%+.2f%%', $trade['highest_profit_percent'])
+                                : 'N/A'
+                        ],
+                        [
+                            'Exit Mode',
+                            $trade['exit_mode']
+                        ],
+                    ];
+                @endphp
                     @foreach ($metrics as [$label, $value])
                         <div class="bg-slate-900/90 px-5 py-4">
                             <dt class="text-xs uppercase tracking-wider text-slate-500">{{ $label }}</dt>
