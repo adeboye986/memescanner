@@ -128,7 +128,7 @@ class ReconcilePaperWallet extends Command
 
         if (! $this->option('fix')) {
             $this->line(
-                'Run php artisan tokens:paper-reconcile --fix to repair the wallet.'
+                "Run php artisan tokens:paper-reconcile --chain={$chain->value} --fix to repair the wallet."
             );
 
             return self::SUCCESS;
@@ -136,14 +136,33 @@ class ReconcilePaperWallet extends Command
 
         DB::transaction(function () use (
             $wallet,
-            $expectedAvailable,
-            $expectedInvested,
-            $expectedRealizedPnl
+            $chain
         ): void {
+            $lockedPositions = PaperPosition::query()
+                ->where('chain', $chain->value)
+                ->where('initial_investment_sol', '>', 0)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get();
             $lockedWallet = PaperWallet::query()
                 ->whereKey($wallet->id)
                 ->lockForUpdate()
                 ->firstOrFail();
+            $expectedAvailable = (float) $lockedWallet->starting_balance_sol
+                - (float) $lockedPositions->sum(
+                    fn (PaperPosition $position) => (float) $position->initial_investment_sol
+                )
+                + (float) $lockedPositions->sum(
+                    fn (PaperPosition $position) => (float) $position->realized_sol
+                );
+            $expectedInvested = (float) $lockedPositions
+                ->where('status', 'open')
+                ->sum(
+                    fn (PaperPosition $position) => (float) $position->remaining_investment_sol
+                );
+            $expectedRealizedPnl = (float) $lockedPositions->sum(
+                fn (PaperPosition $position) => (float) $position->trade_pnl_sol
+            );
 
             $lockedWallet->update([
                 'available_balance_sol' => round($expectedAvailable, 8),

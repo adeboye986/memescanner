@@ -231,6 +231,10 @@ const pollActivity = async () => {
         updateActionButtons(data.running_actions);
         updateTrackerBadge(data.system_status.status);
         setText('#last-tracker-check', relativeTime(data.system_status.last_tracker_check));
+        setText('#tracker-cycle-duration', data.system_status.cycle_duration_ms === null ? 'N/A' : `${Math.round(data.system_status.cycle_duration_ms)} ms`);
+        setText('#tracker-open-positions', data.system_status.open_positions ?? 'N/A');
+        setText('#tracker-priced-positions', data.system_status.priced_positions === null ? 'N/A' : `${data.system_status.priced_positions} / ${data.system_status.open_positions}`);
+        setText('#tracker-provider-failures', data.system_status.provider_failures ?? 'N/A');
         setText('#last-momentum-scan', relativeTime(data.system_status.last_momentum_scan));
         setText('#last-token-scan', relativeTime(data.system_status.last_token_scan));
     } catch {

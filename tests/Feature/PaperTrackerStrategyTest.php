@@ -7,6 +7,7 @@ use App\Models\PaperPosition;
 use App\Models\PaperWallet;
 use App\Services\TelegramService;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
@@ -164,6 +165,88 @@ class PaperTrackerStrategyTest extends TestCase
         $this->assertEqualsWithDelta(0.09, $ethereumWallet->fresh()->realized_pnl_sol, 0.000001);
     }
 
+    public function test_provider_errors_and_missing_prices_never_close_or_credit_a_position(): void
+    {
+        $wallet = $this->createWallet(Chain::Solana);
+        $position = $this->createPosition(Chain::Solana);
+
+        foreach ([Http::failedConnection('timeout'), Http::response([], 429), Http::response([], 500), Http::response([], 200)] as $response) {
+            $http = new Factory;
+            Http::swap($http);
+            Http::fake(['api.dexscreener.com/tokens/v1/solana/*' => $response]);
+
+            $this->artisan('tokens:paper-track')->assertSuccessful();
+
+            $this->assertSame('open', $position->fresh()->status);
+            $this->assertNull($position->fresh()->closed_at);
+            $this->assertSame([], $position->fresh()->exit_events);
+            $this->assertEqualsWithDelta(4.9, $wallet->fresh()->available_balance_sol, 0.000001);
+        }
+    }
+
+    public function test_periodic_snapshots_are_throttled_but_exit_snapshot_is_immediate(): void
+    {
+        config()->set('services.trading.paper_tracker_snapshot_seconds', 10);
+        $this->createWallet(Chain::Solana);
+        $position = $this->createPosition(Chain::Solana);
+
+        $this->trackAt($position, 1.01);
+        $this->trackAt($position, 1.02);
+        $this->trackAt($position, 0.85);
+
+        $this->assertSame(1, $position->snapshots()->where('snapshot_type', 'periodic')->count());
+        $this->assertSame(1, $position->snapshots()->where('snapshot_type', 'exit')->count());
+    }
+
+    public function test_fast_tracker_refuses_to_start_when_process_lock_is_owned(): void
+    {
+        $lock = Cache::lock('paper-tracker.fast.process', 30);
+        $this->assertTrue($lock->get());
+
+        try {
+            $this->artisan('tokens:paper-track:fast', ['--max-cycles' => 1])
+                ->expectsOutputToContain('already owns the process lock')
+                ->assertFailed();
+        } finally {
+            $lock->release();
+        }
+    }
+
+    public function test_positions_on_the_same_chain_are_priced_in_one_batch_request(): void
+    {
+        $this->createWallet(Chain::Solana);
+        $first = $this->createPosition(Chain::Solana, 'first-token');
+        $second = $this->createPosition(Chain::Solana, 'second-token');
+        $http = new Factory;
+        Http::swap($http);
+        Http::fake([
+            'api.dexscreener.com/tokens/v1/solana/*' => Http::response([
+                $this->pairFor($first, 1.01),
+                $this->pairFor($second, 1.02),
+            ]),
+        ]);
+
+        $this->artisan('tokens:paper-track')->assertSuccessful();
+
+        Http::assertSentCount(1);
+        $this->assertNotNull($first->fresh()->last_checked_at);
+        $this->assertNotNull($second->fresh()->last_checked_at);
+    }
+
+    public function test_fast_tracker_records_measured_cycle_health(): void
+    {
+        $this->artisan('tokens:paper-track:fast', ['--max-cycles' => 1])
+            ->expectsOutputToContain('Fast paper tracker started')
+            ->assertSuccessful();
+
+        $health = Cache::get('paper-tracker.fast.health');
+        $this->assertIsArray($health);
+        $this->assertSame(0, $health['open_positions']);
+        $this->assertSame(0, $health['priced_positions']);
+        $this->assertSame(0, $health['provider_requests']);
+        $this->assertIsFloat($health['cycle_duration_ms']);
+    }
+
     private function createWallet(Chain $chain): PaperWallet
     {
         return PaperWallet::query()->create([
@@ -201,20 +284,28 @@ class PaperTrackerStrategyTest extends TestCase
         Http::swap($http);
 
         Http::fake([
-            'api.dexscreener.com/token-pairs/v1/'.$position->chain->dexScreenerId().'/*' => Http::response([[
-                'chainId' => $position->chain->dexScreenerId(),
-                'dexId' => $position->chain === Chain::Solana ? 'raydium' : 'uniswap',
-                'pairAddress' => 'pair-'.$position->id,
-                'baseToken' => ['address' => $position->address, 'symbol' => $position->symbol],
-                'quoteToken' => ['address' => 'quote', 'symbol' => $position->chain === Chain::Solana ? 'SOL' : 'WETH'],
-                'priceUsd' => '1',
-                'marketCap' => 100_000 * $multiple,
-                'liquidity' => ['usd' => 50_000],
-                'txns' => ['m5' => ['buys' => 1, 'sells' => 1]],
-                'volume' => ['m5' => 1_000],
-            ]]),
+            'api.dexscreener.com/tokens/v1/'.$position->chain->dexScreenerId().'/*' => Http::response([
+                $this->pairFor($position, $multiple),
+            ]),
         ]);
 
         $this->artisan('tokens:paper-track')->assertSuccessful();
+    }
+
+    /** @return array<string, mixed> */
+    private function pairFor(PaperPosition $position, float $multiple): array
+    {
+        return [
+            'chainId' => $position->chain->dexScreenerId(),
+            'dexId' => $position->chain === Chain::Solana ? 'raydium' : 'uniswap',
+            'pairAddress' => 'pair-'.$position->id,
+            'baseToken' => ['address' => $position->address, 'symbol' => $position->symbol],
+            'quoteToken' => ['address' => 'quote', 'symbol' => $position->chain === Chain::Solana ? 'SOL' : 'WETH'],
+            'priceUsd' => '1',
+            'marketCap' => 100_000 * $multiple,
+            'liquidity' => ['usd' => 50_000],
+            'txns' => ['m5' => ['buys' => 1, 'sells' => 1]],
+            'volume' => ['m5' => 1_000],
+        ];
     }
 }

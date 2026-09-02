@@ -51,7 +51,7 @@ class PaperTradingDashboardTest extends TestCase
             ->assertSee('Scanner Controls')
             ->assertSee('Run Momentum Scan')
             ->assertSee('Check Wallet Reconciliation')
-            ->assertSee('Auto Tracker:')
+            ->assertSee('Fast Tracker:')
             ->assertSee('UNKNOWN')
             ->assertDontSee('Auto Tracking: Active')
             ->assertSee('4.5000 SOL')

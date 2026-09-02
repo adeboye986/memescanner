@@ -19,6 +19,11 @@ class SolanaChainAdapter implements ChainAdapter
         return $this->dexScreener->analyzeToken($address, $this->chain()->value);
     }
 
+    public function marketDataMany(array $addresses): array
+    {
+        return $this->dexScreener->analyzeTokens($addresses, $this->chain()->value);
+    }
+
     public function latestProfiles(int $limit = 20): array
     {
         return $this->dexScreener->latestProfiles($this->chain()->value, $limit);

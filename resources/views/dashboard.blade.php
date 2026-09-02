@@ -23,7 +23,7 @@
                     'bg-amber-400' => $systemStatus['status'] === 'stale',
                     'bg-slate-500' => $systemStatus['status'] === 'unknown',
                 ])></span>
-                Auto Tracker: <span id="tracker-status-text">{{ strtoupper($systemStatus['status']) }}</span>
+                Fast Tracker: <span id="tracker-status-text">{{ strtoupper($systemStatus['status']) }}</span>
             </span>
         </div>
     </header>
@@ -188,9 +188,15 @@
             </div>
 
             <div class="grid gap-3 border-t border-slate-800 pt-4 text-xs sm:grid-cols-3">
-                <div><p class="uppercase tracking-wider text-slate-600">Last Tracker Check</p><p id="last-tracker-check" class="mt-1 text-slate-300">{{ $systemStatus['last_tracker_check']?->diffForHumans() ?? 'Never' }}</p></div>
+                <div><p class="uppercase tracking-wider text-slate-600">Last Fast Cycle</p><p id="last-tracker-check" class="mt-1 text-slate-300">{{ $systemStatus['last_tracker_check']?->diffForHumans() ?? 'Never' }}</p></div>
                 <div><p class="uppercase tracking-wider text-slate-600">Last Momentum Scan</p><p id="last-momentum-scan" class="mt-1 text-slate-300">{{ $systemStatus['last_momentum_scan']?->diffForHumans() ?? 'Never' }}</p></div>
                 <div><p class="uppercase tracking-wider text-slate-600">Last Token Scan</p><p id="last-token-scan" class="mt-1 text-slate-300">{{ $systemStatus['last_token_scan']?->diffForHumans() ?? 'Never' }}</p></div>
+            </div>
+            <div class="grid gap-3 text-xs sm:grid-cols-4">
+                <div><p class="uppercase tracking-wider text-slate-600">Cycle Duration</p><p id="tracker-cycle-duration" class="mt-1 text-slate-300">{{ $systemStatus['cycle_duration_ms'] !== null ? number_format($systemStatus['cycle_duration_ms'], 0).' ms' : 'N/A' }}</p></div>
+                <div><p class="uppercase tracking-wider text-slate-600">Open Positions</p><p id="tracker-open-positions" class="mt-1 text-slate-300">{{ $systemStatus['open_positions'] ?? 'N/A' }}</p></div>
+                <div><p class="uppercase tracking-wider text-slate-600">Priced</p><p id="tracker-priced-positions" class="mt-1 text-slate-300">{{ $systemStatus['priced_positions'] !== null ? $systemStatus['priced_positions'].' / '.$systemStatus['open_positions'] : 'N/A' }}</p></div>
+                <div><p class="uppercase tracking-wider text-slate-600">Provider Failures</p><p id="tracker-provider-failures" class="mt-1 text-slate-300">{{ $systemStatus['provider_failures'] ?? 'N/A' }}</p></div>
             </div>
         </section>
     </div>

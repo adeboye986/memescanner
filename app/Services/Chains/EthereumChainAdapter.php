@@ -32,6 +32,11 @@ class EthereumChainAdapter implements ChainAdapter
         );
     }
 
+    public function marketDataMany(array $addresses): array
+    {
+        return $this->dexScreener->analyzeTokens($addresses, $this->chain()->value);
+    }
+
     public function latestProfiles(int $limit = 20): array
     {
         return $this->geckoTerminal->latestEthereumTokens($limit);

@@ -13,7 +13,10 @@ use Throwable;
 
 class SystemActivityService
 {
-    public function __construct(private DashboardCommandRegistry $commands) {}
+    public function __construct(
+        private DashboardCommandRegistry $commands,
+        private PaperTrackerHealthService $trackerHealth,
+    ) {}
 
     public function createManual(string $action, ?Chain $chain = null): SystemActivity
     {
@@ -140,9 +143,7 @@ class SystemActivityService
             ->all();
     }
 
-    /**
-     * @return array{status: string, last_tracker_check: ?Carbon, last_momentum_scan: ?Carbon, last_token_scan: ?Carbon}
-     */
+    /** @return array<string, mixed> */
     public function systemStatus(): array
     {
         $latestByAction = SystemActivity::query()
@@ -152,19 +153,10 @@ class SystemActivityService
             ->unique('action')
             ->keyBy('action');
 
-        /** @var SystemActivity|null $tracker */
-        $tracker = $latestByAction->get('paper-track');
-        $trackerTime = $this->activityTime($tracker);
-
-        $trackerStatus = match (true) {
-            $tracker === null => 'unknown',
-            $tracker->status === 'completed' && $trackerTime?->gte(now()->subMinutes(2)) => 'active',
-            default => 'stale',
-        };
+        $trackerStatus = $this->trackerHealth->status();
 
         return [
-            'status' => $trackerStatus,
-            'last_tracker_check' => $trackerTime,
+            ...$trackerStatus,
             'last_momentum_scan' => $this->activityTime($latestByAction->get('momentum-scan')),
             'last_token_scan' => $this->activityTime($latestByAction->get('token-scan')),
         ];

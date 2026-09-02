@@ -8,6 +8,7 @@ use App\Services\Chains\ChainManager;
 use App\Services\PaperWalletService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class TrackPaperPositions extends Command
@@ -18,6 +19,15 @@ class TrackPaperPositions extends Command
     protected $description =
         'Track paper positions, milestones, peaks, drawdowns and simulated exits';
 
+    /** @var array{open_positions: int, priced_positions: int, provider_failures: int, provider_requests: int, rate_limited: bool} */
+    private array $cycleMetrics = [
+        'open_positions' => 0,
+        'priced_positions' => 0,
+        'provider_failures' => 0,
+        'provider_requests' => 0,
+        'rate_limited' => false,
+    ];
+
     public function handle(
         ChainManager $chains,
         TelegramService $telegram,
@@ -25,57 +35,105 @@ class TrackPaperPositions extends Command
     ): int {
         $limit = max(1, min((int) $this->option('limit'), 200));
 
-        $positions = PaperPosition::query()
-            ->where('status', 'open')
-            ->where('initial_investment_sol', '>', 0)
-            ->orderByRaw('last_checked_at IS NULL DESC')
-            ->orderBy('last_checked_at')
-            ->limit($limit)
-            ->get();
+        return $this->trackCycle($chains, $telegram, $wallets, $limit);
+    }
 
-        if ($positions->isEmpty()) {
-            $this->info('No open paper positions.');
+    public function trackCycle(
+        ChainManager $chains,
+        TelegramService $telegram,
+        PaperWalletService $wallets,
+        int $limit = 50,
+        bool $fastProcess = false,
+    ): int {
+        $limit = max(1, min($limit, 200));
+        $this->cycleMetrics = [
+            'open_positions' => 0,
+            'priced_positions' => 0,
+            'provider_failures' => 0,
+            'provider_requests' => 0,
+            'rate_limited' => false,
+        ];
+
+        if (! $fastProcess && Cache::lock('paper-tracker.fast.process')->isLocked()) {
+            $this->warn('Paper tracker fallback skipped because the fast tracker is active.');
 
             return self::SUCCESS;
         }
 
-        foreach ($positions as $position) {
-            $this->trackOne(
-                $position,
-                $chains,
-                $telegram,
-                $wallets,
-            );
+        $cycleLock = Cache::lock(
+            'paper-tracker.position-cycle',
+            max(30, (int) config('services.trading.paper_tracker_lock_seconds', 300)),
+        );
+
+        if (! $cycleLock->get()) {
+            $this->warn('Paper tracker cycle skipped because another cycle is active.');
+
+            return self::SUCCESS;
         }
 
-        return self::SUCCESS;
+        try {
+
+            $positions = PaperPosition::query()
+                ->where('status', 'open')
+                ->where('initial_investment_sol', '>', 0)
+                ->orderByRaw('last_checked_at IS NULL DESC')
+                ->orderBy('last_checked_at')
+                ->limit($limit)
+                ->get();
+
+            if ($positions->isEmpty()) {
+                $this->info('No open paper positions.');
+
+                return self::SUCCESS;
+            }
+
+            $this->cycleMetrics['open_positions'] = $positions->count();
+
+            foreach ($positions->groupBy(fn (PaperPosition $position): string => $position->chain->value) as $chainPositions) {
+                $addresses = $chainPositions->pluck('address')->all();
+                $this->cycleMetrics['provider_requests'] += (int) ceil(count($addresses) / 30);
+
+                try {
+                    $marketData = $chains->for($chainPositions->first()->chain)->marketDataMany($addresses);
+                } catch (\Throwable $exception) {
+                    $this->cycleMetrics['provider_failures'] += $chainPositions->count();
+                    $this->cycleMetrics['rate_limited'] = $this->cycleMetrics['rate_limited']
+                        || str_contains($exception->getMessage(), '429');
+                    $this->warn('PAPER TRACK PROVIDER FAILURE: '.$exception->getMessage());
+
+                    continue;
+                }
+
+                foreach ($chainPositions as $position) {
+                    $key = $position->chain->value === 'ethereum'
+                        ? strtolower($position->address)
+                        : $position->address;
+                    $dex = $marketData[$key] ?? null;
+
+                    if (! is_array($dex) || ! ($dex['available'] ?? false)) {
+                        $this->cycleMetrics['provider_failures']++;
+                        $this->warn("PAPER TRACK UNAVAILABLE: {$position->symbol} | no valid market data");
+
+                        continue;
+                    }
+
+                    $this->cycleMetrics['priced_positions']++;
+                    $this->trackOne($position, $dex, $telegram, $wallets);
+                }
+            }
+
+            return self::SUCCESS;
+        } finally {
+            $cycleLock->release();
+        }
     }
 
     private function trackOne(
         PaperPosition $position,
-        ChainManager $chains,
+        array $dex,
         TelegramService $telegram,
         PaperWalletService $wallets,
     ): void {
-        try {
-            $dex = $chains->for($position->chain)->marketData($position->address);
-        } catch (\Throwable $e) {
-            $this->warn(
-                "PAPER TRACK UNAVAILABLE: {$position->symbol} | ".
-                $e->getMessage()
-            );
-
-            return;
-        }
-
-        if (! ($dex['available'] ?? false)) {
-            $this->warn(
-                "PAPER TRACK UNAVAILABLE: {$position->symbol} | no Dex pair"
-            );
-
-            return;
-        }
-
         $marketCap = (float) ($dex['market_cap'] ?? 0);
         $price = $dex['price_usd']
             ?? $dex['price']
@@ -385,6 +443,7 @@ class TrackPaperPositions extends Command
 
         $remainingInvestmentSol =
             $initialInvestmentSol * $remainingFraction;
+        $observationApplied = false;
 
         DB::transaction(function () use (
             $position,
@@ -411,11 +470,19 @@ class TrackPaperPositions extends Command
             $walletCostBasisReleased,
             $walletRealizedPnl,
             $wallets,
+            &$observationApplied,
         ): void {
             $lockedPosition = PaperPosition::query()
                 ->whereKey($position->id)
                 ->lockForUpdate()
                 ->firstOrFail();
+
+            if (
+                $lockedPosition->status !== 'open'
+                || ($lockedPosition->remaining_fraction !== null && (float) $lockedPosition->remaining_fraction <= 0)
+            ) {
+                return;
+            }
 
             /*
              * If this tracker is ever run concurrently, do not apply the
@@ -496,35 +563,57 @@ class TrackPaperPositions extends Command
                 $lockedPosition->getAttributes(),
                 true
             );
+            $observationApplied = true;
         });
+
+        if (! $observationApplied) {
+            $this->warn("PAPER TRACK SKIP: {$position->symbol} | position changed concurrently");
+
+            return;
+        }
 
         $currency = $wallets->currency($position->chain);
 
-        PaperPositionSnapshot::create([
-            'paper_position_id' => $position->id,
-            'snapshot_type' => 'periodic',
-            'market_cap' => $marketCap,
-            'price' => $price,
-            'liquidity' => $liquidity,
-            'return_percent' => $returnPercent,
-            'multiple' => $multiple,
-            'drawdown_from_peak_percent' => $drawdownFromPeak,
-            'raw_data' => [
-                'dex' => $dex,
-                'elapsed_seconds' => $elapsedSeconds,
-                'strategy' => [
-                    'remaining_fraction' => $remainingFraction,
-                    'realized_value_multiple' => $realizedValue,
-                    'strategy_value_multiple' => $strategyValueMultiple,
-                    'strategy_return_percent' => $strategyReturnPercent,
-                    'tp_50_hit' => $tp50Hit,
-                    'tp_2x_hit' => $tp2xHit,
-                    'stop_loss_hit' => $stopLossHit,
-                    'trailing_stop_hit' => $trailingStopHit,
+        $importantSnapshotType = match (true) {
+            ! empty($strategyEvents) => 'exit',
+            $twoXProtectionJustArmed => 'protection_200_armed',
+            $protectionJustArmed => 'protection_100_armed',
+            default => null,
+        };
+        $snapshotInterval = max(1, (int) config('services.trading.paper_tracker_snapshot_seconds', 10));
+        $periodicSnapshotDue = ! PaperPositionSnapshot::query()
+            ->where('paper_position_id', $position->id)
+            ->where('snapshot_type', 'periodic')
+            ->where('recorded_at', '>', now()->subSeconds($snapshotInterval))
+            ->exists();
+
+        if ($importantSnapshotType !== null || $periodicSnapshotDue) {
+            PaperPositionSnapshot::create([
+                'paper_position_id' => $position->id,
+                'snapshot_type' => $importantSnapshotType ?? 'periodic',
+                'market_cap' => $marketCap,
+                'price' => $price,
+                'liquidity' => $liquidity,
+                'return_percent' => $returnPercent,
+                'multiple' => $multiple,
+                'drawdown_from_peak_percent' => $drawdownFromPeak,
+                'raw_data' => [
+                    'dex' => $dex,
+                    'elapsed_seconds' => $elapsedSeconds,
+                    'strategy' => [
+                        'remaining_fraction' => $remainingFraction,
+                        'realized_value_multiple' => $realizedValue,
+                        'strategy_value_multiple' => $strategyValueMultiple,
+                        'strategy_return_percent' => $strategyReturnPercent,
+                        'tp_50_hit' => $tp50Hit,
+                        'tp_2x_hit' => $tp2xHit,
+                        'stop_loss_hit' => $stopLossHit,
+                        'trailing_stop_hit' => $trailingStopHit,
+                    ],
                 ],
-            ],
-            'recorded_at' => now(),
-        ]);
+                'recorded_at' => now(),
+            ]);
+        }
 
         $this->captureTimedSnapshot(
             $position,
@@ -772,6 +861,12 @@ class TrackPaperPositions extends Command
                 );
             }
         }
+    }
+
+    /** @return array{open_positions: int, priced_positions: int, provider_failures: int, provider_requests: int, rate_limited: bool} */
+    public function cycleMetrics(): array
+    {
+        return $this->cycleMetrics;
     }
 
     private function captureTimedSnapshot(

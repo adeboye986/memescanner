@@ -64,6 +64,11 @@ return [
         'paper_trade_size_eth' => env('PAPER_TRADE_SIZE_ETH', 0.10),
         'paper_starting_balance_sol' => env('PAPER_STARTING_BALANCE_SOL', 5),
         'paper_starting_balance_eth' => env('PAPER_STARTING_BALANCE_ETH', 5),
+        'paper_tracker_interval_ms' => env('PAPER_TRACKER_INTERVAL_MS', 1000),
+        'paper_tracker_snapshot_seconds' => env('PAPER_TRACKER_SNAPSHOT_SECONDS', 10),
+        'paper_tracker_lock_seconds' => env('PAPER_TRACKER_LOCK_SECONDS', 300),
+        'paper_tracker_stale_seconds' => env('PAPER_TRACKER_STALE_SECONDS', 5),
+        'paper_tracker_rate_limit_backoff_ms' => env('PAPER_TRACKER_RATE_LIMIT_BACKOFF_MS', 5000),
     ],
 
 ];

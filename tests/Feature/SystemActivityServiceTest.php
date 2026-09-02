@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\SystemActivity;
+use App\Services\PaperTrackerHealthService;
 use App\Services\SystemActivityService;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
@@ -26,7 +27,7 @@ class SystemActivityServiceTest extends TestCase
         $this->assertNull($status['last_tracker_check']);
     }
 
-    public function test_recent_successful_scheduled_tracker_is_active(): void
+    public function test_recent_scheduler_activity_does_not_claim_fast_tracker_is_active(): void
     {
         $this->travelTo('2026-09-01 08:00:00');
         SystemActivity::factory()->create([
@@ -36,18 +37,28 @@ class SystemActivityServiceTest extends TestCase
 
         $status = app(SystemActivityService::class)->systemStatus();
 
-        $this->assertSame('active', $status['status']);
-        $this->assertTrue($status['last_tracker_check']->equalTo(now()->subMinute()));
+        $this->assertSame('unknown', $status['status']);
+        $this->assertNull($status['last_tracker_check']);
     }
 
-    public function test_failed_tracker_is_stale_even_when_recent(): void
+    public function test_recent_fast_cycle_is_active_and_becomes_stale(): void
     {
-        SystemActivity::factory()->create([
-            'status' => 'failed',
-            'finished_at' => now(),
-            'exit_code' => 1,
-        ]);
+        $health = app(PaperTrackerHealthService::class);
+        $health->recordCycle([
+            'open_positions' => 4,
+            'priced_positions' => 3,
+            'provider_failures' => 1,
+            'provider_requests' => 1,
+            'rate_limited' => false,
+        ], 347.2);
 
+        $status = app(SystemActivityService::class)->systemStatus();
+        $this->assertSame('active', $status['status']);
+        $this->assertSame(347.2, $status['cycle_duration_ms']);
+        $this->assertSame(4, $status['open_positions']);
+        $this->assertSame(3, $status['priced_positions']);
+
+        $this->travel(6)->seconds();
         $status = app(SystemActivityService::class)->systemStatus();
 
         $this->assertSame('stale', $status['status']);

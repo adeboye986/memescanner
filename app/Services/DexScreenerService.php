@@ -356,6 +356,74 @@ class DexScreenerService
         ];
     }
 
+    /**
+     * Fetch up to 30 token addresses per documented DexScreener request.
+     *
+     * @param  list<string>  $addresses
+     * @return array<string, array<string, mixed>>
+     */
+    public function analyzeTokens(array $addresses, string $chainId = 'solana'): array
+    {
+        $results = [];
+
+        foreach (array_chunk(array_values(array_unique($addresses)), 30) as $chunk) {
+            $response = Http::connectTimeout(3)
+                ->timeout(8)
+                ->acceptJson()
+                ->get($this->baseUrl.'/tokens/v1/'.$chainId.'/'.implode(',', $chunk));
+
+            if (! $response->successful()) {
+                throw new RuntimeException(
+                    'DexScreener batch API error: '.$response->status().' - '.$response->body()
+                );
+            }
+
+            $pairs = $response->json();
+
+            if (! is_array($pairs)) {
+                throw new RuntimeException('DexScreener batch API returned malformed JSON.');
+            }
+
+            foreach ($chunk as $address) {
+                $eligible = array_values(array_filter(
+                    $pairs,
+                    fn (mixed $pair): bool => is_array($pair)
+                        && $this->addressesEqual((string) data_get($pair, 'baseToken.address'), $address, $chainId),
+                ));
+
+                usort($eligible, fn (array $left, array $right): int => (float) data_get($right, 'liquidity.usd', 0) <=> (float) data_get($left, 'liquidity.usd', 0));
+
+                $pair = $eligible[0] ?? null;
+                $key = $chainId === 'ethereum' ? strtolower($address) : $address;
+
+                $results[$key] = $pair
+                    ? [
+                        'available' => true,
+                        'requested_token_is_base' => true,
+                        'dex' => $pair['dexId'] ?? null,
+                        'pair_address' => $pair['pairAddress'] ?? null,
+                        'requested_token_address' => $address,
+                        'base_token_address' => data_get($pair, 'baseToken.address'),
+                        'base_token_symbol' => data_get($pair, 'baseToken.symbol'),
+                        'quote_token_address' => data_get($pair, 'quoteToken.address'),
+                        'quote_token_symbol' => data_get($pair, 'quoteToken.symbol'),
+                        'price_usd' => isset($pair['priceUsd']) ? (float) $pair['priceUsd'] : null,
+                        'market_cap' => isset($pair['marketCap']) ? (float) $pair['marketCap'] : null,
+                        'fdv' => isset($pair['fdv']) ? (float) $pair['fdv'] : null,
+                        'liquidity_usd' => isset($pair['liquidity']['usd']) ? (float) $pair['liquidity']['usd'] : null,
+                        'raw' => $pair,
+                    ]
+                    : [
+                        'available' => false,
+                        'pair' => null,
+                        'requested_token_is_base' => false,
+                    ];
+            }
+        }
+
+        return $results;
+    }
+
     public function paidOrders(
         string $tokenAddress,
         string $chainId = 'solana'

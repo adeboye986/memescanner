@@ -63,7 +63,7 @@ class RunDashboardCommandTest extends TestCase
         $this->assertSame(3.0, $wallet->fresh()->available_balance_sol);
         $this->assertSame('completed', $activity->status);
         $this->assertStringContainsString('Wallet does NOT match', $activity->output);
-        $this->assertStringContainsString('Run php artisan tokens:paper-reconcile --fix', $activity->output);
+        $this->assertStringContainsString('Run php artisan tokens:paper-reconcile --chain=solana --fix', $activity->output);
     }
 
     /** @param array<string, mixed> $attributes */

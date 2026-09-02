@@ -125,6 +125,18 @@ class MultiChainTradingTest extends TestCase
             'remaining_fraction' => 1,
         ]);
         Http::fake([
+            'api.dexscreener.com/tokens/v1/ethereum/*' => Http::response([[
+                'chainId' => 'ethereum',
+                'dexId' => 'uniswap',
+                'pairAddress' => '0xpair',
+                'baseToken' => ['address' => '0xAbC', 'symbol' => 'ETHMEME'],
+                'quoteToken' => ['address' => '0xquote', 'symbol' => 'WETH'],
+                'priceUsd' => '1',
+                'marketCap' => 10_000,
+                'liquidity' => ['usd' => 5_000],
+                'txns' => ['m5' => ['buys' => 1, 'sells' => 1]],
+                'volume' => ['m5' => 1_000],
+            ]]),
             'api.dexscreener.com/token-pairs/v1/ethereum/*' => Http::response([[
                 'chainId' => 'ethereum',
                 'dexId' => 'uniswap',
@@ -147,5 +159,74 @@ class MultiChainTradingTest extends TestCase
 
         $this->assertSame('closed', $position->fresh()->status);
         Http::assertSent(fn ($request): bool => str_contains($request->url(), '/token-pairs/v1/ethereum/0xabc'));
+    }
+
+    public function test_legacy_shared_wallet_balances_reconcile_by_chain_idempotently(): void
+    {
+        $solanaWallet = PaperWallet::query()->create([
+            'name' => 'default',
+            'chain' => 'solana',
+            'currency' => 'SOL',
+            'starting_balance_sol' => 5,
+            'available_balance_sol' => 4.8015,
+            'invested_balance_sol' => 0.1,
+            'realized_pnl_sol' => 0,
+        ]);
+        $ethereumWallet = PaperWallet::query()->create([
+            'name' => 'default',
+            'chain' => 'ethereum',
+            'currency' => 'ETH',
+            'starting_balance_sol' => 5,
+            'available_balance_sol' => 5,
+            'invested_balance_sol' => 0,
+            'realized_pnl_sol' => 0,
+        ]);
+
+        foreach ([0.08, 0.07, 0.09, 0.0615] as $index => $returned) {
+            PaperPosition::query()->create([
+                'chain' => 'solana',
+                'address' => 'closed-sol-'.$index,
+                'symbol' => 'SOL'.$index,
+                'entry_market_cap' => 10_000,
+                'entry_at' => now()->subHour(),
+                'status' => 'closed',
+                'closed_at' => now(),
+                'initial_investment_sol' => 0.1,
+                'remaining_investment_sol' => 0,
+                'remaining_fraction' => 0,
+                'realized_sol' => $returned,
+                'trade_pnl_sol' => $returned - 0.1,
+            ]);
+        }
+
+        PaperPosition::query()->create([
+            'chain' => 'ethereum',
+            'address' => '0xlnra',
+            'symbol' => 'LNRA',
+            'entry_market_cap' => 10_000,
+            'last_market_cap' => 15_440,
+            'entry_at' => now(),
+            'status' => 'open',
+            'initial_investment_sol' => 0.1,
+            'remaining_investment_sol' => 0.1,
+            'remaining_fraction' => 1,
+            'realized_sol' => 0,
+            'trade_pnl_sol' => 0,
+        ]);
+
+        foreach (['solana', 'ethereum'] as $chain) {
+            $this->artisan('tokens:paper-reconcile', ['--chain' => $chain, '--fix' => true])
+                ->assertSuccessful();
+            $this->artisan('tokens:paper-reconcile', ['--chain' => $chain, '--fix' => true])
+                ->expectsOutputToContain('Wallet is in sync')
+                ->assertSuccessful();
+        }
+
+        $this->assertEqualsWithDelta(4.9015, $solanaWallet->fresh()->available_balance_sol, 0.00000001);
+        $this->assertEqualsWithDelta(0, $solanaWallet->fresh()->invested_balance_sol, 0.00000001);
+        $this->assertEqualsWithDelta(-0.0985, $solanaWallet->fresh()->realized_pnl_sol, 0.00000001);
+        $this->assertEqualsWithDelta(4.9, $ethereumWallet->fresh()->available_balance_sol, 0.00000001);
+        $this->assertEqualsWithDelta(0.1, $ethereumWallet->fresh()->invested_balance_sol, 0.00000001);
+        $this->assertEqualsWithDelta(0, $ethereumWallet->fresh()->realized_pnl_sol, 0.00000001);
     }
 }
