@@ -16,6 +16,8 @@ trait RefreshesPaperTradingDatabase
                 'database/migrations/2026_09_01_063830_create_system_activities_table.php',
                 'database/migrations/2026_09_01_142816_add_chain_to_trading_tables.php',
                 'database/migrations/2026_09_02_124658_add_chain_and_currency_to_paper_wallets_table.php',
+                'database/migrations/2026_09_02_145244_create_paper_strategy_settings_table.php',
+                'database/migrations/2026_09_02_145245_add_strategy_snapshot_to_paper_positions_table.php',
             ],
             '--no-interaction' => true,
         ])->assertSuccessful();

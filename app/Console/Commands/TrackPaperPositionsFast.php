@@ -3,6 +3,8 @@
 namespace App\Console\Commands;
 
 use App\Services\Chains\ChainManager;
+use App\Services\DatabaseLockRetryService;
+use App\Services\PaperStrategyService;
 use App\Services\PaperTrackerHealthService;
 use App\Services\PaperWalletService;
 use App\Services\TelegramService;
@@ -23,10 +25,13 @@ class TrackPaperPositionsFast extends Command
         ChainManager $chains,
         TelegramService $telegram,
         PaperWalletService $wallets,
+        PaperStrategyService $strategies,
+        DatabaseLockRetryService $databaseLocks,
         PaperTrackerHealthService $health,
     ): int {
         $lockSeconds = max(30, (int) config('services.trading.paper_tracker_lock_seconds', 300));
-        $lock = Cache::lock('paper-tracker.fast.process', $lockSeconds);
+        $cache = Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'));
+        $lock = $cache->lock('paper-tracker.fast.process', $lockSeconds);
 
         if (! $lock->get()) {
             $this->error('Another fast paper tracker already owns the process lock.');
@@ -59,13 +64,24 @@ class TrackPaperPositionsFast extends Command
             while (! $shouldStop && ($maxCycles === 0 || $cycles < $maxCycles)) {
                 $cycleStarted = hrtime(true);
                 $tracker->setOutput($this->getOutput());
-                $exitCode = $tracker->trackCycle(
-                    $chains,
-                    $telegram,
-                    $wallets,
-                    max(1, min((int) $this->option('limit'), 200)),
-                    true,
-                );
+                try {
+                    $exitCode = $tracker->trackCycle(
+                        $chains,
+                        $telegram,
+                        $wallets,
+                        $strategies,
+                        $databaseLocks,
+                        max(1, min((int) $this->option('limit'), 200)),
+                        true,
+                    );
+                } catch (\Throwable $exception) {
+                    if (! $databaseLocks->isLockException($exception)) {
+                        throw $exception;
+                    }
+
+                    $this->warn('PAPER TRACK DB LOCK: cycle skipped after retries');
+                    $exitCode = self::SUCCESS;
+                }
                 $durationMilliseconds = (hrtime(true) - $cycleStarted) / 1_000_000;
                 $metrics = $tracker->cycleMetrics();
                 $health->recordCycle($metrics, $durationMilliseconds);

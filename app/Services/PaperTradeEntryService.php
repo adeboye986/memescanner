@@ -13,6 +13,7 @@ class PaperTradeEntryService
     public function __construct(
         private TelegramService $telegram,
         private PaperWalletService $wallets,
+        private PaperStrategyService $strategies,
     ) {}
 
     /** @param array<string, mixed> $data */
@@ -43,6 +44,8 @@ class PaperTradeEntryService
                 throw new RuntimeException("Insufficient paper {$currency} balance.");
             }
 
+            $strategy = $this->strategies->forNewPosition($data['strategy_override'] ?? null);
+
             $position = PaperPosition::query()->create([
                 'chain' => $chain->value,
                 'address' => $address,
@@ -61,6 +64,7 @@ class PaperTradeEntryService
                 'max_drawdown_percent' => 0,
                 'milestones' => [],
                 'meta' => array_merge($data['meta'] ?? [], ['scanner' => $data['scanner'] ?? 'unknown']),
+                'strategy_snapshot' => $strategy,
                 'status' => 'open',
                 'initial_investment_sol' => $tradeSize,
                 'remaining_investment_sol' => $tradeSize,
@@ -92,6 +96,7 @@ class PaperTradeEntryService
             ? sprintf('%+.2f%%', (float) $position->move_since_discovery_percent)
             : 'N/A';
         $currency = $wallet->currencyCode();
+        $strategy = $this->strategies->forPosition($position);
 
         try {
             $this->telegram->send(
@@ -107,7 +112,11 @@ class PaperTradeEntryService
                 '<b>Entry Move:</b> '.$entryMove."\n".
                 '<b>Wallet Available:</b> '.number_format((float) $wallet->available_balance_sol, 4)." {$currency}\n".
                 '<b>Wallet Invested:</b> '.number_format((float) $wallet->invested_balance_sol, 4)." {$currency}\n\n".
-                "<b>EXIT PLAN</b>\nStop Loss: -10% / 0.90x / CLOSE 100%\n+100%: 2.00x / ARM 2.00x FLOOR / HOLD\n+150%: 2.50x / INFORMATIONAL ONLY / HOLD\n+200%: 3.00x / UPGRADE FLOOR TO 3.00x / HOLD\nA full exit occurs only on a later observation at or below the active floor, using the actual observed fill.\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>",
+                "<b>EXIT PLAN</b>\n".
+                'Stop Loss: -'.number_format((float) $strategy['stop_loss_percent'], 2).'% / '.number_format((float) $strategy['stop_loss_multiple'], 2)."x / CLOSE 100%\n".
+                'Protection Level 1: +'.number_format((float) $strategy['protection_level_1_percent'], 2).'% / '.number_format((float) $strategy['protection_level_1_multiple'], 2)."x / ARM FLOOR / HOLD\n".
+                'Protection Level 2: +'.number_format((float) $strategy['protection_level_2_percent'], 2).'% / '.number_format((float) $strategy['protection_level_2_multiple'], 2)."x / UPGRADE FLOOR / HOLD\n".
+                "A full exit occurs only on a later observation at or below the active floor, using the actual observed fill.\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>",
             );
         } catch (Throwable $exception) {
             report($exception);

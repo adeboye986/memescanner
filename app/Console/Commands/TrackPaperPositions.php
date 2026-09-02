@@ -5,6 +5,8 @@ namespace App\Console\Commands;
 use App\Models\PaperPosition;
 use App\Models\PaperPositionSnapshot;
 use App\Services\Chains\ChainManager;
+use App\Services\DatabaseLockRetryService;
+use App\Services\PaperStrategyService;
 use App\Services\PaperWalletService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
@@ -32,16 +34,30 @@ class TrackPaperPositions extends Command
         ChainManager $chains,
         TelegramService $telegram,
         PaperWalletService $wallets,
+        PaperStrategyService $strategies,
+        DatabaseLockRetryService $databaseLocks,
     ): int {
         $limit = max(1, min((int) $this->option('limit'), 200));
 
-        return $this->trackCycle($chains, $telegram, $wallets, $limit);
+        try {
+            return $this->trackCycle($chains, $telegram, $wallets, $strategies, $databaseLocks, $limit);
+        } catch (\Throwable $exception) {
+            if (! $databaseLocks->isLockException($exception)) {
+                throw $exception;
+            }
+
+            $this->warn('PAPER TRACK DB LOCK: cycle skipped after retries');
+
+            return self::SUCCESS;
+        }
     }
 
     public function trackCycle(
         ChainManager $chains,
         TelegramService $telegram,
         PaperWalletService $wallets,
+        PaperStrategyService $strategies,
+        DatabaseLockRetryService $databaseLocks,
         int $limit = 50,
         bool $fastProcess = false,
     ): int {
@@ -54,13 +70,15 @@ class TrackPaperPositions extends Command
             'rate_limited' => false,
         ];
 
-        if (! $fastProcess && Cache::lock('paper-tracker.fast.process')->isLocked()) {
+        $cache = Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'));
+
+        if (! $fastProcess && $cache->lock('paper-tracker.fast.process')->isLocked()) {
             $this->warn('Paper tracker fallback skipped because the fast tracker is active.');
 
             return self::SUCCESS;
         }
 
-        $cycleLock = Cache::lock(
+        $cycleLock = $cache->lock(
             'paper-tracker.position-cycle',
             max(30, (int) config('services.trading.paper_tracker_lock_seconds', 300)),
         );
@@ -73,13 +91,16 @@ class TrackPaperPositions extends Command
 
         try {
 
-            $positions = PaperPosition::query()
-                ->where('status', 'open')
-                ->where('initial_investment_sol', '>', 0)
-                ->orderByRaw('last_checked_at IS NULL DESC')
-                ->orderBy('last_checked_at')
-                ->limit($limit)
-                ->get();
+            $positions = $databaseLocks->run(
+                fn () => PaperPosition::query()
+                    ->where('status', 'open')
+                    ->where('initial_investment_sol', '>', 0)
+                    ->orderByRaw('last_checked_at IS NULL DESC')
+                    ->orderBy('last_checked_at')
+                    ->limit($limit)
+                    ->get(),
+                fn (int $retry, int $maximum): mixed => $this->warn("PAPER TRACK DB LOCK: retry {$retry}/{$maximum}"),
+            );
 
             if ($positions->isEmpty()) {
                 $this->info('No open paper positions.');
@@ -117,8 +138,16 @@ class TrackPaperPositions extends Command
                         continue;
                     }
 
-                    $this->cycleMetrics['priced_positions']++;
-                    $this->trackOne($position, $dex, $telegram, $wallets);
+                    try {
+                        $this->trackOne($position, $dex, $telegram, $wallets, $strategies, $databaseLocks);
+                        $this->cycleMetrics['priced_positions']++;
+                    } catch (\Throwable $exception) {
+                        if (! $databaseLocks->isLockException($exception)) {
+                            throw $exception;
+                        }
+
+                        $this->warn("PAPER TRACK DB LOCK: position {$position->id} skipped after retries");
+                    }
                 }
             }
 
@@ -133,6 +162,8 @@ class TrackPaperPositions extends Command
         array $dex,
         TelegramService $telegram,
         PaperWalletService $wallets,
+        PaperStrategyService $strategies,
+        DatabaseLockRetryService $databaseLocks,
     ): void {
         $marketCap = (float) ($dex['market_cap'] ?? 0);
         $price = $dex['price_usd']
@@ -169,6 +200,14 @@ class TrackPaperPositions extends Command
             $drawdownFromPeak
         );
 
+        $strategy = $strategies->forPosition($position);
+        $stopLossMultiple = $strategy['stop_loss_multiple'];
+        $protectionLevel1Multiple = $strategy['protection_level_1_multiple'];
+        $protectionLevel2Multiple = $strategy['protection_level_2_multiple'];
+        $stopLossPercent = $strategy['stop_loss_percent'];
+        $protectionLevel1Percent = $strategy['protection_level_1_percent'];
+        $protectionLevel2Percent = $strategy['protection_level_2_percent'];
+
         $elapsedSeconds =
             max(0, $position->entry_at->diffInSeconds(now()));
 
@@ -176,9 +215,9 @@ class TrackPaperPositions extends Command
         $newMilestones = [];
 
         $targets = [
-            'profit_1x' => 2.00,
+            'profit_1x' => $protectionLevel1Multiple,
             'protection_1_5x' => 2.50,
-            'profit_2x' => 3.00,
+            'profit_2x' => $protectionLevel2Multiple,
         ];
 
         foreach ($targets as $key => $targetMultiple) {
@@ -199,29 +238,19 @@ class TrackPaperPositions extends Command
         /*
          * PAPER EXIT STRATEGY — FULL-POSITION MODEL
          *
-         * Entry value = 1.00x position value.
-         * +100% profit = 2.00x value.
-         * +150% profit = 2.50x value.
-         * +200% profit = 3.00x value.
-         *
          * Rules:
-         * - Before +100% profit is reached, -10% closes 100% at 0.90x.
-         * - Reaching +100% profit (2.00x) arms a +100% protected floor.
-         * - Between +100% and +200% profit, keep holding.
-         * - If the token falls back to +100% before reaching +200%, close
-         *   100% at the protected 2.00x floor.
-         * - Reaching +200% profit (3.00x) upgrades the protected floor to
-         *   +200%; do not sell just because the target was reached.
-         * - Above +200% profit, keep holding.
-         * - If the token later falls back to +200%, close 100% at 3.00x.
+         * - The configured stop closes the full position before protection.
+         * - Level 1 arms a protected floor and keeps holding.
+         * - Level 2 upgrades that floor and keeps holding.
+         * - A protected exit can only occur on a later observation.
          * - No partial exits.
          * - Protected levels are triggers, not guaranteed fills. Once a
          *   trigger is crossed, paper accounting uses the market multiple
          *   actually observed by the tracker as the simulated fill.
          *
          * Existing booleans are reused for compatibility:
-         * tp_50_hit = +100% profit floor armed
-         * tp_2x_hit = +200% profit floor armed
+         * tp_50_hit = protection level 1 armed
+         * tp_2x_hit = protection level 2 armed
          * trailing_stop_hit = protected-floor exit hit
          */
         $remainingFraction =
@@ -248,7 +277,7 @@ class TrackPaperPositions extends Command
 
         if (
             ! $protectionArmed
-            && $peakMultiple >= 2.00
+            && $peakMultiple >= $protectionLevel1Multiple
             && $remainingFraction > 0
         ) {
             $protectionArmed = true;
@@ -258,7 +287,7 @@ class TrackPaperPositions extends Command
         if (
             $protectionArmed
             && ! $twoXProfitProtectionArmed
-            && $peakMultiple >= 3.00
+            && $peakMultiple >= $protectionLevel2Multiple
             && $remainingFraction > 0
         ) {
             $twoXProfitProtectionArmed = true;
@@ -268,11 +297,11 @@ class TrackPaperPositions extends Command
         if (
             ! $protectionArmed
             && ! $stopLossHit
-            && $multiple <= 0.90
+            && $multiple <= $stopLossMultiple
             && $remainingFraction > 0
         ) {
             $soldFraction = $remainingFraction;
-            $triggerMultiple = 0.90;
+            $triggerMultiple = $stopLossMultiple;
             $fillMultiple = $multiple;
 
             $realizedValue += $soldFraction * $fillMultiple;
@@ -281,7 +310,7 @@ class TrackPaperPositions extends Command
 
             $event = [
                 'type' => 'stop_loss',
-                'label' => 'STOP LOSS -10%',
+                'label' => 'STOP LOSS -'.self::formatPercent($stopLossPercent).'%',
                 'sold_fraction' => $soldFraction,
                 'trigger_multiple' => $triggerMultiple,
                 'trigger_market_cap' => $entryMc * $triggerMultiple,
@@ -297,8 +326,8 @@ class TrackPaperPositions extends Command
         }
 
         $protectedFloorMultiple = match (true) {
-            $twoXProfitProtectionArmed => 3.00,
-            $protectionArmed => 2.00,
+            $twoXProfitProtectionArmed => $protectionLevel2Multiple,
+            $protectionArmed => $protectionLevel1Multiple,
             default => null,
         };
 
@@ -313,8 +342,9 @@ class TrackPaperPositions extends Command
             $soldFraction = $remainingFraction;
             $triggerMultiple = $protectedFloorMultiple;
             $fillMultiple = $multiple;
-            $protectedFloorProfitPercent =
-                (int) round(($protectedFloorMultiple - 1) * 100);
+            $protectedFloorProfitPercent = $twoXProfitProtectionArmed
+                ? $protectionLevel2Percent
+                : $protectionLevel1Percent;
 
             $realizedValue += $soldFraction * $fillMultiple;
             $remainingFraction = 0.0;
@@ -443,130 +473,151 @@ class TrackPaperPositions extends Command
 
         $remainingInvestmentSol =
             $initialInvestmentSol * $remainingFraction;
-        $observationApplied = false;
+        $persistInterval = max(1, (int) config('services.trading.paper_tracker_persist_seconds', 5));
+        $positionWriteDue = $position->last_checked_at === null
+            || $position->last_checked_at->lte(now()->subSeconds($persistInterval));
+        $strategyStateChanged = $protectionArmed !== (bool) ($position->tp_50_hit ?? false)
+            || $twoXProfitProtectionArmed !== (bool) ($position->tp_2x_hit ?? false)
+            || $stopLossHit !== (bool) ($position->stop_loss_hit ?? false)
+            || $protectedExitHit !== (bool) ($position->trailing_stop_hit ?? false);
+        $peakChanged = $peakMc > $oldPeak;
+        $drawdownChanged = $maxDrawdown < (float) ($position->max_drawdown_percent ?? 0);
+        $shouldPersistPosition = $positionWriteDue
+            || $strategyStateChanged
+            || $peakChanged
+            || $drawdownChanged
+            || $newMilestones !== []
+            || $strategyEvents !== [];
+        $observationState = (object) ['applied' => ! $shouldPersistPosition];
 
-        DB::transaction(function () use (
-            $position,
-            $marketCap,
-            $price,
-            $peakMc,
-            $peakMultiple,
-            $maxDrawdown,
-            $milestones,
-            $remainingFraction,
-            $realizedValue,
-            $strategyValueMultiple,
-            $strategyReturnPercent,
-            $tp50Hit,
-            $tp2xHit,
-            $stopLossHit,
-            $trailingStopHit,
-            $exitEvents,
-            $strategyClosed,
-            $positionRealizedSol,
-            $positionTradePnlSol,
-            $remainingInvestmentSol,
-            $walletSolReturned,
-            $walletCostBasisReleased,
-            $walletRealizedPnl,
-            $wallets,
-            &$observationApplied,
-        ): void {
-            $lockedPosition = PaperPosition::query()
-                ->whereKey($position->id)
-                ->lockForUpdate()
-                ->firstOrFail();
+        if ($shouldPersistPosition) {
+            $databaseLocks->run(fn () => DB::transaction(function () use (
+                $position,
+                $marketCap,
+                $price,
+                $peakMc,
+                $peakMultiple,
+                $maxDrawdown,
+                $milestones,
+                $remainingFraction,
+                $realizedValue,
+                $strategyValueMultiple,
+                $strategyReturnPercent,
+                $tp50Hit,
+                $tp2xHit,
+                $stopLossHit,
+                $trailingStopHit,
+                $exitEvents,
+                $strategyClosed,
+                $positionRealizedSol,
+                $positionTradePnlSol,
+                $remainingInvestmentSol,
+                $walletSolReturned,
+                $walletCostBasisReleased,
+                $walletRealizedPnl,
+                $wallets,
+                $observationState,
+            ): void {
+                $lockedPosition = PaperPosition::query()
+                    ->whereKey($position->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-            if (
-                $lockedPosition->status !== 'open'
-                || ($lockedPosition->remaining_fraction !== null && (float) $lockedPosition->remaining_fraction <= 0)
-            ) {
-                return;
-            }
+                if (
+                    $lockedPosition->status !== 'open'
+                    || ($lockedPosition->remaining_fraction !== null && (float) $lockedPosition->remaining_fraction <= 0)
+                ) {
+                    return;
+                }
 
-            /*
-             * If this tracker is ever run concurrently, do not apply the
-             * same exit event to the virtual wallet twice.
-             */
-            $existingExitTypes = collect(
-                $lockedPosition->exit_events ?? []
-            )->pluck('type')->filter()->all();
+                /*
+                 * If this tracker is ever run concurrently, do not apply the
+                 * same exit event to the virtual wallet twice.
+                 */
+                $existingExitTypes = collect(
+                    $lockedPosition->exit_events ?? []
+                )->pluck('type')->filter()->all();
 
-            $newExitTypes = collect($exitEvents)
-                ->pluck('type')
-                ->filter()
-                ->all();
+                $newExitTypes = collect($exitEvents)
+                    ->pluck('type')
+                    ->filter()
+                    ->all();
 
-            $hasAlreadyAppliedExit =
-                count(array_intersect(
-                    $existingExitTypes,
-                    $newExitTypes
-                )) > 0
-                && count($existingExitTypes) >= count($newExitTypes);
+                $hasAlreadyAppliedExit =
+                    count(array_intersect(
+                        $existingExitTypes,
+                        $newExitTypes
+                    )) > 0
+                    && count($existingExitTypes) >= count($newExitTypes);
 
-            if (
-                $walletSolReturned > 0
-                && ! $hasAlreadyAppliedExit
-            ) {
-                $wallet = $wallets->lockedDefault($lockedPosition->chain);
+                if ($walletSolReturned > 0 && $hasAlreadyAppliedExit) {
+                    return;
+                }
 
-                $wallet->available_balance_sol =
-                    (float) $wallet->available_balance_sol
-                    + $walletSolReturned;
+                if (
+                    $walletSolReturned > 0
+                    && ! $hasAlreadyAppliedExit
+                ) {
+                    $wallet = $wallets->lockedDefault($lockedPosition->chain);
 
-                $wallet->invested_balance_sol =
-                    max(
-                        0.0,
-                        (float) $wallet->invested_balance_sol
-                        - $walletCostBasisReleased
-                    );
+                    $wallet->available_balance_sol =
+                        (float) $wallet->available_balance_sol
+                        + $walletSolReturned;
 
-                $wallet->realized_pnl_sol =
-                    (float) $wallet->realized_pnl_sol
-                    + $walletRealizedPnl;
+                    $wallet->invested_balance_sol =
+                        max(
+                            0.0,
+                            (float) $wallet->invested_balance_sol
+                            - $walletCostBasisReleased
+                        );
 
-                $wallet->save();
-            }
+                    $wallet->realized_pnl_sol =
+                        (float) $wallet->realized_pnl_sol
+                        + $walletRealizedPnl;
 
-            $lockedPosition->update([
-                'last_market_cap' => $marketCap,
-                'last_price' => $price,
-                'last_checked_at' => now(),
-                'peak_market_cap' => $peakMc,
-                'peak_multiple' => $peakMultiple,
-                'max_drawdown_percent' => $maxDrawdown,
-                'milestones' => $milestones,
+                    $wallet->save();
+                }
 
-                'remaining_fraction' => $remainingFraction,
-                'realized_value_multiple' => $realizedValue,
-                'strategy_value_multiple' => $strategyValueMultiple,
-                'strategy_return_percent' => $strategyReturnPercent,
+                $lockedPosition->update([
+                    'last_market_cap' => $marketCap,
+                    'last_price' => $price,
+                    'last_checked_at' => now(),
+                    'peak_market_cap' => $peakMc,
+                    'peak_multiple' => $peakMultiple,
+                    'max_drawdown_percent' => $maxDrawdown,
+                    'milestones' => $milestones,
 
-                'tp_50_hit' => $tp50Hit,
-                'tp_2x_hit' => $tp2xHit,
-                'stop_loss_hit' => $stopLossHit,
-                'trailing_stop_hit' => $trailingStopHit,
-                'exit_events' => $exitEvents,
+                    'remaining_fraction' => $remainingFraction,
+                    'realized_value_multiple' => $realizedValue,
+                    'strategy_value_multiple' => $strategyValueMultiple,
+                    'strategy_return_percent' => $strategyReturnPercent,
 
-                'remaining_investment_sol' => $remainingInvestmentSol,
+                    'tp_50_hit' => $tp50Hit,
+                    'tp_2x_hit' => $tp2xHit,
+                    'stop_loss_hit' => $stopLossHit,
+                    'trailing_stop_hit' => $trailingStopHit,
+                    'exit_events' => $exitEvents,
 
-                'realized_sol' => $positionRealizedSol,
+                    'remaining_investment_sol' => $remainingInvestmentSol,
 
-                'trade_pnl_sol' => $positionTradePnlSol,
+                    'realized_sol' => $positionRealizedSol,
 
-                'status' => $strategyClosed ? 'closed' : 'open',
+                    'trade_pnl_sol' => $positionTradePnlSol,
 
-                'closed_at' => $strategyClosed ? now() : null,
-            ]);
+                    'status' => $strategyClosed ? 'closed' : 'open',
 
-            $position->setRawAttributes(
-                $lockedPosition->getAttributes(),
-                true
-            );
-            $observationApplied = true;
-        });
+                    'closed_at' => $strategyClosed ? now() : null,
+                ]);
 
-        if (! $observationApplied) {
+                $position->setRawAttributes(
+                    $lockedPosition->getAttributes(),
+                    true
+                );
+                $observationState->applied = true;
+            }), fn (int $retry, int $maximum): mixed => $this->warn("PAPER TRACK DB LOCK: retry {$retry}/{$maximum}"));
+        }
+
+        if (! $observationState->applied) {
             $this->warn("PAPER TRACK SKIP: {$position->symbol} | position changed concurrently");
 
             return;
@@ -574,88 +625,97 @@ class TrackPaperPositions extends Command
 
         $currency = $wallets->currency($position->chain);
 
-        $importantSnapshotType = match (true) {
-            ! empty($strategyEvents) => 'exit',
-            $twoXProtectionJustArmed => 'protection_200_armed',
-            $protectionJustArmed => 'protection_100_armed',
-            default => null,
-        };
-        $snapshotInterval = max(1, (int) config('services.trading.paper_tracker_snapshot_seconds', 10));
-        $periodicSnapshotDue = ! PaperPositionSnapshot::query()
-            ->where('paper_position_id', $position->id)
-            ->where('snapshot_type', 'periodic')
-            ->where('recorded_at', '>', now()->subSeconds($snapshotInterval))
-            ->exists();
+        try {
+            $importantSnapshotType = match (true) {
+                ! empty($strategyEvents) => 'exit',
+                $twoXProtectionJustArmed => 'protection_200_armed',
+                $protectionJustArmed => 'protection_100_armed',
+                default => null,
+            };
+            $snapshotInterval = max(1, (int) config('services.trading.paper_tracker_snapshot_seconds', 10));
+            $periodicSnapshotDue = ! PaperPositionSnapshot::query()
+                ->where('paper_position_id', $position->id)
+                ->where('snapshot_type', 'periodic')
+                ->where('recorded_at', '>', now()->subSeconds($snapshotInterval))
+                ->exists();
 
-        if ($importantSnapshotType !== null || $periodicSnapshotDue) {
-            PaperPositionSnapshot::create([
-                'paper_position_id' => $position->id,
-                'snapshot_type' => $importantSnapshotType ?? 'periodic',
-                'market_cap' => $marketCap,
-                'price' => $price,
-                'liquidity' => $liquidity,
-                'return_percent' => $returnPercent,
-                'multiple' => $multiple,
-                'drawdown_from_peak_percent' => $drawdownFromPeak,
-                'raw_data' => [
-                    'dex' => $dex,
-                    'elapsed_seconds' => $elapsedSeconds,
-                    'strategy' => [
-                        'remaining_fraction' => $remainingFraction,
-                        'realized_value_multiple' => $realizedValue,
-                        'strategy_value_multiple' => $strategyValueMultiple,
-                        'strategy_return_percent' => $strategyReturnPercent,
-                        'tp_50_hit' => $tp50Hit,
-                        'tp_2x_hit' => $tp2xHit,
-                        'stop_loss_hit' => $stopLossHit,
-                        'trailing_stop_hit' => $trailingStopHit,
+            if ($importantSnapshotType !== null || $periodicSnapshotDue) {
+                PaperPositionSnapshot::create([
+                    'paper_position_id' => $position->id,
+                    'snapshot_type' => $importantSnapshotType ?? 'periodic',
+                    'market_cap' => $marketCap,
+                    'price' => $price,
+                    'liquidity' => $liquidity,
+                    'return_percent' => $returnPercent,
+                    'multiple' => $multiple,
+                    'drawdown_from_peak_percent' => $drawdownFromPeak,
+                    'raw_data' => [
+                        'dex' => $dex,
+                        'elapsed_seconds' => $elapsedSeconds,
+                        'strategy' => [
+                            'configuration' => $strategy,
+                            'remaining_fraction' => $remainingFraction,
+                            'realized_value_multiple' => $realizedValue,
+                            'strategy_value_multiple' => $strategyValueMultiple,
+                            'strategy_return_percent' => $strategyReturnPercent,
+                            'tp_50_hit' => $tp50Hit,
+                            'tp_2x_hit' => $tp2xHit,
+                            'stop_loss_hit' => $stopLossHit,
+                            'trailing_stop_hit' => $trailingStopHit,
+                        ],
                     ],
-                ],
-                'recorded_at' => now(),
-            ]);
+                    'recorded_at' => now(),
+                ]);
+            }
+
+            $this->captureTimedSnapshot(
+                $position,
+                '1m',
+                60,
+                $elapsedSeconds,
+                $marketCap,
+                $price,
+                $liquidity,
+                $returnPercent,
+                $multiple,
+                $drawdownFromPeak,
+                $dex
+            );
+
+            $this->captureTimedSnapshot(
+                $position,
+                '5m',
+                300,
+                $elapsedSeconds,
+                $marketCap,
+                $price,
+                $liquidity,
+                $returnPercent,
+                $multiple,
+                $drawdownFromPeak,
+                $dex
+            );
+
+            $this->captureTimedSnapshot(
+                $position,
+                '10m',
+                600,
+                $elapsedSeconds,
+                $marketCap,
+                $price,
+                $liquidity,
+                $returnPercent,
+                $multiple,
+                $drawdownFromPeak,
+                $dex
+            );
+        } catch (\Throwable $exception) {
+            if (! $databaseLocks->isLockException($exception)) {
+                throw $exception;
+            }
+
+            $this->warn("PAPER TRACK DB LOCK: snapshots for position {$position->id} skipped");
         }
-
-        $this->captureTimedSnapshot(
-            $position,
-            '1m',
-            60,
-            $elapsedSeconds,
-            $marketCap,
-            $price,
-            $liquidity,
-            $returnPercent,
-            $multiple,
-            $drawdownFromPeak,
-            $dex
-        );
-
-        $this->captureTimedSnapshot(
-            $position,
-            '5m',
-            300,
-            $elapsedSeconds,
-            $marketCap,
-            $price,
-            $liquidity,
-            $returnPercent,
-            $multiple,
-            $drawdownFromPeak,
-            $dex
-        );
-
-        $this->captureTimedSnapshot(
-            $position,
-            '10m',
-            600,
-            $elapsedSeconds,
-            $marketCap,
-            $price,
-            $liquidity,
-            $returnPercent,
-            $multiple,
-            $drawdownFromPeak,
-            $dex
-        );
 
         $this->info(
             sprintf(
@@ -676,11 +736,11 @@ class TrackPaperPositions extends Command
         if ($protectionJustArmed && $remainingFraction > 0) {
             try {
                 $telegram->send(
-                    "🛡️ <b>+100% PROFIT PROTECTED</b>\n\n".
+                    '🛡️ <b>+'.self::formatPercent($protectionLevel1Percent)."% PROFIT PROTECTED</b>\n\n".
                     "Token: <b>{$position->symbol}</b>\n".
                     'Chain: <b>'.$position->chain->label()."</b>\n".
                     'Current: <b>'.number_format($multiple, 2)."x</b>\n".
-                    "Protected floor: <b>2.00x</b>\n".
+                    'Protected floor: <b>'.number_format($protectionLevel1Multiple, 2)."x</b>\n".
                     "Position remains <b>OPEN</b>.\n".
                     "Full exit will trigger on a later tracker observation at or below the protected floor.\n\n".
                     "📍 <code>{$position->address}</code>\n\n".
@@ -696,11 +756,11 @@ class TrackPaperPositions extends Command
         if ($twoXProtectionJustArmed && $remainingFraction > 0) {
             try {
                 $telegram->send(
-                    "🛡️ <b>+200% PROFIT PROTECTED</b>\n\n".
+                    '🛡️ <b>+'.self::formatPercent($protectionLevel2Percent)."% PROFIT PROTECTED</b>\n\n".
                     "Token: <b>{$position->symbol}</b>\n".
                     'Chain: <b>'.$position->chain->label()."</b>\n".
                     'Current: <b>'.number_format($multiple, 2)."x</b>\n".
-                    "Protected floor: <b>3.00x</b>\n".
+                    'Protected floor: <b>'.number_format($protectionLevel2Multiple, 2)."x</b>\n".
                     "Position remains <b>OPEN</b>.\n".
                     "Full exit will trigger on a later tracker observation at or below the protected floor.\n\n".
                     "📍 <code>{$position->address}</code>\n\n".
@@ -727,12 +787,12 @@ class TrackPaperPositions extends Command
                 };
 
                 $protectedFloorProfitPercent =
-                    (int) ($event['protected_floor_profit_percent'] ?? 0);
+                    (float) ($event['protected_floor_profit_percent'] ?? 0);
 
                 $actionText = match ($eventType) {
-                    'stop_loss' => '🛑 <b>-10% STOP LOSS TRIGGERED</b>',
+                    'stop_loss' => '🛑 <b>-'.self::formatPercent($stopLossPercent).'% STOP LOSS TRIGGERED</b>',
                     'full_target_2x_profit' => '✅ <b>+200% PROFIT TARGET HIT</b>',
-                    'protected_floor_exit' => "🛡️ <b>PROTECTED +{$protectedFloorProfitPercent}% PROFIT FLOOR TRIGGERED</b>",
+                    'protected_floor_exit' => '🛡️ <b>PROTECTED +'.self::formatPercent($protectedFloorProfitPercent).'% PROFIT FLOOR TRIGGERED</b>',
                     default => '✅ <b>EXIT EXECUTED</b>',
                 };
 
@@ -826,9 +886,9 @@ class TrackPaperPositions extends Command
 
         foreach ($newMilestones as $key => $targetMultiple) {
             $label = match ($key) {
-                'profit_1x' => '1X PROFIT (+100%)',
+                'profit_1x' => 'PROTECTION LEVEL 1 (+'.self::formatPercent($protectionLevel1Percent).'%)',
                 'protection_1_5x' => '1.50X PROFIT (+150%)',
-                'profit_2x' => '2X PROFIT (+200%)',
+                'profit_2x' => 'PROTECTION LEVEL 2 (+'.self::formatPercent($protectionLevel2Percent).'%)',
                 default => strtoupper($key),
             };
 
@@ -867,6 +927,11 @@ class TrackPaperPositions extends Command
     public function cycleMetrics(): array
     {
         return $this->cycleMetrics;
+    }
+
+    private static function formatPercent(float $percent): string
+    {
+        return rtrim(rtrim(number_format($percent, 2, '.', ''), '0'), '.');
     }
 
     private function captureTimedSnapshot(

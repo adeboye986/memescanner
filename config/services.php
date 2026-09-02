@@ -69,6 +69,10 @@ return [
         'paper_tracker_lock_seconds' => env('PAPER_TRACKER_LOCK_SECONDS', 300),
         'paper_tracker_stale_seconds' => env('PAPER_TRACKER_STALE_SECONDS', 5),
         'paper_tracker_rate_limit_backoff_ms' => env('PAPER_TRACKER_RATE_LIMIT_BACKOFF_MS', 5000),
+        'paper_tracker_cache_store' => env('PAPER_TRACKER_CACHE_STORE', 'file'),
+        'paper_tracker_persist_seconds' => env('PAPER_TRACKER_PERSIST_SECONDS', 5),
+        'sqlite_lock_retries' => env('SQLITE_LOCK_RETRIES', 3),
+        'sqlite_lock_backoff_ms' => env('SQLITE_LOCK_BACKOFF_MS', 50),
     ],
 
 ];

@@ -4,6 +4,7 @@ use App\Models\SystemActivity;
 use App\Services\SystemActivityService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Stringable;
 
@@ -16,6 +17,9 @@ $paperTrackActivity = null;
 Schedule::command('tokens:paper-track')
     ->everyTenSeconds()
     ->withoutOverlapping()
+    ->skip(fn (): bool => Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'))
+        ->lock('paper-tracker.fast.process')
+        ->isLocked())
     ->before(function () use (&$paperTrackActivity): void {
         $activities = app(SystemActivityService::class);
         $paperTrackActivity = $activities->createScheduled('paper-track');

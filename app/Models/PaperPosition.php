@@ -14,6 +14,7 @@ class PaperPosition extends Model
         'chain' => Chain::class,
         'milestones' => 'array',
         'meta' => 'array',
+        'strategy_snapshot' => 'array',
         'entry_at' => 'datetime',
         'last_checked_at' => 'datetime',
         'closed_at' => 'datetime',

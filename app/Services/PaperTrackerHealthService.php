@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 
@@ -14,7 +15,7 @@ class PaperTrackerHealthService
      */
     public function recordCycle(array $metrics, float $durationMilliseconds): void
     {
-        Cache::put(self::CACHE_KEY, [
+        $this->cache()->put(self::CACHE_KEY, [
             'last_successful_cycle' => now()->toIso8601String(),
             'last_successful_market_observation' => $metrics['priced_positions'] > 0
                 ? now()->toIso8601String()
@@ -27,7 +28,7 @@ class PaperTrackerHealthService
     /** @return array<string, mixed>|null */
     public function raw(): ?array
     {
-        $health = Cache::get(self::CACHE_KEY);
+        $health = $this->cache()->get(self::CACHE_KEY);
 
         return is_array($health) ? $health : null;
     }
@@ -58,5 +59,10 @@ class PaperTrackerHealthService
             'provider_requests' => $health['provider_requests'] ?? null,
             'rate_limited' => $health['rate_limited'] ?? false,
         ];
+    }
+
+    private function cache(): Repository
+    {
+        return Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'));
     }
 }

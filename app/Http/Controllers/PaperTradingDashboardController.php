@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Chain;
 use App\Models\PaperPosition;
 use App\Services\DashboardCommandRegistry;
+use App\Services\PaperStrategyService;
 use App\Services\PaperWalletService;
 use App\Services\SystemActivityService;
 use Illuminate\Contracts\View\View;
@@ -15,6 +16,7 @@ class PaperTradingDashboardController extends Controller
         DashboardCommandRegistry $commands,
         SystemActivityService $activities,
         PaperWalletService $wallets,
+        PaperStrategyService $strategies,
     ): View {
         $paperWallets = collect(Chain::cases())
             ->mapWithKeys(fn (Chain $chain): array => [$chain->value => $wallets->default($chain)]);
@@ -23,7 +25,7 @@ class PaperTradingDashboardController extends Controller
             ->where('initial_investment_sol', '>', 0)
             ->orderBy('entry_at')
             ->get()
-            ->map(fn (PaperPosition $position): array => $this->presentPosition($position));
+            ->map(fn (PaperPosition $position): array => $this->presentPosition($position, $strategies));
 
         return view('dashboard', [
             'wallets' => $paperWallets,
@@ -33,14 +35,16 @@ class PaperTradingDashboardController extends Controller
             'recentActivities' => $activities->recentData(),
             'runningActions' => $activities->runningActions(),
             'systemStatus' => $activities->systemStatus(),
+            'paperStrategy' => $strategies->forNewPosition(),
         ]);
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function presentPosition(PaperPosition $position): array
+    private function presentPosition(PaperPosition $position, PaperStrategyService $strategies): array
     {
+        $strategy = $strategies->forPosition($position);
         $entryMarketCap = (float) $position->entry_market_cap;
         $currentMarketCap = (float) ($position->last_market_cap ?: $entryMarketCap);
         $currentMultiple = $entryMarketCap > 0 ? $currentMarketCap / $entryMarketCap : 1.0;
@@ -56,13 +60,13 @@ class PaperTradingDashboardController extends Controller
         $peakMarketCap = max($entryMarketCap, (float) ($position->peak_market_cap ?? 0));
         $currentValue = $remainingCostBasis * $currentMultiple;
         $protectionState = match (true) {
-            (bool) $position->tp_2x_hit => '+200% PROFIT PROTECTED — HOLDING',
-            (bool) $position->tp_50_hit => '+100% PROFIT PROTECTED — HOLDING',
-            default => 'UNPROTECTED — STOP -10%',
+            (bool) $position->tp_2x_hit => '+'.$this->formatPercent($strategy['protection_level_2_percent']).'% PROFIT PROTECTED — HOLDING',
+            (bool) $position->tp_50_hit => '+'.$this->formatPercent($strategy['protection_level_1_percent']).'% PROFIT PROTECTED — HOLDING',
+            default => 'UNPROTECTED — STOP -'.$this->formatPercent($strategy['stop_loss_percent']).'%',
         };
         $protectedFloorMultiple = match (true) {
-            (bool) $position->tp_2x_hit => 3.0,
-            (bool) $position->tp_50_hit => 2.0,
+            (bool) $position->tp_2x_hit => $strategy['protection_level_2_multiple'],
+            (bool) $position->tp_50_hit => $strategy['protection_level_1_multiple'],
             default => null,
         };
 
@@ -80,12 +84,17 @@ class PaperTradingDashboardController extends Controller
             'protection_state' => $protectionState,
             'protected_floor_multiple' => $protectedFloorMultiple,
             'currency' => $position->chain === Chain::Ethereum ? 'ETH' : 'SOL',
+            'strategy' => $strategy,
             'levels' => [
-                'stop_loss' => $entryMarketCap * 0.90,
-                'profit_1x' => $entryMarketCap * 2,
-                'informational_1_5x' => $entryMarketCap * 2.5,
-                'profit_2x' => $entryMarketCap * 3,
+                'stop_loss' => $entryMarketCap * $strategy['stop_loss_multiple'],
+                'profit_1x' => $entryMarketCap * $strategy['protection_level_1_multiple'],
+                'profit_2x' => $entryMarketCap * $strategy['protection_level_2_multiple'],
             ],
         ];
+    }
+
+    private function formatPercent(float $percent): string
+    {
+        return rtrim(rtrim(number_format($percent, 2, '.', ''), '0'), '.');
     }
 }
