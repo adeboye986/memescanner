@@ -30,6 +30,8 @@ class UpdateApplicationSettingsRequest extends FormRequest
             'telegram_enabled' => ['nullable', 'boolean'],
             'telegram_bot_token' => ['nullable', 'string', 'max:500'],
             'telegram_chat_id' => ['nullable', 'string', 'max:255'],
+            'telegram_bot_username' => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_]+$/'],
+            'telegram_webhook_secret' => ['nullable', 'string', 'min:16', 'max:255'],
             'birdeye_api_key' => ['nullable', 'string', 'max:500'],
             'solana_rpc_url' => ['nullable', 'url:http,https', 'max:1000'],
             'tracker_snapshot_seconds' => ['required', 'integer', 'min:1', 'max:3600'],

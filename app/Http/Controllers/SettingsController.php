@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\SettingAudit;
+use App\Models\TelegramIdentity;
 use App\Services\ApplicationSettingsService;
 use App\Services\IntegrationStatusService;
 use App\Services\PaperStrategyService;
@@ -17,6 +18,7 @@ class SettingsController extends Controller
             'strategy' => $strategies->forNewPosition(),
             'audits' => SettingAudit::query()->latest()->limit(12)->get(),
             'integrations' => $integrations->all(),
+            'telegramIdentity' => TelegramIdentity::query()->where('user_id', request()->user()->id)->first(),
         ]);
     }
 }

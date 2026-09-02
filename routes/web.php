@@ -10,6 +10,8 @@ use App\Http\Controllers\PaperStrategySettingController;
 use App\Http\Controllers\PaperTradingDashboardController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\SystemActivityController;
+use App\Http\Controllers\TelegramAccessController;
+use App\Http\Controllers\TelegramWebhookController;
 use App\Http\Controllers\TestIntegrationController;
 use App\Http\Controllers\TradeHistoryController;
 use App\Http\Controllers\UpdateSettingsController;
@@ -30,6 +32,7 @@ Route::post('/dashboard/actions/{action}', DashboardActionController::class)
 Route::get('/dashboard/activity', SystemActivityController::class)
     ->name('dashboard.activity');
 Route::get('/trades', TradeHistoryController::class)->name('trades.index');
+Route::post('/telegram/webhook', TelegramWebhookController::class)->middleware('throttle:telegram-webhook')->name('telegram.webhook');
 
 Route::middleware('guest')->group(function (): void {
     Route::get('/login', [LoginController::class, 'show'])->name('login');
@@ -41,6 +44,8 @@ Route::middleware(['auth', 'can:manage-settings'])->prefix('settings')->name('se
     Route::get('/', SettingsController::class)->name('index');
     Route::put('/', UpdateSettingsController::class)->name('update');
     Route::post('/test/{integration}', TestIntegrationController::class)->name('test');
+    Route::post('/telegram/link', [TelegramAccessController::class, 'store'])->name('telegram.link');
+    Route::delete('/telegram/link', [TelegramAccessController::class, 'destroy'])->name('telegram.unlink');
 });
 
 Route::middleware(['auth', 'can:manage-settings'])->prefix('opportunities')->name('opportunities.')->group(function (): void {

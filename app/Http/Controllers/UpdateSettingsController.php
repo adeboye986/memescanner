@@ -22,6 +22,8 @@ class UpdateSettingsController extends Controller
             'telegram.enabled' => $request->boolean('telegram_enabled'),
             'telegram.bot_token' => $validated['telegram_bot_token'] ?? null,
             'telegram.chat_id' => $validated['telegram_chat_id'] ?? null,
+            'telegram.bot_username' => $validated['telegram_bot_username'] ?? null,
+            'telegram.webhook_secret' => $validated['telegram_webhook_secret'] ?? null,
             'market_data.birdeye_api_key' => $validated['birdeye_api_key'] ?? null,
             'blockchain.solana_rpc_url' => $validated['solana_rpc_url'] ?? null,
             'tracker.snapshot_seconds' => $validated['tracker_snapshot_seconds'],
