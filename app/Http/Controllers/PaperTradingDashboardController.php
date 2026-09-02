@@ -2,9 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Chain;
 use App\Models\PaperPosition;
-use App\Models\PaperWallet;
 use App\Services\DashboardCommandRegistry;
+use App\Services\PaperWalletService;
 use App\Services\SystemActivityService;
 use Illuminate\Contracts\View\View;
 
@@ -13,8 +14,10 @@ class PaperTradingDashboardController extends Controller
     public function __invoke(
         DashboardCommandRegistry $commands,
         SystemActivityService $activities,
+        PaperWalletService $wallets,
     ): View {
-        $wallet = PaperWallet::query()->where('name', 'default')->firstOrFail();
+        $paperWallets = collect(Chain::cases())
+            ->mapWithKeys(fn (Chain $chain): array => [$chain->value => $wallets->default($chain)]);
         $positions = PaperPosition::query()
             ->where('status', 'open')
             ->where('initial_investment_sol', '>', 0)
@@ -23,7 +26,7 @@ class PaperTradingDashboardController extends Controller
             ->map(fn (PaperPosition $position): array => $this->presentPosition($position));
 
         return view('dashboard', [
-            'wallet' => $wallet,
+            'wallets' => $paperWallets,
             'positions' => $positions,
             'dashboardActions' => $commands->all(),
             'currentActivity' => $activities->currentManualData(),
@@ -52,6 +55,16 @@ class PaperTradingDashboardController extends Controller
 
         $peakMarketCap = max($entryMarketCap, (float) ($position->peak_market_cap ?? 0));
         $currentValue = $remainingCostBasis * $currentMultiple;
+        $protectionState = match (true) {
+            (bool) $position->tp_2x_hit => '+200% PROFIT PROTECTED — HOLDING',
+            (bool) $position->tp_50_hit => '+100% PROFIT PROTECTED — HOLDING',
+            default => 'UNPROTECTED — STOP -10%',
+        };
+        $protectedFloorMultiple = match (true) {
+            (bool) $position->tp_2x_hit => 3.0,
+            (bool) $position->tp_50_hit => 2.0,
+            default => null,
+        };
 
         return [
             'model' => $position,
@@ -63,11 +76,14 @@ class PaperTradingDashboardController extends Controller
             'remaining_fraction' => $remainingFraction,
             'current_value' => $currentValue,
             'unrealized_pnl' => $currentValue - $remainingCostBasis,
-            'protection_armed' => (bool) ($position->tp_50_hit ?? false) || ($entryMarketCap > 0 && $peakMarketCap / $entryMarketCap >= 2.5),
+            'protection_armed' => (bool) $position->tp_50_hit,
+            'protection_state' => $protectionState,
+            'protected_floor_multiple' => $protectedFloorMultiple,
+            'currency' => $position->chain === Chain::Ethereum ? 'ETH' : 'SOL',
             'levels' => [
                 'stop_loss' => $entryMarketCap * 0.90,
                 'profit_1x' => $entryMarketCap * 2,
-                'protection' => $entryMarketCap * 2.5,
+                'informational_1_5x' => $entryMarketCap * 2.5,
                 'profit_2x' => $entryMarketCap * 3,
             ],
         ];

@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Chain;
 use App\Models\PaperPosition;
 use App\Services\PaperTradeExitService;
 use Illuminate\Console\Command;
@@ -56,11 +57,12 @@ class ClosePaperPosition extends Command
 
         /** @var PaperPosition $position */
         $position = $matches->first();
+        $currency = $position->chain === Chain::Ethereum ? 'ETH' : 'SOL';
 
         $this->table(['Metric', 'Value'], [
             ['Position ID', $position->id],
             ['Token', $position->symbol],
-            ['Initial Investment', number_format((float) $position->initial_investment_sol, 4).' SOL'],
+            ['Initial Investment', number_format((float) $position->initial_investment_sol, 4)." {$currency}"],
             ['Remaining', number_format($this->remainingFraction($position) * 100, 0).'%'],
             ['Entry MC', '$'.number_format((float) $position->entry_market_cap, 2)],
             ['Address', $position->address],
@@ -90,11 +92,11 @@ class ClosePaperPosition extends Command
             ['Closed At MC', '$'.number_format($result['market_cap'], 2)],
             ['Fill Multiple', number_format($result['multiple'], 2).'x'],
             ['Sold', number_format((float) $event['sold_fraction'] * 100, 0).'%'],
-            ['SOL Returned', number_format((float) $event['sol_returned'], 4).' SOL'],
-            ['P/L This Exit', sprintf('%+.4f SOL', (float) $event['realized_pnl_sol'])],
-            ['Total Trade P/L', sprintf('%+.4f SOL', (float) $closed->trade_pnl_sol)],
+            ["{$currency} Returned", number_format((float) $event['sol_returned'], 4)." {$currency}"],
+            ['P/L This Exit', sprintf('%+.4f %s', (float) $event['realized_pnl_sol'], $currency)],
+            ['Total Trade P/L', sprintf('%+.4f %s', (float) $closed->trade_pnl_sol, $currency)],
             ['Strategy Return', sprintf('%+.2f%%', (float) $closed->strategy_return_percent)],
-            ['Wallet Available', number_format((float) $wallet->available_balance_sol, 4).' SOL'],
+            ['Wallet Available', number_format((float) $wallet->available_balance_sol, 4)." {$currency}"],
         ]);
 
         if ($result['notification_error'] !== null) {

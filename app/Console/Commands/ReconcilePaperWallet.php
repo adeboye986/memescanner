@@ -2,56 +2,63 @@
 
 namespace App\Console\Commands;
 
+use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
+use App\Services\PaperWalletService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 class ReconcilePaperWallet extends Command
 {
     protected $signature = 'tokens:paper-reconcile
+        {--chain=solana : Paper wallet chain (solana or ethereum)}
         {--fix : Rewrite the wallet balances from the paper-position ledger}';
 
-    protected $description = 'Check and optionally reconcile the virtual SOL wallet against paper positions';
+    protected $description = 'Check and optionally reconcile one chain paper wallet against its positions';
 
-    public function handle(): int
+    public function handle(PaperWalletService $wallets): int
     {
-        $wallet = PaperWallet::query()
-            ->where('name', 'default')
-            ->first();
-
-        if (!$wallet) {
-            $this->error('Default paper wallet not found.');
+        try {
+            $chain = Chain::fromInput($this->option('chain'));
+        } catch (\InvalidArgumentException $exception) {
+            $this->error($exception->getMessage());
 
             return self::FAILURE;
         }
 
+        $wallet = $wallets->query($chain)->first();
+
+        if (! $wallet) {
+            $this->error("Default {$chain->label()} paper wallet not found.");
+
+            return self::FAILURE;
+        }
+
+        $currency = $wallet->currencyCode();
         $positions = PaperPosition::query()
+            ->where('chain', $chain->value)
             ->where('initial_investment_sol', '>', 0)
             ->get();
 
         $startingBalance = (float) $wallet->starting_balance_sol;
 
         $totalFundedBuys = (float) $positions->sum(
-            fn (PaperPosition $position) =>
-                (float) $position->initial_investment_sol
+            fn (PaperPosition $position) => (float) $position->initial_investment_sol
         );
 
         $totalSolReturned = (float) $positions->sum(
-            fn (PaperPosition $position) =>
-                (float) $position->realized_sol
+            fn (PaperPosition $position) => (float) $position->realized_sol
         );
 
         $expectedInvested = (float) $positions
             ->where('status', 'open')
             ->sum(
-                fn (PaperPosition $position) =>
-                    (float) $position->remaining_investment_sol
+                fn (PaperPosition $position) => (float) $position->remaining_investment_sol
             );
 
         $expectedRealizedPnl = (float) $positions->sum(
-            fn (PaperPosition $position) =>
-                (float) $position->trade_pnl_sol
+            fn (PaperPosition $position) => (float) $position->trade_pnl_sol
         );
 
         $expectedAvailable =
@@ -67,26 +74,26 @@ class ReconcilePaperWallet extends Command
         $investedDiff = $actualInvested - $expectedInvested;
         $realizedPnlDiff = $actualRealizedPnl - $expectedRealizedPnl;
 
-        $this->info('PAPER WALLET RECONCILIATION');
+        $this->info(strtoupper($chain->label()).' PAPER WALLET RECONCILIATION');
         $this->newLine();
 
         $this->table(
             ['Metric', 'Actual', 'Expected', 'Difference'],
             [
                 [
-                    'Available SOL',
+                    "Available {$currency}",
                     number_format($actualAvailable, 8),
                     number_format($expectedAvailable, 8),
                     sprintf('%+.8f', $availableDiff),
                 ],
                 [
-                    'Invested SOL',
+                    "Invested {$currency}",
                     number_format($actualInvested, 8),
                     number_format($expectedInvested, 8),
                     sprintf('%+.8f', $investedDiff),
                 ],
                 [
-                    'Realized P/L SOL',
+                    "Realized P/L {$currency}",
                     number_format($actualRealizedPnl, 8),
                     number_format($expectedRealizedPnl, 8),
                     sprintf('%+.8f', $realizedPnlDiff),
@@ -97,7 +104,7 @@ class ReconcilePaperWallet extends Command
         $this->newLine();
         $this->line(
             sprintf(
-                'Funded buys: %.8f SOL | Returned from exits: %.8f SOL | Funded positions: %d',
+                "Funded buys: %.8f {$currency} | Returned from exits: %.8f {$currency} | Funded positions: %d",
                 $totalFundedBuys,
                 $totalSolReturned,
                 $positions->count()
@@ -119,7 +126,7 @@ class ReconcilePaperWallet extends Command
 
         $this->warn('Wallet does NOT match the paper-position ledger.');
 
-        if (!$this->option('fix')) {
+        if (! $this->option('fix')) {
             $this->line(
                 'Run php artisan tokens:paper-reconcile --fix to repair the wallet.'
             );

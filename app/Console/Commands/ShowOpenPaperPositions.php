@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Chain;
 use App\Models\PaperPosition;
 use Illuminate\Console\Command;
 
@@ -29,6 +30,7 @@ class ShowOpenPaperPositions extends Command
         $this->newLine();
 
         foreach ($positions as $position) {
+            $currency = $position->chain === Chain::Ethereum ? 'ETH' : 'SOL';
             $entryMc = (float) $position->entry_market_cap;
             $lastMc = (float) ($position->last_market_cap ?? 0);
             $peakMc = max($entryMc, (float) ($position->peak_market_cap ?? 0));
@@ -59,9 +61,7 @@ class ShowOpenPaperPositions extends Command
             $protectionMc = $entryMc * 2.50;
             $profit2xMc = $entryMc * 3.00;
 
-            $protectionArmed =
-                (bool) ($position->tp_50_hit ?? false)
-                || $peakMultiple >= 2.50;
+            $protectionArmed = (bool) $position->tp_50_hit;
 
             $timeOpen = $position->entry_at
                 ? $position->entry_at->diffForHumans(now(), true, false, 2)
@@ -73,10 +73,11 @@ class ShowOpenPaperPositions extends Command
 
             $nextAction = match (true) {
                 ! $protectionArmed && $currentMultiple <= 0.90 => 'STOP LOSS threshold reached — tracker should close 100%',
-                ! $protectionArmed && $currentMultiple < 2.50 => 'Hold 100% — waiting for +150% profit or -10% stop',
-                $protectionArmed && $currentMultiple >= 3.00 => '+200% profit target reached — tracker should close 100%',
-                $protectionArmed && $currentMultiple <= 2.00 => 'Protected floor reached — tracker should close 100%',
-                $protectionArmed => 'Protection armed — hold for +200% profit; exit if back to +100%',
+                ! $protectionArmed && $currentMultiple < 2.00 => 'Hold 100% — waiting for +100% protection or -10% stop',
+                (bool) $position->tp_2x_hit && $currentMultiple <= 3.00 => '+200% protected floor reached — tracker should close 100%',
+                (bool) $position->tp_2x_hit => '+200% profit protected — holding above 3.00x floor',
+                $protectionArmed && $currentMultiple <= 2.00 => '+100% protected floor reached — tracker should close 100%',
+                $protectionArmed => '+100% profit protected — holding above 2.00x floor',
                 default => 'Monitoring',
             };
 
@@ -90,26 +91,24 @@ class ShowOpenPaperPositions extends Command
             $this->table(
                 ['Metric', 'Value'],
                 [
-                    ['Invested', number_format((float) $position->initial_investment_sol, 4).' SOL'],
+                    ['Invested', number_format((float) $position->initial_investment_sol, 4)." {$currency}"],
                     ['Entry MC', '$'.number_format($entryMc, 2)],
                     ['Current MC', $lastMc > 0 ? '$'.number_format($lastMc, 2) : 'Awaiting tracker update'],
                     ['Current Return', sprintf('%+.2f%%', $currentReturn)],
                     ['Current Multiple', number_format($currentMultiple, 2).'x'],
                     ['Peak', number_format($peakMultiple, 2).'x'],
                     ['Remaining', number_format($remainingFraction * 100, 0).'%'],
-                    ['Current Value', number_format($currentValue, 4).' SOL'],
-                    ['Unrealized P/L', sprintf('%+.4f SOL', $unrealizedPnl)],
-                    ['Realized SOL', number_format((float) ($position->realized_sol ?? 0), 4).' SOL'],
-                    ['Realized P/L', sprintf('%+.4f SOL', (float) ($position->trade_pnl_sol ?? 0))],
+                    ['Current Value', number_format($currentValue, 4)." {$currency}"],
+                    ['Realized Value', number_format((float) ($position->realized_sol ?? 0), 4)." {$currency}"],
+                    ['Unrealized P/L', sprintf('%+.4f %s', $unrealizedPnl, $currency)],
+                    ['Realized P/L', sprintf('%+.4f %s', (float) ($position->trade_pnl_sol ?? 0), $currency)],
                     ['Stop Loss', '$'.number_format($stopLossMc, 2).' (-10% / close 100%)'],
                     ['1X Profit', '$'.number_format($profit1xMc, 2).' (+100% / hold)'],
                     [
                         'Protection',
-                        '$'.number_format($protectionMc, 2).
-                        ' (+150% / arm only) — '.
-                        ($protectionArmed ? 'ARMED' : 'Not armed'),
+                        '$'.number_format($protectionMc, 2).' (+150% / informational only)',
                     ],
-                    ['2X Profit', '$'.number_format($profit2xMc, 2).' (+200% / close 100%)'],
+                    ['2X Profit', '$'.number_format($profit2xMc, 2).' (+200% / upgrade floor / hold)'],
                     [
                         'Protected Floor',
                         '$'.number_format($profit1xMc, 2).

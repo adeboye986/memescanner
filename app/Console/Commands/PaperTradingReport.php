@@ -2,34 +2,44 @@
 
 namespace App\Console\Commands;
 
+use App\Chain;
 use App\Models\PaperPosition;
-use App\Models\PaperWallet;
+use App\Services\PaperWalletService;
 use Illuminate\Console\Command;
 
 class PaperTradingReport extends Command
 {
-    protected $signature = 'tokens:paper-report';
+    protected $signature = 'tokens:paper-report
+        {--chain=solana : Paper wallet chain (solana or ethereum)}';
 
-    protected $description = 'Show virtual SOL wallet and paper trading performance';
+    protected $description = 'Show one chain virtual wallet and paper trading performance';
 
-    public function handle(): int
+    public function handle(PaperWalletService $wallets): int
     {
-        $wallet = PaperWallet::query()
-            ->where('name', 'default')
-            ->first();
-
-        if (!$wallet) {
-            $this->error('Default paper wallet not found.');
+        try {
+            $chain = Chain::fromInput($this->option('chain'));
+        } catch (\InvalidArgumentException $exception) {
+            $this->error($exception->getMessage());
 
             return self::FAILURE;
         }
 
+        $wallet = $wallets->query($chain)->first();
+
+        if (! $wallet) {
+            $this->error("Default {$chain->label()} paper wallet not found.");
+
+            return self::FAILURE;
+        }
+
+        $currency = $wallet->currencyCode();
         /*
          * Only positions funded by the virtual wallet belong in the
          * wallet-performance report. Legacy positions with a zero
          * investment are intentionally excluded.
          */
         $positions = PaperPosition::query()
+            ->where('chain', $chain->value)
             ->where('initial_investment_sol', '>', 0)
             ->orderByDesc('id')
             ->get();
@@ -87,13 +97,11 @@ class PaperTradingReport extends Command
         $closedCount = $closedPositions->count();
 
         $wins = $closedPositions->filter(
-            fn (PaperPosition $position) =>
-                (float) $position->trade_pnl_sol > 0
+            fn (PaperPosition $position) => (float) $position->trade_pnl_sol > 0
         )->count();
 
         $losses = $closedPositions->filter(
-            fn (PaperPosition $position) =>
-                (float) $position->trade_pnl_sol < 0
+            fn (PaperPosition $position) => (float) $position->trade_pnl_sol < 0
         )->count();
 
         $breakeven = $closedCount - $wins - $losses;
@@ -122,19 +130,17 @@ class PaperTradingReport extends Command
 
         $bestTrade = $closedPositions
             ->sortByDesc(
-                fn (PaperPosition $position) =>
-                    (float) $position->trade_pnl_sol
+                fn (PaperPosition $position) => (float) $position->trade_pnl_sol
             )
             ->first();
 
         $worstTrade = $closedPositions
             ->sortBy(
-                fn (PaperPosition $position) =>
-                    (float) $position->trade_pnl_sol
+                fn (PaperPosition $position) => (float) $position->trade_pnl_sol
             )
             ->first();
 
-        $this->info('PAPER TRADING REPORT');
+        $this->info(strtoupper($chain->label()).' PAPER TRADING REPORT');
         $this->newLine();
 
         $this->info('WALLET');
@@ -144,31 +150,31 @@ class PaperTradingReport extends Command
             [
                 [
                     'Starting Balance',
-                    number_format($startingBalance, 4) . ' SOL',
+                    number_format($startingBalance, 4)." {$currency}",
                 ],
                 [
                     'Available',
-                    number_format($availableBalance, 4) . ' SOL',
+                    number_format($availableBalance, 4)." {$currency}",
                 ],
                 [
                     'Invested Cost Basis',
-                    number_format($investedBalance, 4) . ' SOL',
+                    number_format($investedBalance, 4)." {$currency}",
                 ],
                 [
                     'Open Position Equity',
-                    number_format($openEquity, 4) . ' SOL',
+                    number_format($openEquity, 4)." {$currency}",
                 ],
                 [
                     'Total Equity',
-                    number_format($totalEquity, 4) . ' SOL',
+                    number_format($totalEquity, 4)." {$currency}",
                 ],
                 [
                     'Realized P/L',
-                    sprintf('%+.4f SOL', $realizedPnl),
+                    sprintf('%+.4f %s', $realizedPnl, $currency),
                 ],
                 [
                     'Net P/L',
-                    sprintf('%+.4f SOL', $netPnl),
+                    sprintf('%+.4f %s', $netPnl, $currency),
                 ],
                 [
                     'Total Return',
@@ -189,10 +195,10 @@ class PaperTradingReport extends Command
                 ['Wins', $wins],
                 ['Losses', $losses],
                 ['Breakeven', $breakeven],
-                ['Win Rate', number_format($winRate, 2) . '%'],
+                ['Win Rate', number_format($winRate, 2).'%'],
                 [
                     'Avg Closed P/L',
-                    sprintf('%+.4f SOL', $averageClosedPnl),
+                    sprintf('%+.4f %s', $averageClosedPnl, $currency),
                 ],
             ]
         );
@@ -241,7 +247,7 @@ class PaperTradingReport extends Command
                         4
                     ),
                     number_format($remainingCost, 4),
-                    number_format($multiple, 2) . 'x',
+                    number_format($multiple, 2).'x',
                     number_format($currentValue, 4),
                     sprintf('%+.4f', $unrealizedPnl),
                 ];
@@ -250,10 +256,10 @@ class PaperTradingReport extends Command
             $this->table(
                 [
                     'Token',
-                    'Initial SOL',
+                    "Initial {$currency}",
                     'Remaining Cost',
                     'Multiple',
-                    'Current SOL',
+                    "Current {$currency}",
                     'Unrealized P/L',
                 ],
                 $rows
@@ -271,8 +277,9 @@ class PaperTradingReport extends Command
                         'Best',
                         $bestTrade?->symbol ?: $bestTrade?->address,
                         sprintf(
-                            '%+.4f SOL',
-                            (float) $bestTrade?->trade_pnl_sol
+                            '%+.4f %s',
+                            (float) $bestTrade?->trade_pnl_sol,
+                            $currency,
                         ),
                         sprintf(
                             '%+.2f%%',
@@ -283,8 +290,9 @@ class PaperTradingReport extends Command
                         'Worst',
                         $worstTrade?->symbol ?: $worstTrade?->address,
                         sprintf(
-                            '%+.4f SOL',
-                            (float) $worstTrade?->trade_pnl_sol
+                            '%+.4f %s',
+                            (float) $worstTrade?->trade_pnl_sol,
+                            $currency,
                         ),
                         sprintf(
                             '%+.2f%%',
@@ -300,7 +308,7 @@ class PaperTradingReport extends Command
         if ($totalEquity >= $startingBalance) {
             $this->info(
                 sprintf(
-                    'Virtual wallet is %+.4f SOL (%+.2f%%) versus its starting balance.',
+                    "Virtual wallet is %+.4f {$currency} (%+.2f%%) versus its starting balance.",
                     $netPnl,
                     $totalReturnPercent
                 )
@@ -308,7 +316,7 @@ class PaperTradingReport extends Command
         } else {
             $this->warn(
                 sprintf(
-                    'Virtual wallet is %+.4f SOL (%+.2f%%) versus its starting balance.',
+                    "Virtual wallet is %+.4f {$currency} (%+.2f%%) versus its starting balance.",
                     $netPnl,
                     $totalReturnPercent
                 )

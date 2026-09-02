@@ -3,7 +3,6 @@
 namespace App\Console\Commands;
 
 use App\Chain;
-use App\Models\PaperWallet;
 use App\Models\TokenScan;
 use App\Models\TokenScanHistory;
 use App\Services\BirdeyeService;
@@ -11,6 +10,7 @@ use App\Services\DexScreenerService;
 use App\Services\EthereumScannerService;
 use App\Services\GoPlusService;
 use App\Services\PaperTradeEntryService;
+use App\Services\PaperWalletService;
 use App\Services\SolanaService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
@@ -31,6 +31,7 @@ class ScanMomentumTokens extends Command
         TelegramService $telegram,
         SolanaService $solana,
         PaperTradeEntryService $paperTrading,
+        PaperWalletService $wallets,
         EthereumScannerService $ethereumScanner,
     ): int {
         try {
@@ -784,9 +785,8 @@ class ScanMomentumTokens extends Command
                         $fastPaperAlertsEnabled
                         && $paperBuyExecuted
                     ) {
-                        $paperWallet = PaperWallet::query()
-                            ->where('name', 'default')
-                            ->first();
+                        $paperWallet = $wallets->default($chain);
+                        $currency = $paperWallet->currencyCode();
 
                         $walletAvailable =
                             $paperWallet
@@ -803,10 +803,10 @@ class ScanMomentumTokens extends Command
                                 ? "💳 <b>WALLET AFTER BUY</b>\n".
                                     'Available: <b>'.
                                     number_format($walletAvailable, 4).
-                                    " SOL</b>\n".
+                                    " {$currency}</b>\n".
                                     'Invested: <b>'.
                                     number_format($walletInvested, 4).
-                                    " SOL</b>\n\n"
+                                    " {$currency}</b>\n\n"
                                 : '';
 
                         $fastMessage =
@@ -818,7 +818,7 @@ class ScanMomentumTokens extends Command
                                 (float) $paperPosition->initial_investment_sol,
                                 4
                             ).
-                            " SOL\n".
+                            " {$currency}\n".
                             '🎯 <b>Entry MC:</b> $'.
                             number_format(
                                 $paperMarketCap,
@@ -844,16 +844,15 @@ class ScanMomentumTokens extends Command
                             $walletText.
                             "🛡️ <b>EXIT PLAN</b>\n".
                             "🔴 Stop Loss: <b>-10% → CLOSE 100%</b>\n".
-                            "⚪ 1X Profit (+100%): <b>HOLD</b>\n".
-                            "🟡 1.50X Profit (+150%): <b>ARM PROTECTION</b>\n".
-                            "🟢 2X Profit (+200%): <b>CLOSE 100%</b>\n\n".
+                            "⚪ +100% (2.00x): <b>ARM 2.00x FLOOR / HOLD</b>\n".
+                            "🟡 +150% (2.50x): <b>INFORMATIONAL ONLY / HOLD</b>\n".
+                            "🟢 +200% (3.00x): <b>UPGRADE FLOOR / HOLD</b>\n\n".
                             "🛡️ <b>PROTECTED EXIT</b>\n".
-                            "After +150% profit has been reached:\n".
-                            "If profit falls back to +100% → <b>CLOSE 100%</b>\n\n".
+                            "A later observation at or below the active floor closes 100% at the observed fill.\n\n".
                             "❌ <b>No partial selling</b>\n\n".
                             "📍 <b>Token Address</b>\n".
                             "<code>{$address}</code>\n\n".
-                            "⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>\n".
+                            "⚠️ <b>PAPER TRADE — NO REAL {$currency} USED</b>\n".
                             '⏳ Deep security scan is still running.';
 
                         try {

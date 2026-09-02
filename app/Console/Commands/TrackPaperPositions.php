@@ -4,8 +4,8 @@ namespace App\Console\Commands;
 
 use App\Models\PaperPosition;
 use App\Models\PaperPositionSnapshot;
-use App\Models\PaperWallet;
 use App\Services\Chains\ChainManager;
+use App\Services\PaperWalletService;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -20,7 +20,8 @@ class TrackPaperPositions extends Command
 
     public function handle(
         ChainManager $chains,
-        TelegramService $telegram
+        TelegramService $telegram,
+        PaperWalletService $wallets,
     ): int {
         $limit = max(1, min((int) $this->option('limit'), 200));
 
@@ -42,7 +43,8 @@ class TrackPaperPositions extends Command
             $this->trackOne(
                 $position,
                 $chains,
-                $telegram
+                $telegram,
+                $wallets,
             );
         }
 
@@ -52,7 +54,8 @@ class TrackPaperPositions extends Command
     private function trackOne(
         PaperPosition $position,
         ChainManager $chains,
-        TelegramService $telegram
+        TelegramService $telegram,
+        PaperWalletService $wallets,
     ): void {
         try {
             $dex = $chains->for($position->chain)->marketData($position->address);
@@ -406,7 +409,8 @@ class TrackPaperPositions extends Command
             $remainingInvestmentSol,
             $walletSolReturned,
             $walletCostBasisReleased,
-            $walletRealizedPnl
+            $walletRealizedPnl,
+            $wallets,
         ): void {
             $lockedPosition = PaperPosition::query()
                 ->whereKey($position->id)
@@ -437,10 +441,7 @@ class TrackPaperPositions extends Command
                 $walletSolReturned > 0
                 && ! $hasAlreadyAppliedExit
             ) {
-                $wallet = PaperWallet::query()
-                    ->where('name', 'default')
-                    ->lockForUpdate()
-                    ->firstOrFail();
+                $wallet = $wallets->lockedDefault($lockedPosition->chain);
 
                 $wallet->available_balance_sol =
                     (float) $wallet->available_balance_sol
@@ -496,6 +497,8 @@ class TrackPaperPositions extends Command
                 true
             );
         });
+
+        $currency = $wallets->currency($position->chain);
 
         PaperPositionSnapshot::create([
             'paper_position_id' => $position->id,
@@ -567,7 +570,7 @@ class TrackPaperPositions extends Command
 
         $this->info(
             sprintf(
-                'PAPER: %s | Entry $%s | Now $%s | Token %+.2f%% | %.2fx | Peak %.2fx | Strategy %+.2f%% | Remaining %.0f%% | Realized %.4f SOL',
+                'PAPER: %s | Entry $%s | Now $%s | Token %+.2f%% | %.2fx | Peak %.2fx | Strategy %+.2f%% | Remaining %.0f%% | Realized %.4f %s',
                 $position->symbol,
                 number_format($entryMc, 2),
                 number_format($marketCap, 2),
@@ -576,22 +579,23 @@ class TrackPaperPositions extends Command
                 $peakMultiple,
                 $strategyReturnPercent,
                 $remainingFraction * 100,
-                $positionRealizedSol
+                $positionRealizedSol,
+                $currency,
             )
         );
 
         if ($protectionJustArmed && $remainingFraction > 0) {
             try {
                 $telegram->send(
-                    "🛡️ <b>PAPER +100% PROFIT FLOOR ARMED</b>\n\n".
-                    "<b>{$position->symbol}</b>\n\n".
-                    "📈 +100% profit reached: <b>2.00x value</b>\n".
-                    "📤 Sold: <b>0%</b>\n".
-                    "🛡️ Protected floor: <b>+100% profit</b> (2.00x value)\n".
-                    "🚀 Keep holding while price remains above the floor.\n".
-                    "🎯 If +200% profit is reached, the floor upgrades to 3.00x.\n\n".
+                    "🛡️ <b>+100% PROFIT PROTECTED</b>\n\n".
+                    "Token: <b>{$position->symbol}</b>\n".
+                    'Chain: <b>'.$position->chain->label()."</b>\n".
+                    'Current: <b>'.number_format($multiple, 2)."x</b>\n".
+                    "Protected floor: <b>2.00x</b>\n".
+                    "Position remains <b>OPEN</b>.\n".
+                    "Full exit will trigger on a later tracker observation at or below the protected floor.\n\n".
                     "📍 <code>{$position->address}</code>\n\n".
-                    '⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>'
+                    "⚠️ <b>PAPER TRADE — NO REAL {$currency} USED</b>"
                 );
             } catch (\Throwable $e) {
                 $this->warn(
@@ -603,15 +607,15 @@ class TrackPaperPositions extends Command
         if ($twoXProtectionJustArmed && $remainingFraction > 0) {
             try {
                 $telegram->send(
-                    "🛡️🚀 <b>PAPER +200% PROFIT FLOOR ARMED</b>\n\n".
-                    "<b>{$position->symbol}</b>\n\n".
-                    "📈 +200% profit reached: <b>3.00x value</b>\n".
-                    "📤 Sold: <b>0%</b>\n".
-                    "🛡️ Protected floor upgraded to: <b>+200% profit</b> (3.00x value)\n".
-                    "🚀 Position stays open while it keeps running.\n".
-                    "🔻 If it falls back to the protected floor, close 100%.\n\n".
+                    "🛡️ <b>+200% PROFIT PROTECTED</b>\n\n".
+                    "Token: <b>{$position->symbol}</b>\n".
+                    'Chain: <b>'.$position->chain->label()."</b>\n".
+                    'Current: <b>'.number_format($multiple, 2)."x</b>\n".
+                    "Protected floor: <b>3.00x</b>\n".
+                    "Position remains <b>OPEN</b>.\n".
+                    "Full exit will trigger on a later tracker observation at or below the protected floor.\n\n".
                     "📍 <code>{$position->address}</code>\n\n".
-                    '⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>'
+                    "⚠️ <b>PAPER TRADE — NO REAL {$currency} USED</b>"
                 );
             } catch (\Throwable $e) {
                 $this->warn(
@@ -622,9 +626,7 @@ class TrackPaperPositions extends Command
 
         foreach ($strategyEvents as $event) {
             try {
-                $walletAfterExit = PaperWallet::query()
-                    ->where('name', 'default')
-                    ->first();
+                $walletAfterExit = $wallets->default($position->chain);
 
                 $eventType = $event['type'] ?? 'exit';
 
@@ -641,8 +643,7 @@ class TrackPaperPositions extends Command
                 $actionText = match ($eventType) {
                     'stop_loss' => '🛑 <b>-10% STOP LOSS TRIGGERED</b>',
                     'full_target_2x_profit' => '✅ <b>+200% PROFIT TARGET HIT</b>',
-                    'protected_floor_exit' =>
-                        "🛡️ <b>PROTECTED +{$protectedFloorProfitPercent}% PROFIT FLOOR TRIGGERED</b>",
+                    'protected_floor_exit' => "🛡️ <b>PROTECTED +{$protectedFloorProfitPercent}% PROFIT FLOOR TRIGGERED</b>",
                     default => '✅ <b>EXIT EXECUTED</b>',
                 };
 
@@ -664,17 +665,18 @@ class TrackPaperPositions extends Command
                                 (float) $walletAfterExit->available_balance_sol,
                                 4
                             ).
-                            " SOL</b>\n".
+                            " {$currency}</b>\n".
                             'Invested: <b>'.
                             number_format(
                                 (float) $walletAfterExit->invested_balance_sol,
                                 4
                             ).
-                            " SOL</b>\n".
+                            " {$currency}</b>\n".
                             'Realized P/L: <b>'.
                             sprintf(
-                                '%+.4f SOL',
-                                (float) $walletAfterExit->realized_pnl_sol
+                                '%+.4f %s',
+                                (float) $walletAfterExit->realized_pnl_sol,
+                                $currency,
                             ).
                             "</b>\n\n"
                         : '';
@@ -704,15 +706,16 @@ class TrackPaperPositions extends Command
                         (float) $event['sold_fraction'] * 100,
                         0
                     )."%\n".
-                    '🪙 <b>SOL Returned:</b> '.
+                    "🪙 <b>{$currency} Returned:</b> ".
                     number_format(
                         (float) ($event['sol_returned'] ?? 0),
                         4
-                    )." SOL\n".
+                    )." {$currency}\n".
                     '💹 <b>Trade P/L on this exit:</b> '.
                     sprintf(
-                        '%+.4f SOL',
-                        (float) ($event['realized_pnl_sol'] ?? 0)
+                        '%+.4f %s',
+                        (float) ($event['realized_pnl_sol'] ?? 0),
+                        $currency,
                     )."\n".
                     '📈 <b>Strategy Return:</b> '.
                     sprintf(
@@ -722,7 +725,7 @@ class TrackPaperPositions extends Command
                     $walletText.
                     "{$positionStatusText}\n\n".
                     "📍 <code>{$position->address}</code>\n\n".
-                    '⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>'
+                    "⚠️ <b>PAPER TRADE — NO REAL {$currency} USED</b>"
                 );
             } catch (\Throwable $e) {
                 $this->warn(

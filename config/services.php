@@ -56,13 +56,14 @@ return [
     'trading' => [
         'paper_trading' => env('PAPER_TRADING', true),
 
-        'fast_paper_alerts' =>
-            env('FAST_PAPER_ALERTS', true),
+        'fast_paper_alerts' => env('FAST_PAPER_ALERTS', true),
 
-        'max_chase_percent' =>
-            env('MOMENTUM_MAX_CHASE_PERCENT', 35),
+        'max_chase_percent' => env('MOMENTUM_MAX_CHASE_PERCENT', 35),
 
         'paper_trade_size_sol' => env('PAPER_TRADE_SIZE_SOL', 0.10),
+        'paper_trade_size_eth' => env('PAPER_TRADE_SIZE_ETH', 0.10),
+        'paper_starting_balance_sol' => env('PAPER_STARTING_BALANCE_SOL', 5),
+        'paper_starting_balance_eth' => env('PAPER_STARTING_BALANCE_ETH', 5),
     ],
-    
+
 ];

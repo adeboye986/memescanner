@@ -44,36 +44,26 @@
                 <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Portfolio</p>
                 <h2 id="wallet-heading" class="mt-1 text-xl font-semibold text-white">Wallet Summary</h2>
             </div>
-            <span class="text-sm text-slate-500">Virtual SOL</span>
+            <span class="text-sm text-slate-500">Virtual paper balances</span>
         </div>
 
-        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            @php
-                $summaryCards = [
-                    ['label' => 'Starting Balance', 'value' => number_format((float) $wallet->starting_balance_sol, 4).' SOL', 'tone' => 'neutral'],
-                    ['label' => 'Available Balance', 'value' => number_format((float) $wallet->available_balance_sol, 4).' SOL', 'tone' => 'healthy'],
-                    ['label' => 'Invested Balance', 'value' => number_format((float) $wallet->invested_balance_sol, 4).' SOL', 'tone' => 'watch'],
-                    ['label' => 'Realized P/L', 'value' => sprintf('%+.4f SOL', (float) $wallet->realized_pnl_sol), 'tone' => (float) $wallet->realized_pnl_sol >= 0 ? 'healthy' : 'danger'],
-                    ['label' => 'Open Funded Positions', 'value' => (string) $positions->count(), 'tone' => 'neutral'],
-                ];
-            @endphp
-
-            @foreach ($summaryCards as $card)
-                <article @class([
-                    'rounded-2xl border bg-slate-900/70 p-5 shadow-xl shadow-black/10',
-                    'border-slate-800' => $card['tone'] === 'neutral',
-                    'border-emerald-400/20' => $card['tone'] === 'healthy',
-                    'border-amber-400/20' => $card['tone'] === 'watch',
-                    'border-red-400/20' => $card['tone'] === 'danger',
-                ])>
-                    <p class="text-xs font-medium uppercase tracking-wider text-slate-500">{{ $card['label'] }}</p>
-                    <p @class([
-                        'mt-3 text-2xl font-semibold tabular-nums',
-                        'text-white' => $card['tone'] === 'neutral',
-                        'text-emerald-300' => $card['tone'] === 'healthy',
-                        'text-amber-300' => $card['tone'] === 'watch',
-                        'text-red-300' => $card['tone'] === 'danger',
-                    ])>{{ $card['value'] }}</p>
+        <div class="grid gap-4 xl:grid-cols-2">
+            @foreach ($wallets as $chain => $wallet)
+                @php
+                    $currency = $wallet->currencyCode();
+                @endphp
+                <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10">
+                    <div class="flex items-center justify-between gap-3">
+                        <h3 class="font-semibold uppercase tracking-wider text-white">{{ $wallet->chain->label() }} Paper Wallet</h3>
+                        <span class="rounded-full bg-violet-400/10 px-2.5 py-1 text-xs font-semibold text-violet-300">{{ $currency }}</span>
+                    </div>
+                    <dl class="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                        <div><dt class="text-xs uppercase text-slate-500">Starting</dt><dd class="mt-2 font-semibold text-white">{{ number_format((float) $wallet->starting_balance_sol, 4) }} {{ $currency }}</dd></div>
+                        <div><dt class="text-xs uppercase text-slate-500">Available</dt><dd class="mt-2 font-semibold text-emerald-300">{{ number_format((float) $wallet->available_balance_sol, 4) }} {{ $currency }}</dd></div>
+                        <div><dt class="text-xs uppercase text-slate-500">Invested</dt><dd class="mt-2 font-semibold text-amber-300">{{ number_format((float) $wallet->invested_balance_sol, 4) }} {{ $currency }}</dd></div>
+                        <div><dt class="text-xs uppercase text-slate-500">Realized P/L</dt><dd class="mt-2 font-semibold {{ (float) $wallet->realized_pnl_sol >= 0 ? 'text-emerald-300' : 'text-red-300' }}">{{ sprintf('%+.4f %s', (float) $wallet->realized_pnl_sol, $currency) }}</dd></div>
+                    </dl>
+                    <p class="mt-4 border-t border-slate-800 pt-3 text-xs text-slate-500">{{ $positions->filter(fn ($trade) => $trade['model']->chain->value === $chain)->count() }} open funded positions</p>
                 </article>
             @endforeach
         </div>
@@ -229,11 +219,7 @@
                             <div class="flex flex-wrap items-center gap-2">
                                 <h3 class="text-xl font-semibold text-white">{{ $position->symbol ?: 'Unknown token' }}</h3>
                                 <span class="rounded-full bg-violet-400/10 px-2.5 py-1 text-xs font-semibold uppercase text-violet-300">{{ $position->chain->label() }}</span>
-                                @if ($trade['protection_armed'])
-                                    <span class="rounded-full bg-amber-400/10 px-2.5 py-1 text-xs font-semibold text-amber-300">Protection armed</span>
-                                @else
-                                    <span class="rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-300">Open</span>
-                                @endif
+                                <span class="rounded-full bg-amber-400/10 px-2.5 py-1 text-xs font-semibold text-amber-300">{{ $trade['protection_state'] }}</span>
                             </div>
                             <p class="mt-1 truncate font-mono text-xs text-slate-500" title="{{ $position->address }}">{{ $position->address }}</p>
                         </div>
@@ -251,7 +237,7 @@
                             data-symbol="{{ $position->symbol ?: 'Unknown token' }}"
                             data-return="{{ sprintf('%+.2f%%', $trade['current_return']) }}"
                             data-remaining="{{ number_format($trade['remaining_fraction'] * 100, 2) }}%"
-                            data-value="{{ number_format($trade['current_value'], 4) }} SOL"
+                            data-value="{{ number_format($trade['current_value'], 4) }} {{ $trade['currency'] }}"
                         >Close Trade</button>
                     </div>
                 </div>
@@ -263,11 +249,11 @@
                             ['Latest Market Cap', '$'.number_format($trade['current_market_cap'], 2), 'neutral'],
                             ['Position Multiple', number_format($trade['current_multiple'], 2).'x', $isProfitable ? 'profit' : 'loss'],
                             ['Peak Multiple', number_format($trade['peak_multiple'], 2).'x', $trade['protection_armed'] ? 'watch' : 'neutral'],
-                            ['Initial Investment', number_format((float) $position->initial_investment_sol, 4).' SOL', 'neutral'],
+                            ['Initial Investment', number_format((float) $position->initial_investment_sol, 4).' '.$trade['currency'], 'neutral'],
                             ['Remaining', number_format($trade['remaining_fraction'] * 100, 2).'%', 'neutral'],
-                            ['Estimated Value', number_format($trade['current_value'], 4).' SOL', $isProfitable ? 'profit' : 'loss'],
-                            ['Unrealized P/L', sprintf('%+.4f SOL', $trade['unrealized_pnl']), $trade['unrealized_pnl'] >= 0 ? 'profit' : 'loss'],
-                            ['Realized P/L', sprintf('%+.4f SOL', (float) $position->trade_pnl_sol), (float) $position->trade_pnl_sol >= 0 ? 'profit' : 'loss'],
+                            ['Estimated Value', number_format($trade['current_value'], 4).' '.$trade['currency'], $isProfitable ? 'profit' : 'loss'],
+                            ['Unrealized P/L', sprintf('%+.4f %s', $trade['unrealized_pnl'], $trade['currency']), $trade['unrealized_pnl'] >= 0 ? 'profit' : 'loss'],
+                            ['Realized P/L', sprintf('%+.4f %s', (float) $position->trade_pnl_sol, $trade['currency']), (float) $position->trade_pnl_sol >= 0 ? 'profit' : 'loss'],
                             ['Time Open', $position->entry_at?->diffForHumans(now(), true, false, 2) ?? 'N/A', 'neutral'],
                             ['Last Checked', $position->last_checked_at?->diffForHumans() ?? 'Never', 'neutral'],
                         ];
@@ -294,10 +280,10 @@
                     </div>
                     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                         <div class="rounded-xl border border-red-400/20 bg-red-400/5 p-4"><p class="text-xs font-semibold uppercase text-red-300">Stop Loss</p><p class="mt-2 font-semibold text-white">${{ number_format($trade['levels']['stop_loss'], 2) }}</p><p class="mt-1 text-xs text-slate-400">-10% · 0.90x · Close 100%</p></div>
-                        <div class="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4"><p class="text-xs font-semibold uppercase text-emerald-300">1X Profit</p><p class="mt-2 font-semibold text-white">${{ number_format($trade['levels']['profit_1x'], 2) }}</p><p class="mt-1 text-xs text-slate-400">+100% · 2.00x · Hold</p></div>
-                        <div class="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4"><p class="text-xs font-semibold uppercase text-amber-300">Protection</p><p class="mt-2 font-semibold text-white">${{ number_format($trade['levels']['protection'], 2) }}</p><p class="mt-1 text-xs text-slate-400">+150% · 2.50x · Arm only</p></div>
-                        <div class="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4"><p class="text-xs font-semibold uppercase text-emerald-300">2X Profit</p><p class="mt-2 font-semibold text-white">${{ number_format($trade['levels']['profit_2x'], 2) }}</p><p class="mt-1 text-xs text-slate-400">+200% · 3.00x · Close 100%</p></div>
-                        <div class="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4"><p class="text-xs font-semibold uppercase text-amber-300">Protected Floor</p><p class="mt-2 font-semibold text-white">${{ number_format($trade['levels']['profit_1x'], 2) }}</p><p class="mt-1 text-xs text-slate-400">After arming: +100% · 2.00x · Close 100%</p></div>
+                        <div class="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4"><p class="text-xs font-semibold uppercase text-emerald-300">+100% Protection</p><p class="mt-2 font-semibold text-white">${{ number_format($trade['levels']['profit_1x'], 2) }}</p><p class="mt-1 text-xs text-slate-400">2.00x · Arm floor · Keep holding</p></div>
+                        <div class="rounded-xl border border-slate-700 bg-slate-800/30 p-4"><p class="text-xs font-semibold uppercase text-slate-300">+150% Information</p><p class="mt-2 font-semibold text-white">${{ number_format($trade['levels']['informational_1_5x'], 2) }}</p><p class="mt-1 text-xs text-slate-400">2.50x · Informational only · Hold</p></div>
+                        <div class="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4"><p class="text-xs font-semibold uppercase text-emerald-300">+200% Protection</p><p class="mt-2 font-semibold text-white">${{ number_format($trade['levels']['profit_2x'], 2) }}</p><p class="mt-1 text-xs text-slate-400">3.00x · Upgrade floor · Keep holding</p></div>
+                        <div class="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4"><p class="text-xs font-semibold uppercase text-amber-300">Active Protected Floor</p><p class="mt-2 font-semibold text-white">{{ $trade['protected_floor_multiple'] ? number_format($trade['protected_floor_multiple'], 2).'x' : 'Not armed' }}</p><p class="mt-1 text-xs text-slate-400">Later observation at or below floor closes 100% at observed fill</p></div>
                     </div>
                 </div>
             </article>

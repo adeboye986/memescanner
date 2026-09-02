@@ -4,14 +4,16 @@ namespace App\Services;
 
 use App\Chain;
 use App\Models\PaperPosition;
-use App\Models\PaperWallet;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 use Throwable;
 
 class PaperTradeEntryService
 {
-    public function __construct(private TelegramService $telegram) {}
+    public function __construct(
+        private TelegramService $telegram,
+        private PaperWalletService $wallets,
+    ) {}
 
     /** @param array<string, mixed> $data */
     public function buy(array $data): PaperPosition
@@ -22,8 +24,9 @@ class PaperTradeEntryService
             : (string) $data['address'];
 
         $position = DB::transaction(function () use ($data, $chain, $address): PaperPosition {
-            $wallet = PaperWallet::query()->where('name', 'default')->lockForUpdate()->firstOrFail();
-            $tradeSize = (float) config('services.trading.paper_trade_size_sol', 0.10);
+            $wallet = $this->wallets->lockedDefault($chain);
+            $tradeSize = $this->wallets->tradeSize($chain);
+            $currency = $wallet->currencyCode();
 
             $existing = PaperPosition::query()
                 ->where('chain', $chain->value)
@@ -37,7 +40,7 @@ class PaperTradeEntryService
             }
 
             if ((float) $wallet->available_balance_sol < $tradeSize) {
-                throw new RuntimeException('Insufficient paper SOL balance.');
+                throw new RuntimeException("Insufficient paper {$currency} balance.");
             }
 
             $position = PaperPosition::query()->create([
@@ -81,13 +84,14 @@ class PaperTradeEntryService
 
     public function sendBuyNotification(PaperPosition $position): void
     {
-        $wallet = PaperWallet::query()->where('name', 'default')->first();
+        $wallet = $this->wallets->default($position->chain);
         $discovery = (float) ($position->discovery_market_cap ?? 0);
         $entry = (float) $position->entry_market_cap;
         $scanner = strtoupper(str_replace(['-', '_'], ' ', (string) data_get($position->meta, 'scanner', 'unknown')));
         $entryMove = $position->move_since_discovery_percent !== null
             ? sprintf('%+.2f%%', (float) $position->move_since_discovery_percent)
             : 'N/A';
+        $currency = $wallet->currencyCode();
 
         try {
             $this->telegram->send(
@@ -97,13 +101,13 @@ class PaperTradeEntryService
                 "<b>Symbol:</b> {$position->symbol}\n".
                 "<b>Name:</b> {$position->name}\n".
                 "<b>Token Address:</b> <code>{$position->address}</code>\n\n".
-                '<b>Initial Investment:</b> '.number_format((float) $position->initial_investment_sol, 4)." SOL\n".
+                '<b>Initial Investment:</b> '.number_format((float) $position->initial_investment_sol, 4)." {$currency}\n".
                 '<b>Entry MC:</b> $'.number_format($entry, 2)."\n".
                 '<b>Discovery MC:</b> $'.number_format($discovery, 2)."\n".
                 '<b>Entry Move:</b> '.$entryMove."\n".
-                '<b>Wallet Available:</b> '.number_format((float) ($wallet?->available_balance_sol ?? 0), 4)." SOL\n".
-                '<b>Wallet Invested:</b> '.number_format((float) ($wallet?->invested_balance_sol ?? 0), 4)." SOL\n\n".
-                "<b>EXIT PLAN</b>\nStop Loss: -10% / 0.90x / CLOSE 100%\n1X Profit: +100% / 2.00x / HOLD\n1.50X Profit: +150% / 2.50x / ARM PROTECTION\n2X Profit: +200% / 3.00x / CLOSE 100%\nProtected floor after arming: +100% / 2.00x / CLOSE 100%\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>",
+                '<b>Wallet Available:</b> '.number_format((float) $wallet->available_balance_sol, 4)." {$currency}\n".
+                '<b>Wallet Invested:</b> '.number_format((float) $wallet->invested_balance_sol, 4)." {$currency}\n\n".
+                "<b>EXIT PLAN</b>\nStop Loss: -10% / 0.90x / CLOSE 100%\n+100%: 2.00x / ARM 2.00x FLOOR / HOLD\n+150%: 2.50x / INFORMATIONAL ONLY / HOLD\n+200%: 3.00x / UPGRADE FLOOR TO 3.00x / HOLD\nA full exit occurs only on a later observation at or below the active floor, using the actual observed fill.\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>",
             );
         } catch (Throwable $exception) {
             report($exception);

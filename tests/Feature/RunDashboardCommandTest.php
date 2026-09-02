@@ -48,7 +48,7 @@ class RunDashboardCommandTest extends TestCase
         $this->assertSame('failed', $activity->status);
         $this->assertSame(1, $activity->exit_code);
         $this->assertSame('Command exited with code 1.', $activity->error_message);
-        $this->assertStringContainsString('Default paper wallet not found.', $activity->output);
+        $this->assertStringContainsString('Default Solana paper wallet not found.', $activity->output);
     }
 
     public function test_reconciliation_command_never_applies_fix_option(): void

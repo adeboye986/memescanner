@@ -79,7 +79,8 @@ class MultiChainTradingTest extends TestCase
         $this->assertSame('new-token', $solana->meta['scanner']);
         $this->assertSame('momentum', $momentum->meta['scanner']);
         $this->assertSame(3, PaperPosition::query()->count());
-        $this->assertEqualsWithDelta(4.7, (float) PaperWallet::query()->sole()->available_balance_sol, 0.000001);
+        $this->assertEqualsWithDelta(4.8, (float) PaperWallet::query()->where('chain', 'solana')->sole()->available_balance_sol, 0.000001);
+        $this->assertEqualsWithDelta(4.9, (float) PaperWallet::query()->where('chain', 'ethereum')->sole()->available_balance_sol, 0.000001);
     }
 
     public function test_dashboard_queues_selected_chain_and_duplicate_protection_is_per_chain(): void

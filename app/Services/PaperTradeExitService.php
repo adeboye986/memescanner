@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\PaperPosition;
-use App\Models\PaperWallet;
 use App\Services\Chains\ChainManager;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -14,6 +13,7 @@ class PaperTradeExitService
     public function __construct(
         private ChainManager $chains,
         private TelegramService $telegram,
+        private PaperWalletService $wallets,
     ) {}
 
     /**
@@ -100,10 +100,7 @@ class PaperTradeExitService
             $exitEvents = $lockedPosition->exit_events ?? [];
             $exitEvents[] = $event;
 
-            $wallet = PaperWallet::query()
-                ->where('name', 'default')
-                ->lockForUpdate()
-                ->firstOrFail();
+            $wallet = $this->wallets->lockedDefault($lockedPosition->chain);
 
             $wallet->available_balance_sol = (float) $wallet->available_balance_sol + $solReturned;
             $wallet->invested_balance_sol = max(0.0, (float) $wallet->invested_balance_sol - $costBasis);
@@ -156,6 +153,7 @@ class PaperTradeExitService
         $position = $result['position'];
         $wallet = $result['wallet'];
         $event = $result['event'];
+        $currency = $wallet->currencyCode();
 
         try {
             $this->telegram->send(
@@ -166,17 +164,17 @@ class PaperTradeExitService
                 '📊 <b>Close MC:</b> $'.number_format($result['market_cap'], 2)."\n".
                 '✖️ <b>Fill:</b> '.number_format($result['multiple'], 2)."x\n".
                 '📤 <b>Sold:</b> '.number_format((float) $event['sold_fraction'] * 100, 0)."% of original position\n".
-                '🪙 <b>SOL Returned:</b> '.number_format((float) $event['sol_returned'], 4)." SOL\n".
-                '💹 <b>P/L This Exit:</b> '.sprintf('%+.4f SOL', (float) $event['realized_pnl_sol'])."\n".
-                '💰 <b>Total Trade P/L:</b> '.sprintf('%+.4f SOL', (float) $position->trade_pnl_sol)."\n".
+                "🪙 <b>{$currency} Returned:</b> ".number_format((float) $event['sol_returned'], 4)." {$currency}\n".
+                '💹 <b>P/L This Exit:</b> '.sprintf('%+.4f %s', (float) $event['realized_pnl_sol'], $currency)."\n".
+                '💰 <b>Total Trade P/L:</b> '.sprintf('%+.4f %s', (float) $position->trade_pnl_sol, $currency)."\n".
                 '📈 <b>Final Strategy Return:</b> '.sprintf('%+.2f%%', (float) $position->strategy_return_percent)."\n\n".
                 "💳 <b>WALLET AFTER CLOSE</b>\n".
-                'Available: <b>'.number_format((float) $wallet->available_balance_sol, 4)." SOL</b>\n".
-                'Invested: <b>'.number_format((float) $wallet->invested_balance_sol, 4)." SOL</b>\n".
-                'Realized P/L: <b>'.sprintf('%+.4f SOL', (float) $wallet->realized_pnl_sol)."</b>\n\n".
+                'Available: <b>'.number_format((float) $wallet->available_balance_sol, 4)." {$currency}</b>\n".
+                'Invested: <b>'.number_format((float) $wallet->invested_balance_sol, 4)." {$currency}</b>\n".
+                'Realized P/L: <b>'.sprintf('%+.4f %s', (float) $wallet->realized_pnl_sol, $currency)."</b>\n\n".
                 "❌ <b>POSITION CLOSED</b>\n\n".
                 "📍 <code>{$position->address}</code>\n\n".
-                '⚠️ <b>PAPER TRADE — NO REAL SOL USED</b>',
+                "⚠️ <b>PAPER TRADE — NO REAL {$currency} USED</b>",
             );
         } catch (Throwable $exception) {
             report($exception);
