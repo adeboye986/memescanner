@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Chain;
 use App\Models\TokenScan;
 use App\Models\TokenScanHistory;
+use App\Services\ApplicationSettingsService;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
 use App\Services\EthereumScannerService;
@@ -12,6 +13,7 @@ use App\Services\GoPlusService;
 use App\Services\NewTokenClassificationService;
 use App\Services\PaperTradeEntryService;
 use App\Services\TelegramService;
+use App\Services\TradeOpportunityService;
 use Illuminate\Console\Command;
 use Illuminate\Http\Client\ConnectionException;
 use InvalidArgumentException;
@@ -24,7 +26,7 @@ class ScanNewTokens extends Command
 
     protected $description = 'Scan newly listed tokens on a supported blockchain';
 
-    public function handle(BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener, PaperTradeEntryService $entries, EthereumScannerService $ethereumScanner, NewTokenClassificationService $classifications): int
+    public function handle(BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener, TradeOpportunityService $opportunities, EthereumScannerService $ethereumScanner, NewTokenClassificationService $classifications, ApplicationSettingsService $settings, PaperTradeEntryService $entries): int
     {
         try {
             $chain = Chain::fromInput($this->option('chain'));
@@ -519,26 +521,20 @@ class ScanNewTokens extends Command
                         ? (($entryMarketCap - $discoveryMarketCap) / $discoveryMarketCap) * 100
                         : null;
 
-                    $maxChase = (float) config('services.trading.max_chase_percent', 35);
+                    $maxChase = (float) $settings->get('scanner.max_chase_percent');
 
                     $paperEntryDecision['paper_entry_reason'] = match (true) {
-                        ! config('services.trading.paper_trading', true) =>
-                            'Paper trading is disabled.',
+                        ! config('services.trading.paper_trading', true) => 'Paper trading is disabled.',
 
-                        $dexAvailable && ! ($dexData['requested_token_is_base'] ?? false) =>
-                            'Requested token is not the Dex pair base token.',
+                        $dexAvailable && ! ($dexData['requested_token_is_base'] ?? false) => 'Requested token is not the Dex pair base token.',
 
-                        $entryMarketCap < 2_000 || $entryMarketCap > 20_000 =>
-                            'Current market cap is outside the new-token entry range.',
+                        $entryMarketCap < 2_000 || $entryMarketCap > 20_000 => 'Current market cap is outside the new-token entry range.',
 
-                        $entryMove !== null && $entryMove <= -30 =>
-                            'Entry rejected by collapse protection.',
+                        $entryMove !== null && $entryMove <= -30 => 'Entry rejected by collapse protection.',
 
-                        $entryMove !== null && $entryMove > $maxChase =>
-                            'Entry rejected by chase protection.',
+                        $entryMove !== null && $entryMove > $maxChase => 'Entry rejected by chase protection.',
 
-                        default =>
-                            'Entry checks passed.',
+                        default => 'Entry checks passed.',
                     };
 
                     if ($paperEntryDecision['paper_entry_reason'] !== 'Entry checks passed.') {
@@ -547,7 +543,7 @@ class ScanNewTokens extends Command
 
                     if ($paperEntryDecision['paper_entry_reason'] === 'Entry checks passed.') {
                         try {
-                            $paperPosition = $entries->buy([
+                            $execution = $opportunities->qualify([
                                 'chain' => $chain->value,
                                 'address' => $address,
                                 'symbol' => $symbol,
@@ -556,9 +552,18 @@ class ScanNewTokens extends Command
                                 'entry_market_cap' => $entryMarketCap,
                                 'entry_price' => $entryPrice,
                                 'entry_liquidity' => $entryLiquidity,
+                                'volume' => $token['v1m'] ?? null,
                                 'move_since_discovery_percent' => $entryMove,
                                 'scanner' => 'new-token',
                                 'send_notification' => false,
+                                'security_data' => [
+                                    'status' => $securityUnavailable ? 'unavailable' : (($security['passed'] ?? null) === true ? 'passed' : 'failed'),
+                                    'provider' => 'GoPlus',
+                                    'passed' => $security['passed'] ?? null,
+                                    'score' => $security['score'] ?? null,
+                                    'risks' => $security['risks'] ?? [],
+                                    'coverage' => $securityUnavailable ? 'GoPlus token-security data was unavailable.' : 'GoPlus Solana token-security evaluation.',
+                                ],
                                 'meta' => [
                                     'source' => 'new_token_scan',
                                     'classification' => $classification['classification'],
@@ -575,19 +580,28 @@ class ScanNewTokens extends Command
                                 ],
                             ]);
 
-                            $paperBuyExecuted = $paperPosition->wasRecentlyCreated;
+                            $paperPosition = $execution['position'];
+                            $paperBuyExecuted = $paperPosition?->wasRecentlyCreated ?? false;
 
-                            $paperEntryDecision['paper_entry_status'] = $paperBuyExecuted
-                                ? 'executed'
-                                : 'already_open';
+                            $paperEntryDecision['paper_entry_status'] = match (true) {
+                                $paperBuyExecuted => 'executed',
+                                $paperPosition !== null => 'already_open',
+                                $execution['opportunity']->status->value === 'pending_confirmation' => 'pending_confirmation',
+                                $execution['opportunity']->status->value === 'ignored' => 'ignored',
+                                default => 'signaled',
+                            };
 
-                            $paperEntryDecision['paper_entry_reason'] = $paperBuyExecuted
-                                ? (
+                            $paperEntryDecision['paper_entry_reason'] = match (true) {
+                                $paperBuyExecuted => (
                                     $dexAvailable
                                         ? 'Funded paper position created using Dex entry data.'
                                         : 'Funded provisional paper position created using fresh Birdeye data; Dex confirmation pending.'
-                                )
-                                : 'A funded position is already open for this chain and address.';
+                                ),
+                                $paperPosition !== null => 'A funded position is already open for this chain and address.',
+                                $execution['opportunity']->status->value === 'pending_confirmation' => 'Qualified opportunity is waiting for confirmation.',
+                                $execution['opportunity']->status->value === 'ignored' => 'Execution was blocked by the emergency kill switch.',
+                                default => 'Qualified signal recorded without execution.',
+                            };
 
                             $this->info(
                                 $paperBuyExecuted

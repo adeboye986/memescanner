@@ -10,7 +10,7 @@ class EthereumScannerService
 {
     public function __construct(
         private ChainManager $chains,
-        private PaperTradeEntryService $entries,
+        private TradeOpportunityService $opportunities,
     ) {}
 
     /** @return array{profiles: int, qualified: int, positions: int, unavailable_checks: list<string>} */
@@ -74,7 +74,7 @@ class EthereumScannerService
                 continue;
             }
 
-            $position = $this->entries->buy([
+            $execution = $this->opportunities->qualify([
                 'chain' => Chain::Ethereum->value,
                 'address' => $address,
                 'symbol' => $symbol,
@@ -83,9 +83,19 @@ class EthereumScannerService
                 'entry_market_cap' => $marketCap,
                 'entry_price' => $market['price_usd'] ?? null,
                 'entry_liquidity' => $liquidity,
+                'volume' => $volume,
                 'move_since_discovery_percent' => 0,
                 'scanner' => $scanner,
                 'send_notification' => true,
+                'security_data' => [
+                    'status' => 'unavailable',
+                    'coverage' => 'No Ethereum token-security provider is configured.',
+                    'market_validation' => [
+                        'provider' => 'DexScreener',
+                        'requested_token_is_base' => true,
+                        'pair_available' => true,
+                    ],
+                ],
                 'meta' => [
                     'pair_address' => $market['pair_address'] ?? null,
                     'dex' => $market['dex'] ?? null,
@@ -94,7 +104,7 @@ class EthereumScannerService
                 ],
             ]);
 
-            if ($position->wasRecentlyCreated) {
+            if ($execution['position']?->wasRecentlyCreated) {
                 $positions++;
             }
         }

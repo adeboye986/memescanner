@@ -5,14 +5,15 @@ namespace App\Console\Commands;
 use App\Chain;
 use App\Models\TokenScan;
 use App\Models\TokenScanHistory;
+use App\Services\ApplicationSettingsService;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
 use App\Services\EthereumScannerService;
 use App\Services\GoPlusService;
-use App\Services\PaperTradeEntryService;
 use App\Services\PaperWalletService;
 use App\Services\SolanaService;
 use App\Services\TelegramService;
+use App\Services\TradeOpportunityService;
 use Illuminate\Console\Command;
 use InvalidArgumentException;
 
@@ -30,9 +31,10 @@ class ScanMomentumTokens extends Command
         DexScreenerService $dexscreener,
         TelegramService $telegram,
         SolanaService $solana,
-        PaperTradeEntryService $paperTrading,
+        TradeOpportunityService $opportunities,
         PaperWalletService $wallets,
         EthereumScannerService $ethereumScanner,
+        ApplicationSettingsService $settings,
     ): int {
         try {
             $chain = Chain::fromInput($this->option('chain'));
@@ -94,13 +96,7 @@ class ScanMomentumTokens extends Command
             true
         );
 
-        $maxChasePercent = max(
-            0,
-            (float) config(
-                'services.trading.max_chase_percent',
-                35
-            )
-        );
+        $maxChasePercent = max(0, (float) $settings->get('scanner.max_chase_percent'));
 
         $dexCandidates = [];
 
@@ -693,7 +689,7 @@ class ScanMomentumTokens extends Command
 
                     if ($paperStatus === 'simulated_buy') {
                         try {
-                            $paperPosition = $paperTrading->buy([
+                            $execution = $opportunities->qualify([
                                 'chain' => $chain->value,
                                 'address' => $address,
                                 'symbol' => $symbol,
@@ -707,7 +703,24 @@ class ScanMomentumTokens extends Command
 
                                 'entry_liquidity' => $paperEntry['liquidity_usd'] ?? null,
 
+                                'volume' => $paperDex['volume_5m'] ?? $item['volume_5m_usd'] ?? null,
+
                                 'move_since_discovery_percent' => $paperMovePercent,
+
+                                'security_data' => [
+                                    'status' => ($holderRisk['passed'] ?? null) === true ? 'passed' : 'unavailable',
+                                    'provider' => 'Solana RPC holder analysis',
+                                    'passed' => $holderRisk['passed'] ?? null,
+                                    'score' => $holderRisk['score'] ?? null,
+                                    'risks' => $holderRisk['reasons'] ?? [],
+                                    'coverage' => 'Solana holder concentration at qualification.',
+                                    'holder_concentration' => [
+                                        'largest_holder_percentage' => $holderRisk['largest_holder_percentage'] ?? null,
+                                        'top_5_percentage' => $holderRisk['top_5_percentage'] ?? null,
+                                        'top_10_percentage' => $holderRisk['top_10_percentage'] ?? null,
+                                        'risk_level' => $holderRisk['level'] ?? null,
+                                    ],
+                                ],
 
                                 'meta' => [
                                     'pair_address' => $paperEntry['pair_address'] ?? null,
@@ -719,8 +732,9 @@ class ScanMomentumTokens extends Command
                                 'scanner' => 'momentum',
                             ]);
 
+                            $paperPosition = $execution['position'];
                             $paperBuyExecuted =
-                                $paperPosition->wasRecentlyCreated;
+                                $paperPosition?->wasRecentlyCreated ?? false;
 
                             if ($paperBuyExecuted) {
                                 $this->info(
@@ -731,7 +745,7 @@ class ScanMomentumTokens extends Command
                                         number_format($paperMarketCap, 2)
                                     )
                                 );
-                            } else {
+                            } elseif ($paperPosition !== null) {
                                 $paperStatus = 'already_open';
                                 $paperReason =
                                     'Paper position is already open; no additional SOL invested.';
@@ -739,6 +753,13 @@ class ScanMomentumTokens extends Command
                                 $this->line(
                                     "PAPER BUY SKIPPED: {$symbol} | position already open"
                                 );
+                            } else {
+                                $paperStatus = $execution['opportunity']->status->value;
+                                $paperReason = match ($paperStatus) {
+                                    'pending_confirmation' => 'Qualified opportunity is waiting for confirmation.',
+                                    'ignored' => 'Execution was blocked by the emergency kill switch.',
+                                    default => 'Qualified signal recorded without execution.',
+                                };
                             }
                         } catch (\Throwable $e) {
                             $paperStatus = 'buy_failed';

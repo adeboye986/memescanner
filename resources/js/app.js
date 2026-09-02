@@ -1,6 +1,33 @@
 const closeModal = document.querySelector('#close-position-modal');
 const closeForm = document.querySelector('#close-position-form');
 
+const executionModeInputs = document.querySelectorAll('input[name="execution_mode"]');
+const entryModeInputs = document.querySelectorAll('input[name="entry_mode"]');
+const liveExecutionWarning = document.querySelector('#live-execution-warning');
+const liveAutoWarning = document.querySelector('#live-auto-warning');
+
+document.querySelectorAll('.copy-value').forEach((button) => {
+    button.addEventListener('click', async () => {
+        try {
+            await navigator.clipboard.writeText(button.dataset.copyValue ?? '');
+            button.textContent = 'Copied';
+            window.setTimeout(() => { button.textContent = 'Copy'; }, 1500);
+        } catch {
+            button.textContent = 'Copy failed';
+        }
+    });
+});
+
+const updateLiveWarnings = () => {
+    const executionMode = document.querySelector('input[name="execution_mode"]:checked')?.value;
+    const entryMode = document.querySelector('input[name="entry_mode"]:checked')?.value;
+
+    liveExecutionWarning?.classList.toggle('hidden', executionMode !== 'live');
+    liveAutoWarning?.classList.toggle('hidden', executionMode !== 'live' || entryMode !== 'auto');
+};
+
+[...executionModeInputs, ...entryModeInputs].forEach((input) => input.addEventListener('change', updateLiveWarnings));
+
 if (closeModal instanceof HTMLDialogElement && closeForm instanceof HTMLFormElement) {
     document.querySelectorAll('.open-close-modal').forEach((button) => {
         button.addEventListener('click', () => {

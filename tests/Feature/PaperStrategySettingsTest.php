@@ -6,6 +6,7 @@ use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\PaperStrategySetting;
 use App\Models\PaperWallet;
+use App\Models\User;
 use App\Services\PaperStrategyService;
 use App\Services\PaperTradeEntryService;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -36,6 +37,7 @@ class PaperStrategySettingsTest extends TestCase
 
     public function test_admin_can_update_global_strategy(): void
     {
+        $this->actingAs(User::factory()->create(['is_admin' => true]));
         $this->post(route('dashboard.paper-strategy.update'), $this->values(15, 75, 180))
             ->assertRedirect(route('dashboard'))
             ->assertSessionHas('success');
@@ -49,6 +51,7 @@ class PaperStrategySettingsTest extends TestCase
     #[DataProvider('invalidStrategies')]
     public function test_invalid_global_strategy_is_rejected(array $values, string $field): void
     {
+        $this->actingAs(User::factory()->create(['is_admin' => true]));
         $this->from(route('dashboard'))->post(route('dashboard.paper-strategy.update'), $values)
             ->assertRedirect(route('dashboard'))
             ->assertSessionHasErrors($field);

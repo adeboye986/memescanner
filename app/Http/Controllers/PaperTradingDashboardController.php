@@ -4,7 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Chain;
 use App\Models\PaperPosition;
+use App\Models\TradeOpportunity;
+use App\Services\ApplicationSettingsService;
 use App\Services\DashboardCommandRegistry;
+use App\Services\IntegrationStatusService;
 use App\Services\PaperStrategyService;
 use App\Services\PaperWalletService;
 use App\Services\SystemActivityService;
@@ -17,6 +20,8 @@ class PaperTradingDashboardController extends Controller
         SystemActivityService $activities,
         PaperWalletService $wallets,
         PaperStrategyService $strategies,
+        ApplicationSettingsService $settings,
+        IntegrationStatusService $integrations,
     ): View {
         $paperWallets = collect(Chain::cases())
             ->mapWithKeys(fn (Chain $chain): array => [$chain->value => $wallets->default($chain)]);
@@ -36,6 +41,13 @@ class PaperTradingDashboardController extends Controller
             'runningActions' => $activities->runningActions(),
             'systemStatus' => $activities->systemStatus(),
             'paperStrategy' => $strategies->forNewPosition(),
+            'executionMode' => (string) $settings->get('trading.execution_mode'),
+            'entryMode' => (string) $settings->get('trading.entry_mode'),
+            'opportunitySummary' => [
+                'recent' => TradeOpportunity::query()->where('qualified_at', '>=', now()->subDay())->count(),
+                'pending' => TradeOpportunity::query()->where('status', 'pending_confirmation')->count(),
+            ],
+            'integrationSummary' => $integrations->all(),
         ]);
     }
 

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
 use App\Models\SystemActivity;
+use App\Models\TradeOpportunity;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
 
@@ -99,6 +100,20 @@ class PaperTradingDashboardTest extends TestCase
             ->assertSee('Scanner failed')
             ->assertViewHas('currentActivity', fn (array $activity): bool => $activity['label'] === 'CURRENT MANUAL')
             ->assertViewHas('recentActivities', fn (array $activities): bool => count($activities) === 3);
+    }
+
+    public function test_dashboard_summarizes_recent_and_pending_opportunities(): void
+    {
+        PaperWallet::query()->create(['name' => 'default']);
+        TradeOpportunity::factory()->create(['status' => 'pending_confirmation', 'qualified_at' => now()]);
+        TradeOpportunity::factory()->create(['status' => 'executed', 'qualified_at' => now()]);
+        TradeOpportunity::factory()->create(['status' => 'ignored', 'qualified_at' => now()->subDays(2)]);
+
+        $this->get(route('dashboard'))
+            ->assertSuccessful()
+            ->assertSee('Opportunities · 24h')
+            ->assertSee('1 pending confirmation')
+            ->assertViewHas('opportunitySummary', ['recent' => 2, 'pending' => 1]);
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Services\ApplicationSettingsService;
 use App\Services\Chains\ChainManager;
 use App\Services\DatabaseLockRetryService;
 use App\Services\PaperStrategyService;
@@ -28,6 +29,7 @@ class TrackPaperPositionsFast extends Command
         PaperStrategyService $strategies,
         DatabaseLockRetryService $databaseLocks,
         PaperTrackerHealthService $health,
+        ApplicationSettingsService $settings,
     ): int {
         $lockSeconds = max(30, (int) config('services.trading.paper_tracker_lock_seconds', 300));
         $cache = Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'));
@@ -71,6 +73,7 @@ class TrackPaperPositionsFast extends Command
                         $wallets,
                         $strategies,
                         $databaseLocks,
+                        $settings,
                         max(1, min((int) $this->option('limit'), 200)),
                         true,
                     );

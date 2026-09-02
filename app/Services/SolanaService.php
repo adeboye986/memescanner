@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
@@ -15,12 +16,9 @@ class SolanaService
     private const PUMP_FUN_PROGRAM =
         '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 
-    public function __construct()
+    public function __construct(ApplicationSettingsService $settings)
     {
-        $this->rpcUrl = config(
-            'services.solana.rpc_url',
-            'https://api.mainnet-beta.solana.com'
-        );
+        $this->rpcUrl = (string) $settings->getSecret('blockchain.solana_rpc_url');
     }
 
     public function getTokenLargestAccounts(string $mint): array
@@ -103,7 +101,7 @@ class SolanaService
             $tokenAccount =
                 $account['address'] ?? null;
 
-            if (!$tokenAccount) {
+            if (! $tokenAccount) {
                 continue;
             }
 
@@ -134,33 +132,26 @@ class SolanaService
                 );
 
             $entry = [
-                'token_account' =>
-                    $tokenAccount,
+                'token_account' => $tokenAccount,
 
-                'owner' =>
-                    $owner,
+                'owner' => $owner,
 
-                'amount' =>
-                    $amount,
+                'amount' => $amount,
 
-                'percentage' =>
-                    round(
-                        $percentage,
-                        4
-                    ),
+                'percentage' => round(
+                    $percentage,
+                    4
+                ),
 
-                'classification' =>
-                    $classification,
+                'classification' => $classification,
 
-                'owner_program' =>
-                    $ownerInfo['owner']
+                'owner_program' => $ownerInfo['owner']
                         ?? null,
 
-                'owner_executable' =>
-                    (bool) (
-                        $ownerInfo['executable']
-                        ?? false
-                    ),
+                'owner_executable' => (bool) (
+                    $ownerInfo['executable']
+                    ?? false
+                ),
             ];
 
             $rawAccounts[] = $entry;
@@ -175,27 +166,23 @@ class SolanaService
                 continue;
             }
 
-            if (!$owner) {
+            if (! $owner) {
                 continue;
             }
 
             if (
-                !isset(
+                ! isset(
                     $walletBalances[$owner]
                 )
             ) {
                 $walletBalances[$owner] = [
-                    'owner' =>
-                        $owner,
+                    'owner' => $owner,
 
-                    'amount' =>
-                        0.0,
+                    'amount' => 0.0,
 
-                    'percentage' =>
-                        0.0,
+                    'percentage' => 0.0,
 
-                    'token_accounts' =>
-                        [],
+                    'token_accounts' => [],
                 ];
             }
 
@@ -269,43 +256,34 @@ class SolanaService
             );
 
         return [
-            'largest_holder_percentage' =>
-                round(
-                    $largestHolder,
-                    4
-                ),
+            'largest_holder_percentage' => round(
+                $largestHolder,
+                4
+            ),
 
-            'top_5_percentage' =>
-                round(
-                    $top5,
-                    4
-                ),
+            'top_5_percentage' => round(
+                $top5,
+                4
+            ),
 
-            'top_10_percentage' =>
-                round(
-                    $top10,
-                    4
-                ),
+            'top_10_percentage' => round(
+                $top10,
+                4
+            ),
 
-            'wallet_count_analyzed' =>
-                count($wallets),
+            'wallet_count_analyzed' => count($wallets),
 
-            'excluded_account_count' =>
-                count(
-                    $excludedAccounts
-                ),
+            'excluded_account_count' => count(
+                $excludedAccounts
+            ),
 
-            'wallets' =>
-                $wallets,
+            'wallets' => $wallets,
 
-            'excluded_accounts' =>
-                $excludedAccounts,
+            'excluded_accounts' => $excludedAccounts,
 
-            'raw_accounts' =>
-                $rawAccounts,
+            'raw_accounts' => $rawAccounts,
 
-            'total_supply' =>
-                $totalSupply,
+            'total_supply' => $totalSupply,
         ];
     }
 
@@ -421,14 +399,11 @@ class SolanaService
             'level' => $level,
             'reasons' => $reasons,
 
-            'largest_holder_percentage' =>
-                round($largest, 4),
+            'largest_holder_percentage' => round($largest, 4),
 
-            'top_5_percentage' =>
-                round($top5, 4),
+            'top_5_percentage' => round($top5, 4),
 
-            'top_10_percentage' =>
-                round($top10, 4),
+            'top_10_percentage' => round($top10, 4),
         ];
     }
 
@@ -459,14 +434,14 @@ class SolanaService
         foreach ($signatures as $entry) {
             $signature = $entry['signature'] ?? null;
 
-            if (!$signature) {
+            if (! $signature) {
                 continue;
             }
 
             try {
                 $tx = $this->getTransaction($signature);
 
-                if (!$tx || !empty($tx['meta']['err'])) {
+                if (! $tx || ! empty($tx['meta']['err'])) {
                     continue;
                 }
 
@@ -482,7 +457,7 @@ class SolanaService
                     || str_contains($logs, 'Instruction: Buy')
                     || str_contains($logs, 'Instruction: Sell');
 
-                if (!$isPumpTrade) {
+                if (! $isPumpTrade) {
                     continue;
                 }
 
@@ -495,7 +470,7 @@ class SolanaService
                         ? $key
                         : ($key['pubkey'] ?? null);
 
-                    if (!$address) {
+                    if (! $address) {
                         continue;
                     }
 
@@ -523,7 +498,7 @@ class SolanaService
         return null;
     }
 
-   public function analyzePumpFunFees(
+    public function analyzePumpFunFees(
         string $mint,
         int $maxSignatures = 500,
         float $feeThreshold = 0.5
@@ -531,7 +506,7 @@ class SolanaService
         $bondingCurve =
             $this->findPumpFunBondingCurve($mint);
 
-        if (!$bondingCurve) {
+        if (! $bondingCurve) {
             throw new RuntimeException(
                 'Unable to identify Pump.fun bonding curve.'
             );
@@ -575,7 +550,7 @@ class SolanaService
                     $entry['signature']
                     ?? null;
 
-                if (!$signature) {
+                if (! $signature) {
                     continue;
                 }
 
@@ -588,10 +563,11 @@ class SolanaService
                         );
 
                     if (
-                        !$tx
-                        || !empty($tx['meta']['err'])
+                        ! $tx
+                        || ! empty($tx['meta']['err'])
                     ) {
                         $skipped++;
+
                         continue;
                     }
 
@@ -625,8 +601,9 @@ class SolanaService
                             'Instruction: Sell'
                         );
 
-                    if (!$isBuy && !$isSell) {
+                    if (! $isBuy && ! $isSell) {
                         $skipped++;
+
                         continue;
                     }
 
@@ -652,6 +629,7 @@ class SolanaService
 
                     if ($curveIndex === false) {
                         $skipped++;
+
                         continue;
                     }
 
@@ -682,6 +660,7 @@ class SolanaService
                         $processed++;
                     } else {
                         $skipped++;
+
                         continue;
                     }
 
@@ -720,7 +699,7 @@ class SolanaService
                 break;
             }
 
-            if (!$before) {
+            if (! $before) {
                 break;
             }
         }
@@ -750,56 +729,40 @@ class SolanaService
         return [
             'mint' => $mint,
 
-            'bonding_curve' =>
-                $bondingCurve,
+            'bonding_curve' => $bondingCurve,
 
-            'signatures_scanned' =>
-                $signaturesScanned,
+            'signatures_scanned' => $signaturesScanned,
 
-            'trades_processed' =>
-                $processed,
+            'trades_processed' => $processed,
 
-            'trades_skipped' =>
-                $skipped,
+            'trades_skipped' => $skipped,
 
-            'buy_count' =>
-                $buyCount,
+            'buy_count' => $buyCount,
 
-            'sell_count' =>
-                $sellCount,
+            'sell_count' => $sellCount,
 
-            'buy_volume_sol' =>
-                round($buyVolumeSol, 6),
+            'buy_volume_sol' => round($buyVolumeSol, 6),
 
-            'sell_volume_sol' =>
-                round($sellVolumeSol, 6),
+            'sell_volume_sol' => round($sellVolumeSol, 6),
 
-            'total_volume_sol' =>
-                round($totalVolumeSol, 6),
+            'total_volume_sol' => round($totalVolumeSol, 6),
 
-            'creator_fees_sol' =>
-                round($creatorFeesSol, 6),
+            'creator_fees_sol' => round($creatorFeesSol, 6),
 
-            'protocol_fees_sol' =>
-                round($protocolFeesSol, 6),
+            'protocol_fees_sol' => round($protocolFeesSol, 6),
 
-            'total_pump_fees_sol' =>
-                round($totalFeesSol, 6),
+            'total_pump_fees_sol' => round($totalFeesSol, 6),
 
-            'fee_threshold_sol' =>
-                $feeThreshold,
+            'fee_threshold_sol' => $feeThreshold,
 
-            'status' =>
-                $status,
+            'status' => $status,
 
-            'history_exhausted' =>
-                $historyExhausted,
+            'history_exhausted' => $historyExhausted,
 
-            'passes_fee_heuristic' =>
-                $thresholdReached,
+            'passes_fee_heuristic' => $thresholdReached,
         ];
     }
-    
+
     /**
      * Fetch the oldest transactions touching an address using Helius'
      * getTransactionsForAddress archival RPC.
@@ -881,7 +844,7 @@ class SolanaService
         foreach ($oldestTransactions as $entry) {
             $signature = $entry['signature'] ?? null;
 
-            if (!$signature) {
+            if (! $signature) {
                 continue;
             }
 
@@ -891,7 +854,7 @@ class SolanaService
                 continue;
             }
 
-            if (!$tx || !empty($tx['meta']['err'])) {
+            if (! $tx || ! empty($tx['meta']['err'])) {
                 continue;
             }
 
@@ -919,7 +882,7 @@ class SolanaService
                 }
             }
 
-            if (!$touchesPumpFun) {
+            if (! $touchesPumpFun) {
                 continue;
             }
 
@@ -931,7 +894,7 @@ class SolanaService
                     'Instruction: CreateV2'
                 );
 
-            if (!$isPumpCreation) {
+            if (! $isPumpCreation) {
                 continue;
             }
 
@@ -951,10 +914,10 @@ class SolanaService
                     (bool) ($key['writable'] ?? false);
 
                 if (
-                    !$address
+                    ! $address
                     || $address === $mint
-                    || !$isSigner
-                    || !$isWritable
+                    || ! $isSigner
+                    || ! $isWritable
                 ) {
                     continue;
                 }
@@ -980,7 +943,7 @@ class SolanaService
             }
         }
 
-        if (!$creator) {
+        if (! $creator) {
             return [
                 'available' => false,
                 'mint' => $mint,
@@ -992,13 +955,10 @@ class SolanaService
                 'outflow_count' => 0,
                 'sell_signatures' => [],
                 'outflow_signatures' => [],
-                'oldest_transactions_returned' =>
-                    count($oldestTransactions),
-                'creation_transactions_inspected' =>
-                    $creationTransactionsInspected,
+                'oldest_transactions_returned' => count($oldestTransactions),
+                'creation_transactions_inspected' => $creationTransactionsInspected,
                 'creator_transactions_scanned' => 0,
-                'reason' =>
-                    'Unable to identify Pump.fun creator wallet from oldest transactions.',
+                'reason' => 'Unable to identify Pump.fun creator wallet from oldest transactions.',
             ];
         }
 
@@ -1020,7 +980,7 @@ class SolanaService
             $signature = $entry['signature'] ?? null;
 
             if (
-                !$signature
+                ! $signature
                 || $signature === $creationSignature
             ) {
                 continue;
@@ -1032,7 +992,7 @@ class SolanaService
                 continue;
             }
 
-            if (!$tx || !empty($tx['meta']['err'])) {
+            if (! $tx || ! empty($tx['meta']['err'])) {
                 continue;
             }
 
@@ -1089,7 +1049,7 @@ class SolanaService
                 break;
             }
 
-            if (!$creatorSigned) {
+            if (! $creatorSigned) {
                 continue;
             }
 
@@ -1141,18 +1101,13 @@ class SolanaService
 
             $event = [
                 'signature' => $signature,
-                'token_amount_before' =>
-                    round($preToken, 6),
-                'token_amount_after' =>
-                    round($postToken, 6),
-                'token_delta' =>
-                    round($tokenDelta, 6),
-                'sol_delta' =>
-                    $solDelta !== null
+                'token_amount_before' => round($preToken, 6),
+                'token_amount_after' => round($postToken, 6),
+                'token_delta' => round($tokenDelta, 6),
+                'sol_delta' => $solDelta !== null
                         ? round($solDelta, 9)
                         : null,
-                'sell_instruction' =>
-                    $hasSellInstruction,
+                'sell_instruction' => $hasSellInstruction,
             ];
 
             $outflowEvents[] = $event;
@@ -1194,9 +1149,8 @@ class SolanaService
             'mint' => $mint,
             'creator' => $creator,
             'creation_signature' => $creationSignature,
-            'dev_sold' => !empty($sellEvents),
-            'dev_token_outflow' =>
-                !empty($outflowEvents),
+            'dev_sold' => ! empty($sellEvents),
+            'dev_token_outflow' => ! empty($outflowEvents),
             'sell_count' => count($sellEvents),
             'outflow_count' => count($outflowEvents),
 
@@ -1214,41 +1168,32 @@ class SolanaService
                 )
             ),
 
-            'sell_events' =>
-                array_slice($sellEvents, 0, 10),
+            'sell_events' => array_slice($sellEvents, 0, 10),
 
-            'outflow_events' =>
-                array_slice($outflowEvents, 0, 10),
+            'outflow_events' => array_slice($outflowEvents, 0, 10),
 
-            'current_dev_token_balance' =>
-                $currentDevBalance !== null
+            'current_dev_token_balance' => $currentDevBalance !== null
                     ? round($currentDevBalance, 6)
                     : null,
 
-            'current_dev_percentage' =>
-                $currentDevPercentage !== null
+            'current_dev_percentage' => $currentDevPercentage !== null
                     ? round($currentDevPercentage, 4)
                     : null,
 
-            'oldest_transactions_returned' =>
-                count($oldestTransactions),
+            'oldest_transactions_returned' => count($oldestTransactions),
 
-            'creation_transactions_inspected' =>
-                $creationTransactionsInspected,
+            'creation_transactions_inspected' => $creationTransactionsInspected,
 
-            'creator_transactions_scanned' =>
-                $creatorTransactionsScanned,
+            'creator_transactions_scanned' => $creatorTransactionsScanned,
 
-            'creator_tx_limit' =>
-                $creatorTxLimit,
+            'creator_tx_limit' => $creatorTxLimit,
 
             /*
              * false means we inspected only the most recent creator
              * transactions, so "Dev Sold: NO" should be read as
              * "no sale detected in scanned history".
              */
-            'scan_complete_for_creator' =>
-                count($creatorSignatures)
+            'scan_complete_for_creator' => count($creatorSignatures)
                 < $creatorTxLimit,
         ];
     }
@@ -1315,7 +1260,7 @@ class SolanaService
 
         $accounts = $result['value'] ?? [];
 
-        if (!is_array($accounts)) {
+        if (! is_array($accounts)) {
             return null;
         }
 
@@ -1323,8 +1268,7 @@ class SolanaService
 
         foreach ($accounts as $account) {
             $amount =
-                $account['account']['data']['parsed']['info']
-                    ['tokenAmount']
+                $account['account']['data']['parsed']['info']['tokenAmount']
                 ?? [];
 
             $total += (float) (
@@ -1341,11 +1285,11 @@ class SolanaService
         ?string $owner,
         ?array $ownerInfo
     ): string {
-        if (!$owner) {
+        if (! $owner) {
             return 'unknown';
         }
 
-        if (!$ownerInfo) {
+        if (! $ownerInfo) {
             return 'unknown';
         }
 
@@ -1418,8 +1362,7 @@ class SolanaService
                 3,
                 750,
                 function ($exception) {
-                    return $exception instanceof
-                        \Illuminate\Http\Client\ConnectionException;
+                    return $exception instanceof ConnectionException;
                 }
             )
             ->acceptJson()
@@ -1433,25 +1376,25 @@ class SolanaService
                 ]
             );
 
-        if (!$response->successful()) {
+        if (! $response->successful()) {
             throw new RuntimeException(
                 'Solana RPC error: '
-                . $response->status()
-                . ' - '
-                . $response->body()
+                .$response->status()
+                .' - '
+                .$response->body()
             );
         }
 
         $data = $response->json();
 
         if (
-            !empty(
+            ! empty(
                 $data['error']
             )
         ) {
             throw new RuntimeException(
                 'Solana RPC returned error: '
-                . json_encode(
+                .json_encode(
                     $data['error']
                 )
             );

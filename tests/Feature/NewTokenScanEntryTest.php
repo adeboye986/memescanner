@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
 use App\Models\TokenScan;
+use App\Models\TradeOpportunity;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
 use App\Services\GoPlusService;
@@ -108,6 +109,11 @@ class NewTokenScanEntryTest extends TestCase
             $this->assertIsArray($scan->raw_data);
             $this->assertIsArray(data_get($scan->raw_data, 'scanner_decision'));
         });
+        $strongOpportunity = TradeOpportunity::query()->where('address', 'strong')->sole();
+        $this->assertEqualsWithDelta(1000, (float) $strongOpportunity->volume, 0.000001);
+        $this->assertSame('passed', $strongOpportunity->security_data['status']);
+        $this->assertSame('GoPlus', $strongOpportunity->security_data['provider']);
+        $this->assertTrue($strongOpportunity->security_data['passed']);
         $this->assertEqualsWithDelta(4.8, (float) PaperWallet::query()->sole()->available_balance_sol, 0.000001);
     }
 

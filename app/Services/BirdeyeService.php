@@ -2,18 +2,20 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 class BirdeyeService
 {
     protected string $baseUrl;
+
     protected string $apiKey;
 
-    public function __construct()
+    public function __construct(ApplicationSettingsService $settings)
     {
         $this->baseUrl = config('services.birdeye.base_url');
-        $this->apiKey = config('services.birdeye.api_key');
+        $this->apiKey = (string) $settings->getSecret('market_data.birdeye_api_key');
     }
 
     public function tokenOverview(string $address): array
@@ -29,7 +31,7 @@ class BirdeyeService
                         'x-chain' => 'solana',
                         'accept' => 'application/json',
                     ])
-                    ->get($this->baseUrl . '/defi/token_overview', [
+                    ->get($this->baseUrl.'/defi/token_overview', [
                         'address' => $address,
                     ]);
 
@@ -39,17 +41,18 @@ class BirdeyeService
 
                 if ($response->status() === 429 && $attempt < $maxAttempts) {
                     sleep(5 * $attempt);
+
                     continue;
                 }
 
                 throw new RuntimeException(
-                    'Birdeye API error: ' .
-                    $response->status() .
-                    ' - ' .
+                    'Birdeye API error: '.
+                    $response->status().
+                    ' - '.
                     $response->body()
                 );
 
-            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            } catch (ConnectionException $e) {
                 if ($attempt >= $maxAttempts) {
                     throw $e;
                 }
@@ -76,7 +79,7 @@ class BirdeyeService
                         'x-chain' => 'solana',
                         'accept' => 'application/json',
                     ])
-                    ->get($this->baseUrl . '/defi/v2/tokens/new_listing', [
+                    ->get($this->baseUrl.'/defi/v2/tokens/new_listing', [
                         'limit' => min($limit, 20),
                         'meme_platform_enabled' => 'true',
                     ]);
@@ -96,13 +99,13 @@ class BirdeyeService
                 }
 
                 throw new RuntimeException(
-                    'Birdeye API error: ' .
-                    $response->status() .
-                    ' - ' .
+                    'Birdeye API error: '.
+                    $response->status().
+                    ' - '.
                     $response->body()
                 );
 
-            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            } catch (ConnectionException $e) {
                 if ($attempt >= $maxAttempts) {
                     throw $e;
                 }
@@ -129,7 +132,7 @@ class BirdeyeService
                         'x-chain' => 'solana',
                         'accept' => 'application/json',
                     ])
-                    ->get($this->baseUrl . '/defi/token_security', [
+                    ->get($this->baseUrl.'/defi/token_security', [
                         'address' => $address,
                     ]);
 
@@ -139,17 +142,18 @@ class BirdeyeService
 
                 if ($response->status() === 429 && $attempt < $maxAttempts) {
                     sleep(2 * $attempt);
+
                     continue;
                 }
 
                 throw new RuntimeException(
-                    'Birdeye Security API error: ' .
-                    $response->status() .
-                    ' - ' .
+                    'Birdeye Security API error: '.
+                    $response->status().
+                    ' - '.
                     $response->body()
                 );
 
-            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            } catch (ConnectionException $e) {
                 if ($attempt >= $maxAttempts) {
                     throw $e;
                 }
@@ -176,7 +180,7 @@ class BirdeyeService
                         'x-chain' => 'solana',
                         'accept' => 'application/json',
                     ])
-                    ->get($this->baseUrl . '/defi/v3/token/list', [
+                    ->get($this->baseUrl.'/defi/v3/token/list', [
                         'sort_by' => 'volume_5m_usd',
                         'sort_type' => 'desc',
 
@@ -202,17 +206,18 @@ class BirdeyeService
                     $attempt < $maxAttempts
                 ) {
                     sleep(5 * $attempt);
+
                     continue;
                 }
 
                 throw new RuntimeException(
-                    'Birdeye momentum API error: ' .
-                    $response->status() .
-                    ' - ' .
+                    'Birdeye momentum API error: '.
+                    $response->status().
+                    ' - '.
                     $response->body()
                 );
 
-            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            } catch (ConnectionException $e) {
                 if ($attempt >= $maxAttempts) {
                     throw $e;
                 }
@@ -234,13 +239,13 @@ class BirdeyeService
                 'X-API-KEY' => $this->apiKey,
                 'accept' => 'application/json',
             ])
-            ->get($this->baseUrl . '/utils/v1/credits');
+            ->get($this->baseUrl.'/utils/v1/credits');
 
         if ($response->failed()) {
             throw new RuntimeException(
-                'Birdeye credits error: ' .
-                $response->status() .
-                ' - ' .
+                'Birdeye credits error: '.
+                $response->status().
+                ' - '.
                 $response->body()
             );
         }

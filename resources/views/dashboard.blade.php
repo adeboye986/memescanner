@@ -9,8 +9,9 @@
         <div class="flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-wider">
             <span class="inline-flex items-center gap-2 rounded-full border border-sky-400/20 bg-sky-400/10 px-3 py-2 text-sky-300">
                 <span class="size-2 rounded-full bg-sky-400"></span>
-                Trading Mode: Paper
+                Trading Mode: {{ strtoupper($executionMode) }}
             </span>
+            <span class="inline-flex items-center rounded-full border border-violet-400/20 bg-violet-400/10 px-3 py-2 text-violet-300">Entry: {{ strtoupper($entryMode) }}</span>
             <span id="tracker-status-badge" @class([
                 'inline-flex items-center gap-2 rounded-full border px-3 py-2',
                 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300' => $systemStatus['status'] === 'active',
@@ -27,6 +28,10 @@
             </span>
         </div>
     </header>
+
+    @if ($executionMode === 'live')
+        <div class="rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm font-semibold text-red-200">LIVE EXECUTION NOT YET ENABLED — all live orders are blocked server-side.</div>
+    @endif
 
     @if (session('success'))
         <div class="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200" role="status">{{ session('success') }}</div>
@@ -47,6 +52,14 @@
             </ul>
         </div>
     @endif
+
+    <section aria-label="Platform workflow summary" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <article class="rounded-2xl border border-sky-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Trading Mode</p><p class="mt-2 text-lg font-bold text-sky-300">{{ strtoupper($executionMode) }}</p><p class="mt-1 text-xs text-slate-500">{{ $executionMode === 'paper' ? 'Simulated funds' : 'Execution locked' }}</p></article>
+        <article class="rounded-2xl border border-violet-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Entry Mode</p><p class="mt-2 text-lg font-bold text-violet-300">{{ str($entryMode)->replace('_', ' ')->upper() }}</p><p class="mt-1 text-xs text-slate-500">Qualification policy</p></article>
+        <article class="rounded-2xl border border-amber-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Opportunities · 24h</p><p class="mt-2 text-lg font-bold text-white">{{ $opportunitySummary['recent'] }}</p><p class="mt-1 text-xs text-amber-300">{{ $opportunitySummary['pending'] }} pending confirmation</p></article>
+        <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Tracker</p><p class="mt-2 text-lg font-bold {{ $systemStatus['status'] === 'active' ? 'text-emerald-300' : ($systemStatus['status'] === 'stale' ? 'text-amber-300' : 'text-slate-300') }}">{{ strtoupper($systemStatus['status']) }}</p><p class="mt-1 text-xs text-slate-500">Fast position monitoring</p></article>
+        <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Integrations</p><p class="mt-2 text-lg font-bold text-emerald-300">{{ collect($integrationSummary)->whereIn('status', ['configured', 'active'])->count() }} / {{ count($integrationSummary) }}</p><p class="mt-1 text-xs text-slate-500">Configured or active</p></article>
+    </section>
 
     <section aria-labelledby="wallet-heading" class="flex flex-col gap-4">
         <div class="flex items-center justify-between gap-4">
@@ -93,6 +106,7 @@
             </div>
         </div>
 
+        @can('manage-settings')
         <form method="POST" action="{{ route('dashboard.paper-strategy.update') }}" class="mt-6 grid gap-4 md:grid-cols-3 lg:grid-cols-[1fr_1fr_1fr_auto] lg:items-end">
             @csrf
             <label class="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Stop Loss %
@@ -106,6 +120,9 @@
             </label>
             <button type="submit" class="rounded-xl bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300">Save Strategy</button>
         </form>
+        @else
+            <p class="mt-5 text-sm text-slate-500">Sign in as an administrator to change strategy settings.</p>
+        @endcan
     </section>
 
     <div class="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">

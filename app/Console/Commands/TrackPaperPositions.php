@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\PaperPosition;
 use App\Models\PaperPositionSnapshot;
+use App\Services\ApplicationSettingsService;
 use App\Services\Chains\ChainManager;
 use App\Services\DatabaseLockRetryService;
 use App\Services\PaperStrategyService;
@@ -36,11 +37,12 @@ class TrackPaperPositions extends Command
         PaperWalletService $wallets,
         PaperStrategyService $strategies,
         DatabaseLockRetryService $databaseLocks,
+        ApplicationSettingsService $settings,
     ): int {
         $limit = max(1, min((int) $this->option('limit'), 200));
 
         try {
-            return $this->trackCycle($chains, $telegram, $wallets, $strategies, $databaseLocks, $limit);
+            return $this->trackCycle($chains, $telegram, $wallets, $strategies, $databaseLocks, $settings, $limit);
         } catch (\Throwable $exception) {
             if (! $databaseLocks->isLockException($exception)) {
                 throw $exception;
@@ -58,6 +60,7 @@ class TrackPaperPositions extends Command
         PaperWalletService $wallets,
         PaperStrategyService $strategies,
         DatabaseLockRetryService $databaseLocks,
+        ApplicationSettingsService $settings,
         int $limit = 50,
         bool $fastProcess = false,
     ): int {
@@ -139,7 +142,7 @@ class TrackPaperPositions extends Command
                     }
 
                     try {
-                        $this->trackOne($position, $dex, $telegram, $wallets, $strategies, $databaseLocks);
+                        $this->trackOne($position, $dex, $telegram, $wallets, $strategies, $databaseLocks, $settings);
                         $this->cycleMetrics['priced_positions']++;
                     } catch (\Throwable $exception) {
                         if (! $databaseLocks->isLockException($exception)) {
@@ -164,6 +167,7 @@ class TrackPaperPositions extends Command
         PaperWalletService $wallets,
         PaperStrategyService $strategies,
         DatabaseLockRetryService $databaseLocks,
+        ApplicationSettingsService $settings,
     ): void {
         $marketCap = (float) ($dex['market_cap'] ?? 0);
         $price = $dex['price_usd']
@@ -632,7 +636,7 @@ class TrackPaperPositions extends Command
                 $protectionJustArmed => 'protection_100_armed',
                 default => null,
             };
-            $snapshotInterval = max(1, (int) config('services.trading.paper_tracker_snapshot_seconds', 10));
+            $snapshotInterval = max(1, (int) $settings->get('tracker.snapshot_seconds'));
             $periodicSnapshotDue = ! PaperPositionSnapshot::query()
                 ->where('paper_position_id', $position->id)
                 ->where('snapshot_type', 'periodic')
