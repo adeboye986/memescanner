@@ -27,10 +27,22 @@ class ClosePaperTradeController extends Controller
             return back()->with('error', $exception->getMessage());
         }
 
-        $response = back()->with('success', "{$result['position']->symbol} was closed successfully.");
+        $success = match ($result['price_source']) {
+            'last_known_market' => "{$result['position']->symbol} was closed successfully using its last known market value because fresh Dex data was unavailable.",
+            'entry_fallback' => "{$result['position']->symbol} was closed successfully using its entry value because fresh and last known market data were unavailable.",
+            default => "{$result['position']->symbol} was closed successfully.",
+        };
+        $response = back()->with('success', $success);
+
+        if ($result['price_source'] !== 'fresh_market') {
+            $response->with('warning', 'Fallback valuation was used for this manual paper-trade close.');
+        }
 
         if ($result['notification_error'] !== null) {
-            $response->with('warning', 'The position closed, but its Telegram notification failed.');
+            $warning = $result['price_source'] !== 'fresh_market'
+                ? 'Fallback valuation was used. The position closed, but its Telegram notification failed.'
+                : 'The position closed, but its Telegram notification failed.';
+            $response->with('warning', $warning);
         }
 
         return $response;

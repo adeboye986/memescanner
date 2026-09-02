@@ -90,6 +90,11 @@ class ClosePaperPosition extends Command
         $this->info("PAPER TRADE CLOSED: {$closed->symbol}");
         $this->table(['Metric', 'Value'], [
             ['Closed At MC', '$'.number_format($result['market_cap'], 2)],
+            ['Price Source', match ($result['price_source']) {
+                'last_known_market' => 'Last known market',
+                'entry_fallback' => 'Entry fallback',
+                default => 'Fresh market',
+            }],
             ['Fill Multiple', number_format($result['multiple'], 2).'x'],
             ['Sold', number_format((float) $event['sold_fraction'] * 100, 0).'%'],
             ["{$currency} Returned", number_format((float) $event['sol_returned'], 4)." {$currency}"],
@@ -98,6 +103,10 @@ class ClosePaperPosition extends Command
             ['Strategy Return', sprintf('%+.2f%%', (float) $closed->strategy_return_percent)],
             ['Wallet Available', number_format((float) $wallet->available_balance_sol, 4)." {$currency}"],
         ]);
+
+        if ($result['price_source'] !== 'fresh_market') {
+            $this->warn('Fresh market data was unavailable; the manual close used fallback valuation.');
+        }
 
         if ($result['notification_error'] !== null) {
             $this->warn('Trade closed, but Telegram notification failed: '.$result['notification_error']);

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\PaperPosition;
+use App\Models\PaperWallet;
 use App\Services\Chains\ChainManager;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -17,38 +18,26 @@ class PaperTradeExitService
     ) {}
 
     /**
-     * @return array{position: PaperPosition, wallet: PaperWallet, event: array<string, mixed>, market_cap: float, multiple: float, notification_error: ?string}
+     * @return array{position: PaperPosition, wallet: PaperWallet, event: array<string, mixed>, market_cap: float, multiple: float, price_source: string, fresh_market_error: ?string, notification_error: ?string}
      */
     public function closeManually(PaperPosition $position): array
     {
-        try {
-            $dex = $this->chains->for($position->chain)->marketData($position->address);
-        } catch (Throwable $exception) {
+        $entryMarketCap = (float) $position->entry_market_cap;
+
+        if ($entryMarketCap <= 0) {
             throw new RuntimeException(
-                'Could not fetch current Dex price: '.$exception->getMessage(),
-                previous: $exception,
+                'No valid fresh, last-known, or entry market-cap data is available. Position was NOT closed.'
             );
         }
 
-        if (! ($dex['available'] ?? false)) {
-            throw new RuntimeException('Current Dex pair is unavailable. Position was NOT closed.');
-        }
-
-        if (! ($dex['requested_token_is_base'] ?? false)) {
-            throw new RuntimeException('Dex pair does not identify the requested token as the base token. Position was NOT closed.');
-        }
-
-        $marketCap = (float) ($dex['market_cap'] ?? 0);
-        $price = $dex['price_usd'] ?? $dex['price'] ?? null;
-        $entryMarketCap = (float) $position->entry_market_cap;
-
-        if ($marketCap <= 0 || $entryMarketCap <= 0) {
-            throw new RuntimeException('Invalid market-cap data. Position was NOT closed.');
-        }
-
+        $valuation = $this->resolveManualCloseValuation($position);
+        $marketCap = $valuation['market_cap'];
+        $price = $valuation['price'];
+        $priceSource = $valuation['price_source'];
+        $freshMarketError = $valuation['fresh_market_error'];
         $multiple = $marketCap / $entryMarketCap;
 
-        $result = DB::transaction(function () use ($position, $marketCap, $price, $multiple): array {
+        $result = DB::transaction(function () use ($position, $marketCap, $price, $multiple, $priceSource, $freshMarketError): array {
             $lockedPosition = PaperPosition::query()
                 ->whereKey($position->getKey())
                 ->lockForUpdate()
@@ -90,6 +79,8 @@ class PaperTradeExitService
                 'fill_multiple' => $multiple,
                 'observed_multiple' => $multiple,
                 'observed_market_cap' => $marketCap,
+                'price_source' => $priceSource,
+                'fresh_market_error' => $freshMarketError,
                 'cost_basis_sol' => round($costBasis, 8),
                 'sol_returned' => round($solReturned, 8),
                 'realized_pnl_sol' => round($realizedPnl, 8),
@@ -137,6 +128,8 @@ class PaperTradeExitService
                 'event' => $event,
                 'market_cap' => $marketCap,
                 'multiple' => $multiple,
+                'price_source' => $priceSource,
+                'fresh_market_error' => $freshMarketError,
             ];
         });
 
@@ -146,7 +139,62 @@ class PaperTradeExitService
     }
 
     /**
-     * @param  array{position: PaperPosition, wallet: PaperWallet, event: array<string, mixed>, market_cap: float, multiple: float}  $result
+     * @return array{market_cap: float, price: mixed, price_source: string, fresh_market_error: ?string}
+     */
+    private function resolveManualCloseValuation(PaperPosition $position): array
+    {
+        $freshMarketError = null;
+
+        try {
+            $marketData = $this->chains->for($position->chain)->marketData($position->address);
+
+            if (! ($marketData['available'] ?? false)) {
+                $freshMarketError = 'Current market data is unavailable.';
+            } elseif (! ($marketData['requested_token_is_base'] ?? false)) {
+                $freshMarketError = 'The current market pair does not identify the requested token as its base token.';
+            } elseif ((float) ($marketData['market_cap'] ?? 0) <= 0) {
+                $freshMarketError = 'Current market data returned an invalid market cap.';
+            } else {
+                return [
+                    'market_cap' => (float) $marketData['market_cap'],
+                    'price' => $marketData['price_usd'] ?? $marketData['price'] ?? null,
+                    'price_source' => 'fresh_market',
+                    'fresh_market_error' => null,
+                ];
+            }
+        } catch (Throwable $exception) {
+            $freshMarketError = 'Could not fetch current market data: '.$exception->getMessage();
+        }
+
+        $lastMarketCap = (float) ($position->last_market_cap ?? 0);
+
+        if ($lastMarketCap > 0) {
+            return [
+                'market_cap' => $lastMarketCap,
+                'price' => $position->last_price,
+                'price_source' => 'last_known_market',
+                'fresh_market_error' => $freshMarketError,
+            ];
+        }
+
+        $entryMarketCap = (float) ($position->entry_market_cap ?? 0);
+
+        if ($entryMarketCap > 0) {
+            return [
+                'market_cap' => $entryMarketCap,
+                'price' => $position->entry_price,
+                'price_source' => 'entry_fallback',
+                'fresh_market_error' => $freshMarketError,
+            ];
+        }
+
+        throw new RuntimeException(
+            'No valid fresh, last-known, or entry market-cap data is available. Position was NOT closed.'
+        );
+    }
+
+    /**
+     * @param  array{position: PaperPosition, wallet: PaperWallet, event: array<string, mixed>, market_cap: float, multiple: float, price_source: string, fresh_market_error: ?string}  $result
      */
     private function sendManualCloseNotification(array $result): ?string
     {
@@ -154,6 +202,11 @@ class PaperTradeExitService
         $wallet = $result['wallet'];
         $event = $result['event'];
         $currency = $wallet->currencyCode();
+        $priceSource = match ($result['price_source']) {
+            'last_known_market' => 'Last known market',
+            'entry_fallback' => 'Entry fallback',
+            default => 'Fresh market',
+        };
 
         try {
             $this->telegram->send(
@@ -161,6 +214,7 @@ class PaperTradeExitService
                 "💰 <b>{$position->symbol}</b>\n\n".
                 '⛓️ <b>Chain:</b> '.$position->chain->label()."\n".
                 "👤 <b>Manual close requested</b>\n".
+                "🏷️ <b>Price source:</b> {$priceSource}\n".
                 '📊 <b>Close MC:</b> $'.number_format($result['market_cap'], 2)."\n".
                 '✖️ <b>Fill:</b> '.number_format($result['multiple'], 2)."x\n".
                 '📤 <b>Sold:</b> '.number_format((float) $event['sold_fraction'] * 100, 0)."% of original position\n".
