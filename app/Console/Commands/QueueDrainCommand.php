@@ -37,7 +37,7 @@ class QueueDrainCommand extends Command
         try {
             $health->recordQueueRun('running');
             $exitCode = Artisan::call('queue:work', [
-                '--stop-when-empty' => true,
+                // '--stop-when-empty' => true,
                 '--queue' => 'telegram,default',
                 '--max-time' => $maxTime,
                 '--memory' => max(32, (int) ($this->option('memory') ?: config('services.operations.queue_memory', 128))),
