@@ -50,20 +50,17 @@ class PaperTradingDashboardTest extends TestCase
 
         $response
             ->assertOk()
-            ->assertSee('Paper Trading Dashboard')
-            ->assertSee('Scanner Controls')
+            ->assertSee('Admin Dashboard')
+            ->assertSee('Quick Actions')
             ->assertSee('Run Momentum Scan')
             ->assertSee('Check Wallet Reconciliation')
-            ->assertSee('Fast Tracker:')
-            ->assertSee('UNKNOWN')
-            ->assertDontSee('Auto Tracking: Active')
-            ->assertSee('4.5000 SOL')
-            ->assertSee('5.0000 ETH')
+            ->assertSee('Position Tracker')
+            ->assertSee('Admin Personal Paper Wallets')
+            ->assertSee('Legacy Admin Ledgers')
+            ->assertSee('4.5000')
+            ->assertSee('5.0000')
             ->assertSee('OPEN')
-            ->assertSee('+150.00%')
-            ->assertSee('+100% PROFIT PROTECTED — HOLDING')
-            ->assertSee('$90,000.00')
-            ->assertSee('$300,000.00')
+            ->assertSee('+0.7500 SOL')
             ->assertDontSee('UNFUNDED')
             ->assertDontSee('CLOSED')
             ->assertViewHas('positions', fn ($positions): bool => $positions->first()['model']->is($openPosition));
@@ -99,7 +96,7 @@ class PaperTradingDashboardTest extends TestCase
             ->assertSee('CURRENT MANUAL')
             ->assertSee('FAILED ACTIVITY')
             ->assertSee('SCHEDULED TRACKER')
-            ->assertSee('Scanner failed')
+            ->assertSee('Recent Activity')
             ->assertViewHas('currentActivity', fn (array $activity): bool => $activity['label'] === 'CURRENT MANUAL')
             ->assertViewHas('recentActivities', fn (array $activities): bool => count($activities) === 3);
     }
@@ -113,9 +110,37 @@ class PaperTradingDashboardTest extends TestCase
 
         $this->get(route('dashboard'))
             ->assertSuccessful()
-            ->assertSee('Opportunities · 24h')
+            ->assertSee('Opportunities')
             ->assertSee('1 pending confirmation')
             ->assertViewHas('opportunitySummary', ['recent' => 2, 'pending' => 1]);
+    }
+
+    public function test_admin_shell_renders_only_real_authorized_navigation(): void
+    {
+        $this->get(route('dashboard'))
+            ->assertOk()
+            ->assertSee('Administrator navigation')
+            ->assertSee('Scanner Control')
+            ->assertSee('Tracker & Queue', false)
+            ->assertSee('Opportunities')
+            ->assertSee('Trade History')
+            ->assertSee('Platform Settings')
+            ->assertSee('Telegram Bot')
+            ->assertSee('Sign Out')
+            ->assertDontSee('KYC')
+            ->assertDontSee('Support Tickets')
+            ->assertDontSee('Billing');
+    }
+
+    public function test_normal_user_keeps_customer_layout_without_admin_navigation(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+
+        $this->actingAs($user)->get(route('dashboard'))
+            ->assertOk()
+            ->assertDontSee('Administrator navigation')
+            ->assertDontSee('Platform Settings')
+            ->assertSee('Paper Trading Dashboard');
     }
 
     /**

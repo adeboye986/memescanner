@@ -1,0 +1,3 @@
+@props(['status'])
+@php $healthy = in_array($status, ['healthy', 'active', 'configured', 'completed'], true); $critical = in_array($status, ['failed', 'critical'], true); $classes = $healthy ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300' : ($critical ? 'border-red-400/20 bg-red-400/10 text-red-300' : (in_array($status, ['stale', 'pending', 'running'], true) ? 'border-amber-400/20 bg-amber-400/10 text-amber-300' : 'border-slate-700 bg-slate-800 text-slate-400')); @endphp
+<span {{ $attributes->class("inline-flex items-center gap-2.5 rounded-full border px-3 py-1.5 text-sm font-semibold uppercase tracking-wide $classes") }}><span class="size-2 rounded-full bg-current shadow-[0_0_10px_currentColor]"></span>{{ str($status)->replace('_', ' ')->upper() }}</span>

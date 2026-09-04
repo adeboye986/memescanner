@@ -6,6 +6,7 @@ use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Models\User;
+use App\Models\UserTelegramBot;
 use App\Services\ApplicationSettingsService;
 use App\Services\DashboardCommandRegistry;
 use App\Services\IntegrationStatusService;
@@ -54,7 +55,7 @@ class PaperTradingDashboardController extends Controller
             ->get()
             ->map(fn (PaperPosition $position): array => $this->presentPosition($position, $strategies));
 
-        return view('dashboard', [
+        $viewData = [
             'wallets' => $paperWallets,
             'legacyWallets' => $legacyWallets,
             'positions' => $positions,
@@ -75,7 +76,18 @@ class PaperTradingDashboardController extends Controller
             'integrationSummary' => $integrations->all(),
             'operationalStatus' => $operationalHealth->status(),
             'onboardingStatus' => $user->is_admin ? null : $onboarding->forUser($user),
-        ]);
+        ];
+
+        if ($user->is_admin) {
+            $viewData['adminOverview'] = [
+                'users' => User::query()->count(),
+                'opportunities' => TradeOpportunity::query()->count(),
+                'open_positions' => PaperPosition::query()->where('status', 'open')->where('initial_investment_sol', '>', 0)->count(),
+                'connected_bots' => UserTelegramBot::query()->where('enabled', true)->whereNotNull('webhook_configured_at')->count(),
+            ];
+        }
+
+        return view($user->is_admin ? 'dashboard.admin' : 'dashboard', $viewData);
     }
 
     private function opportunityQuery(User $user): Builder

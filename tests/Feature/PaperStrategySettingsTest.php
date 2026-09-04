@@ -115,7 +115,7 @@ class PaperStrategySettingsTest extends TestCase
         $this->assertEquals(8.0, $ethereum->strategy_snapshot['stop_loss_percent']);
     }
 
-    public function test_dashboard_displays_global_defaults_and_each_positions_snapshot(): void
+    public function test_platform_settings_displays_strategy_editor_and_dashboard_displays_position_snapshot(): void
     {
         $this->actingAs(User::factory()->create(['is_admin' => true]));
         $this->createWallet(Chain::Solana);
@@ -126,11 +126,18 @@ class PaperStrategySettingsTest extends TestCase
 
         $this->get(route('dashboard'))
             ->assertSuccessful()
-            ->assertSee('Paper Trading Strategy')
+            ->assertDontSee('Save Strategy')
             ->assertSee('Position strategy snapshot')
             ->assertSee('SL -25.00%')
             ->assertSee('P1 +60.00%')
             ->assertSee('P2 +140.00%');
+
+        $this->get(route('settings.index'))
+            ->assertSuccessful()
+            ->assertSee('Paper position protection')
+            ->assertSee('Stop Loss %')
+            ->assertSee('Protection 1 %')
+            ->assertSee('Protection 2 %');
 
         $this->assertSame('position_override', $position->strategy_snapshot['source']);
     }

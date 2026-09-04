@@ -1,4 +1,4 @@
-<x-layouts.app :title="($opportunity->symbol ?: 'Opportunity').' Opportunity'">
+<x-dynamic-component :component="auth()->user()->is_admin ? 'layouts.admin' : 'layouts.app'" :title="($opportunity->symbol ?: 'Opportunity').' Opportunity'">
     <div class="flex flex-wrap items-center justify-between gap-4"><a href="{{ route('opportunities.index') }}" class="text-sm font-semibold text-slate-400 hover:text-white">← All Opportunities</a><x-opportunity-status :status="$opportunity->status" /></div>
 
     @if (session('success')) <div class="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">{{ session('success') }}</div> @endif
@@ -40,4 +40,4 @@
     </div>
 
     <section class="rounded-2xl border border-slate-800 bg-slate-900/70 p-6"><h2 class="text-lg font-semibold text-white">Decision Audit</h2><div class="mt-4 divide-y divide-slate-800">@forelse ($opportunity->events->sortByDesc('id') as $event)<div class="flex flex-wrap justify-between gap-3 py-3 text-sm"><span class="font-semibold text-slate-300">{{ str($event->action)->replace('_', ' ')->title() }}</span><span class="text-slate-500">{{ $event->from_status }} → {{ $event->to_status }} · {{ $event->user?->name ?? 'System' }} · {{ $event->created_at->diffForHumans() }}</span></div>@empty<p class="py-4 text-sm text-slate-500">No manual actions recorded.</p>@endforelse</div></section>
-</x-layouts.app>
+</x-dynamic-component>

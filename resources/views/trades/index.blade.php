@@ -1,4 +1,4 @@
-<x-layouts.app title="Trade History">
+<x-dynamic-component :component="auth()->user()->is_admin ? 'layouts.admin' : 'layouts.app'" title="Trade History">
     <header class="flex flex-col gap-3 border-b border-slate-800 pb-7">
         <p class="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-400">Meme Scanner</p>
         <h1 class="text-3xl font-semibold tracking-tight text-white sm:text-4xl">Trade History & Performance</h1>
@@ -248,4 +248,4 @@
             <div class="mt-2">{{ $trades->links() }}</div>
         @endif
     </section>
-</x-layouts.app>
+</x-dynamic-component>

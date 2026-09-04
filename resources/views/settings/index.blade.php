@@ -1,4 +1,4 @@
-<x-layouts.app title="Platform Settings">
+<x-layouts.admin title="Platform Settings">
     @php
         $item = fn (string $key) => $settings->flatten(1)->firstWhere('key', $key);
         $executionMode = old('execution_mode', $item('trading.execution_mode')['value']);
@@ -53,4 +53,4 @@
 
     @foreach(['telegram','solana','ethereum','market-data'] as $integration)<form id="test-{{ $integration }}" method="POST" action="{{ route('settings.test', $integration) }}">@csrf</form>@endforeach
     <section class="rounded-2xl border border-slate-800 bg-slate-900/70 p-6"><h2 class="text-lg font-semibold">Recent Configuration Audit</h2><div class="mt-4 space-y-2">@forelse($audits as $audit)<div class="flex justify-between gap-4 border-t border-slate-800 py-3 text-sm"><span>{{ $audit->setting_key }}</span><span class="text-slate-500">{{ $audit->action }} · {{ $audit->created_at->diffForHumans() }}</span></div>@empty<p class="text-sm text-slate-500">No settings changes recorded.</p>@endforelse</div></section>
-</x-layouts.app>
+</x-layouts.admin>

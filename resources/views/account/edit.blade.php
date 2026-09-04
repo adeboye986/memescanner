@@ -1,4 +1,4 @@
-<x-layouts.app title="Account Settings">
+<x-dynamic-component :component="auth()->user()->is_admin ? 'layouts.admin' : 'layouts.app'" title="Account Settings">
     <header class="border-b border-slate-800 pb-7"><p class="text-xs font-semibold uppercase tracking-[0.2em] text-sky-400">Account</p><h1 class="mt-2 text-3xl font-semibold text-white">Profile & security</h1></header>
     @if(session('success'))<div class="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-200">{{ session('success') }}</div>@endif
     @if($errors->any())<div class="rounded-xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-200">{{ $errors->first() }}</div>@endif
@@ -18,4 +18,4 @@
             <button class="rounded-xl bg-emerald-400 px-5 py-3 font-semibold text-slate-950">Update Password</button>
         </form>
     </div>
-</x-layouts.app>
+</x-dynamic-component>

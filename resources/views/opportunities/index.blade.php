@@ -1,4 +1,4 @@
-<x-layouts.app title="Trade Opportunities">
+<x-dynamic-component :component="auth()->user()->is_admin ? 'layouts.admin' : 'layouts.app'" title="Trade Opportunities">
     <header class="flex flex-col gap-4 border-b border-slate-800 pb-7 lg:flex-row lg:items-end lg:justify-between">
         <div>
             <p class="text-xs font-semibold uppercase tracking-[0.24em] text-violet-400">Discovery Pipeline</p>
@@ -47,4 +47,4 @@
     </section>
 
     {{ $opportunities->links() }}
-</x-layouts.app>
+</x-dynamic-component>

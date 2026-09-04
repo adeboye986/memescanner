@@ -1,4 +1,4 @@
-<x-layouts.app title="Telegram Bot">
+<x-dynamic-component :component="auth()->user()->is_admin ? 'layouts.admin' : 'layouts.app'" title="Telegram Bot">
     <header class="border-b border-slate-800 pb-7">
         <p class="text-xs font-semibold uppercase tracking-[0.22em] text-sky-400">Personal Integration</p>
         <h1 class="mt-2 text-3xl font-semibold text-white">Telegram Bot</h1>
@@ -39,4 +39,4 @@
             @if(session('telegram_link_url'))<a href="{{ session('telegram_link_url') }}" target="_blank" rel="noopener noreferrer" class="mt-5 block rounded-xl bg-emerald-400 px-4 py-3 text-center text-sm font-bold text-slate-950">Open Telegram to finish linking</a>@endif
         </div>
     </section>
-</x-layouts.app>
+</x-dynamic-component>
