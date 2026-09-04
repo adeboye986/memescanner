@@ -29,6 +29,10 @@
         </div>
     </header>
 
+    @if($onboardingStatus && ! $onboardingStatus['ready'])
+        <section class="flex flex-col gap-4 rounded-2xl border border-amber-400/20 bg-amber-400/5 p-5 sm:flex-row sm:items-center sm:justify-between"><div><p class="font-semibold text-amber-200">Complete your setup</p><p class="mt-1 text-sm text-slate-400">Verify your email and connect Telegram to receive and manage your own opportunities.</p></div><a href="{{ route('onboarding') }}" class="shrink-0 rounded-xl bg-amber-300 px-4 py-2.5 text-center text-sm font-semibold text-slate-950">Continue Setup</a></section>
+    @endif
+
     @if ($executionMode === 'live')
         <div class="rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm font-semibold text-red-200">LIVE EXECUTION NOT YET ENABLED — all live orders are blocked server-side.</div>
     @endif
@@ -77,7 +81,7 @@
         </section>
     @endcan
 
-    <form method="POST" action="{{ route('dashboard.trading-preferences.update') }}" class="flex flex-wrap items-end gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+    <form id="trading-preferences" method="POST" action="{{ route('dashboard.trading-preferences.update') }}" class="flex flex-wrap items-end gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
         @csrf @method('PUT')
         <input type="hidden" name="execution_mode" value="paper">
         <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Execution<input value="PAPER" disabled class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-300"></label>
@@ -136,7 +140,7 @@
         @endif
     </section>
 
-    <section aria-labelledby="strategy-heading" class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10 sm:p-6">
+    <section id="paper-strategy" aria-labelledby="strategy-heading" class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10 sm:p-6">
         <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
             <div>
                 <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Risk Management</p>

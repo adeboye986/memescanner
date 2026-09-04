@@ -12,7 +12,8 @@ class UpdateUserTradingPreferenceRequest extends FormRequest
      */
     public function authorize(): bool
     {
-        return $this->user() !== null;
+        return $this->user() !== null
+            && ($this->input('entry_mode') !== 'auto' || $this->user()->hasVerifiedEmail());
     }
 
     /**

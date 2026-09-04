@@ -19,13 +19,13 @@
                     'bg-slate-800 text-white' => request()->routeIs('dashboard'),
                     'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('dashboard'),
                 ])>Dashboard</a>
-                @can('manage-settings')
+                @auth
                     <a href="{{ route('opportunities.index') }}" @class([
                         'rounded-lg px-3 py-2 text-sm font-semibold transition',
                         'bg-slate-800 text-white' => request()->routeIs('opportunities.*'),
                         'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('opportunities.*'),
                     ])>Opportunities</a>
-                @endcan
+                @endauth
                 <a href="{{ route('trades.index') }}" @class([
                     'rounded-lg px-3 py-2 text-sm font-semibold transition',
                     'bg-slate-800 text-white' => request()->routeIs('trades.*'),
@@ -36,9 +36,12 @@
                 @endcan
                 @auth
                     <a href="{{ route('telegram.settings') }}" @class(['rounded-lg px-3 py-2 text-sm font-semibold transition', 'bg-slate-800 text-white' => request()->routeIs('telegram.*'), 'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('telegram.*')])>Telegram Bot</a>
+                    @unless(auth()->user()->is_admin)<a href="{{ route('onboarding') }}" @class(['rounded-lg px-3 py-2 text-sm font-semibold transition', 'bg-slate-800 text-white' => request()->routeIs('onboarding'), 'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('onboarding')])>Setup</a>@endunless
+                    <a href="{{ route('account.edit') }}" @class(['rounded-lg px-3 py-2 text-sm font-semibold transition', 'bg-slate-800 text-white' => request()->routeIs('account.*'), 'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('account.*')])>Account</a>
                     <form method="POST" action="{{ route('logout') }}" class="ml-auto">@csrf<button class="rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-white">Sign Out</button></form>
                 @else
-                    <a href="{{ route('login') }}" class="ml-auto rounded-lg px-3 py-2 text-sm text-slate-500 hover:text-white">Admin</a>
+                    <a href="{{ route('login') }}" class="ml-auto rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-white">Sign In</a>
+                    <a href="{{ route('register') }}" class="rounded-lg bg-emerald-400 px-3 py-2 text-sm font-semibold text-slate-950">Register</a>
                 @endauth
             </nav>
             <main class="mx-auto flex max-w-[1600px] flex-col gap-8 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">

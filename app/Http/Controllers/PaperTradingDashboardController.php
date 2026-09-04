@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\ApplicationSettingsService;
 use App\Services\DashboardCommandRegistry;
 use App\Services\IntegrationStatusService;
+use App\Services\OnboardingStatusService;
 use App\Services\OperationalHealthService;
 use App\Services\PaperStrategyService;
 use App\Services\PaperWalletService;
@@ -30,6 +31,7 @@ class PaperTradingDashboardController extends Controller
         IntegrationStatusService $integrations,
         UserTradingPreferenceService $preferences,
         OperationalHealthService $operationalHealth,
+        OnboardingStatusService $onboarding,
     ): View {
         $user = $request->user();
         $preference = $preferences->forUser($user);
@@ -72,6 +74,7 @@ class PaperTradingDashboardController extends Controller
             ],
             'integrationSummary' => $integrations->all(),
             'operationalStatus' => $operationalHealth->status(),
+            'onboardingStatus' => $user->is_admin ? null : $onboarding->forUser($user),
         ]);
     }
 
