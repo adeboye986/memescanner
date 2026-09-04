@@ -12,9 +12,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->validateCsrfTokens(except: ['telegram/webhook']);
+        $middleware->validateCsrfTokens(except: ['telegram/webhook', 'telegram/webhook/*']);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        $exceptions->dontFlash(['bot_token', 'telegram_bot_token', 'telegram_webhook_secret', 'birdeye_api_key', 'solana_rpc_url']);
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );

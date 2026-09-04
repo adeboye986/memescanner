@@ -12,7 +12,7 @@ class TelegramLinkToken extends Model
     /** @use HasFactory<TelegramLinkTokenFactory> */
     use HasFactory;
 
-    protected $fillable = ['user_id', 'token_hash', 'expires_at', 'consumed_at'];
+    protected $fillable = ['user_id', 'user_telegram_bot_id', 'token_hash', 'expires_at', 'consumed_at'];
 
     protected function casts(): array
     {
@@ -22,5 +22,10 @@ class TelegramLinkToken extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function bot(): BelongsTo
+    {
+        return $this->belongsTo(UserTelegramBot::class, 'user_telegram_bot_id');
     }
 }

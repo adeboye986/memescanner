@@ -46,7 +46,7 @@ class OpportunityWorkflowTest extends TestCase
 
         $this->actingAs($this->admin)->get(route('opportunities.index', ['status' => 'pending_confirmation', 'chain' => 'ethereum', 'entry_mode' => 'confirm']))
             ->assertSuccessful()->assertSee('DEMO');
-        $this->get(route('opportunities.show', $shown))->assertSuccessful()->assertSee('Demo Coin')->assertSee('0x12345678901234567890')->assertSee('Approve Opportunity')->assertSee('Ethereum Security Coverage')->assertDontSee('97');
+        $this->get(route('opportunities.show', $shown))->assertSuccessful()->assertSee('Demo Coin')->assertSee('0x12345678901234567890')->assertSee('Approve Opportunity')->assertSee('Ethereum Security Coverage')->assertDontSeeText('97');
     }
 
     public function test_signal_is_visible_but_never_creates_a_position(): void

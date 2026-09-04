@@ -12,7 +12,7 @@ class TelegramIdentity extends Model
     /** @use HasFactory<TelegramIdentityFactory> */
     use HasFactory;
 
-    protected $fillable = ['user_id', 'telegram_user_id', 'telegram_chat_id', 'telegram_username', 'display_name', 'status', 'linked_at', 'last_seen_at'];
+    protected $fillable = ['user_id', 'user_telegram_bot_id', 'telegram_user_id', 'telegram_chat_id', 'telegram_username', 'display_name', 'status', 'linked_at', 'last_seen_at'];
 
     protected function casts(): array
     {
@@ -22,5 +22,10 @@ class TelegramIdentity extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function bot(): BelongsTo
+    {
+        return $this->belongsTo(UserTelegramBot::class, 'user_telegram_bot_id');
     }
 }

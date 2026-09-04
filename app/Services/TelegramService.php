@@ -26,6 +26,11 @@ class TelegramService
         $this->sendMessage($this->chatId, $message);
     }
 
+    public function client(): TelegramBotClient
+    {
+        return new TelegramBotClient($this->botToken);
+    }
+
     /** @param array<int, array<int, array<string, string>>> $keyboard */
     public function sendMessage(string $chatId, string $message, array $keyboard = []): array
     {

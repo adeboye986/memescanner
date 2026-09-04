@@ -26,6 +26,8 @@ trait RefreshesPaperTradingDatabase
                 'database/migrations/2026_09_02_215918_create_trade_opportunity_events_table.php',
                 'database/migrations/2026_09_02_224821_create_telegram_identities_table.php',
                 'database/migrations/2026_09_02_224822_create_telegram_link_tokens_table.php',
+                'database/migrations/2026_09_04_112652_create_user_telegram_bots_table.php',
+                'database/migrations/2026_09_04_112703_add_user_telegram_bot_id_to_telegram_access_tables.php',
             ],
             '--no-interaction' => true,
         ])->assertSuccessful();

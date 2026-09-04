@@ -5,37 +5,37 @@ namespace App\Services;
 use App\Models\TelegramIdentity;
 use App\Models\TelegramLinkToken;
 use App\Models\User;
+use App\Models\UserTelegramBot;
 use DomainException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class TelegramLinkService
 {
-    public function __construct(private ApplicationSettingsService $settings) {}
-
     public function create(User $user): string
     {
-        $username = ltrim((string) $this->settings->get('telegram.bot_username'), '@');
+        $bot = UserTelegramBot::query()->where('user_id', $user->id)->where('enabled', true)->first();
 
-        if ($username === '') {
-            throw new DomainException('Configure the Telegram bot username before linking an account.');
+        if (! $bot || ! $bot->webhook_configured_at) {
+            throw new DomainException('Connect and verify your Telegram bot before linking an account.');
         }
 
         $token = Str::random(40);
-        DB::transaction(function () use ($user, $token): void {
+        DB::transaction(function () use ($user, $bot, $token): void {
             TelegramLinkToken::query()->where('user_id', $user->id)->whereNull('consumed_at')->delete();
             TelegramLinkToken::query()->create([
                 'user_id' => $user->id,
+                'user_telegram_bot_id' => $bot->id,
                 'token_hash' => hash('sha256', $token),
                 'expires_at' => now()->addMinutes(10),
             ]);
         });
 
-        return "https://t.me/{$username}?start=link_{$token}";
+        return "https://t.me/{$bot->bot_username}?start=link_{$token}";
     }
 
     /** @param array<string, mixed> $from */
-    public function consume(string $token, array $from, string $chatId): TelegramIdentity
+    public function consume(string $token, array $from, string $chatId, UserTelegramBot $bot): TelegramIdentity
     {
         $telegramUserId = isset($from['id']) ? (string) $from['id'] : '';
 
@@ -43,8 +43,8 @@ class TelegramLinkService
             throw new DomainException('Telegram identity is invalid.');
         }
 
-        return DB::transaction(function () use ($token, $from, $chatId, $telegramUserId): TelegramIdentity {
-            $link = TelegramLinkToken::query()->where('token_hash', hash('sha256', $token))->lockForUpdate()->first();
+        return DB::transaction(function () use ($token, $from, $chatId, $telegramUserId, $bot): TelegramIdentity {
+            $link = TelegramLinkToken::query()->where('token_hash', hash('sha256', $token))->where('user_telegram_bot_id', $bot->id)->lockForUpdate()->first();
 
             if (! $link || $link->consumed_at || $link->expires_at->isPast()) {
                 throw new DomainException('This Telegram linking link is invalid or expired.');
@@ -60,6 +60,7 @@ class TelegramLinkService
                 ['user_id' => $link->user_id],
                 [
                     'telegram_user_id' => $telegramUserId,
+                    'user_telegram_bot_id' => $bot->id,
                     'telegram_chat_id' => $chatId,
                     'telegram_username' => $from['username'] ?? null,
                     'display_name' => trim(($from['first_name'] ?? '').' '.($from['last_name'] ?? '')) ?: null,
@@ -74,9 +75,17 @@ class TelegramLinkService
         });
     }
 
-    public function authorized(string $telegramUserId): ?TelegramIdentity
+    public function authorized(string $telegramUserId, ?UserTelegramBot $bot): ?TelegramIdentity
     {
-        return TelegramIdentity::query()->with('user')->where('telegram_user_id', $telegramUserId)->where('status', 'active')->first();
+        $query = TelegramIdentity::query()->with('user')->where('telegram_user_id', $telegramUserId)->where('status', 'active');
+
+        if ($bot) {
+            $query->where('user_telegram_bot_id', $bot->id)->where('user_id', $bot->user_id);
+        } else {
+            $query->whereNull('user_telegram_bot_id');
+        }
+
+        return $query->first();
     }
 
     public function unlink(User $user): void

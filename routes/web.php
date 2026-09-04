@@ -10,11 +10,11 @@ use App\Http\Controllers\PaperStrategySettingController;
 use App\Http\Controllers\PaperTradingDashboardController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\SystemActivityController;
-use App\Http\Controllers\TelegramAccessController;
 use App\Http\Controllers\TelegramWebhookController;
 use App\Http\Controllers\TestIntegrationController;
 use App\Http\Controllers\TradeHistoryController;
 use App\Http\Controllers\UpdateSettingsController;
+use App\Http\Controllers\UserTelegramBotController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -32,6 +32,7 @@ Route::post('/dashboard/actions/{action}', DashboardActionController::class)
 Route::get('/dashboard/activity', SystemActivityController::class)
     ->name('dashboard.activity');
 Route::get('/trades', TradeHistoryController::class)->name('trades.index');
+Route::post('/telegram/webhook/{publicId}', TelegramWebhookController::class)->where('publicId', '[A-Za-z0-9]{32}')->middleware('throttle:telegram-webhook')->name('telegram.user-webhook');
 Route::post('/telegram/webhook', TelegramWebhookController::class)->middleware('throttle:telegram-webhook')->name('telegram.webhook');
 
 Route::middleware('guest')->group(function (): void {
@@ -40,12 +41,19 @@ Route::middleware('guest')->group(function (): void {
 });
 Route::post('/logout', [LoginController::class, 'destroy'])->middleware('auth')->name('logout');
 
+Route::middleware('auth')->prefix('settings/telegram')->name('telegram.')->group(function (): void {
+    Route::get('/', [UserTelegramBotController::class, 'show'])->name('settings');
+    Route::put('/', [UserTelegramBotController::class, 'store'])->name('connect');
+    Route::post('/test', [UserTelegramBotController::class, 'test'])->name('test');
+    Route::post('/link', [UserTelegramBotController::class, 'link'])->name('link');
+    Route::delete('/link', [UserTelegramBotController::class, 'unlink'])->name('unlink');
+    Route::delete('/', [UserTelegramBotController::class, 'destroy'])->name('disconnect');
+});
+
 Route::middleware(['auth', 'can:manage-settings'])->prefix('settings')->name('settings.')->group(function (): void {
     Route::get('/', SettingsController::class)->name('index');
     Route::put('/', UpdateSettingsController::class)->name('update');
     Route::post('/test/{integration}', TestIntegrationController::class)->name('test');
-    Route::post('/telegram/link', [TelegramAccessController::class, 'store'])->name('telegram.link');
-    Route::delete('/telegram/link', [TelegramAccessController::class, 'destroy'])->name('telegram.unlink');
 });
 
 Route::middleware(['auth', 'can:manage-settings'])->prefix('opportunities')->name('opportunities.')->group(function (): void {

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Jobs\ProcessTelegramUpdate;
+use App\Models\UserTelegramBot;
 use App\Services\ApplicationSettingsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -12,9 +13,10 @@ class TelegramWebhookController extends Controller
     /**
      * Handle the incoming request.
      */
-    public function __invoke(Request $request, ApplicationSettingsService $settings): JsonResponse
+    public function __invoke(Request $request, ApplicationSettingsService $settings, ?string $publicId = null): JsonResponse
     {
-        $expectedSecret = $settings->getSecret('telegram.webhook_secret');
+        $bot = $publicId === null ? null : UserTelegramBot::query()->where('public_id', $publicId)->where('enabled', true)->firstOrFail();
+        $expectedSecret = $bot ? (string) $bot->webhook_secret : (string) $settings->getSecret('telegram.webhook_secret');
         $providedSecret = (string) $request->header('X-Telegram-Bot-Api-Secret-Token', '');
 
         if (! $expectedSecret || ! hash_equals($expectedSecret, $providedSecret)) {
@@ -37,7 +39,7 @@ class TelegramWebhookController extends Controller
             'callback_query.message.message_id' => ['required_with:callback_query', 'integer'],
         ]);
 
-        ProcessTelegramUpdate::dispatch($validated);
+        ProcessTelegramUpdate::dispatch($bot?->id, $validated);
 
         return response()->json(['ok' => true]);
     }

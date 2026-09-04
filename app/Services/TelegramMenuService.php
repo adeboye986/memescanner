@@ -18,20 +18,19 @@ class TelegramMenuService
     ];
 
     public function __construct(
-        private TelegramService $telegram,
         private ApplicationSettingsService $settings,
         private PaperWalletService $wallets,
         private PaperStrategyService $strategies,
         private IntegrationStatusService $integrations,
     ) {}
 
-    public function main(string $chatId, ?int $messageId = null, ?TelegramIdentity $identity = null): void
+    public function main(TelegramBotClient $telegram, string $chatId, ?int $messageId = null, ?TelegramIdentity $identity = null): void
     {
         $name = $this->escape((string) $this->settings->get('general.application_name'));
-        $this->respond($chatId, $messageId, "<b>{$name} Trading Console</b>\n\nChoose an operation. All privileged actions are verified against your linked account.", self::MAIN_KEYBOARD);
+        $this->respond($telegram, $chatId, $messageId, "<b>{$name} Trading Console</b>\n\nChoose an operation. All privileged actions are verified against your linked account.", self::MAIN_KEYBOARD);
     }
 
-    public function scans(string $chatId, int $messageId): void
+    public function scans(TelegramBotClient $telegram, string $chatId, int $messageId): void
     {
         $keyboard = [];
         foreach (Chain::cases() as $chain) {
@@ -39,10 +38,10 @@ class TelegramMenuService
             $keyboard[] = [['text' => '⚡ '.$chain->label().' Momentum', 'callback_data' => "scan_run:{$chain->value}:momentum-scan"]];
         }
         $keyboard[] = $this->back();
-        $this->respond($chatId, $messageId, "<b>Scanner Controls</b>\n\nScans run through the existing queue-backed command system.", $keyboard);
+        $this->respond($telegram, $chatId, $messageId, "<b>Scanner Controls</b>\n\nScans run through the existing queue-backed command system.", $keyboard);
     }
 
-    public function opportunities(string $chatId, int $messageId): void
+    public function opportunities(TelegramBotClient $telegram, string $chatId, int $messageId): void
     {
         $items = TradeOpportunity::query()->latest()->limit(5)->get();
         $lines = ['<b>Recent Trade Opportunities</b>', ''];
@@ -55,10 +54,10 @@ class TelegramMenuService
             $lines[] = 'No opportunities have been recorded.';
         }
         $keyboard[] = $this->back();
-        $this->respond($chatId, $messageId, implode("\n", $lines), $keyboard);
+        $this->respond($telegram, $chatId, $messageId, implode("\n", $lines), $keyboard);
     }
 
-    public function opportunity(string $chatId, int $messageId, TradeOpportunity $item): void
+    public function opportunity(TelegramBotClient $telegram, string $chatId, int $messageId, TradeOpportunity $item): void
     {
         $text = "<b>{$this->escape($item->symbol)} · {$item->chain->label()}</b>\nStatus: ".str($item->status->value)->headline()."\nScanner: {$this->escape((string) $item->scanner)}\nMarket cap: ".$this->money($item->market_cap)."\nLiquidity: ".$this->money($item->liquidity)."\nVolume: ".$this->money($item->volume)."\nQualified: ".($item->qualified_at?->diffForHumans() ?? 'Unknown')."\nAddress: <code>{$this->escape($item->address)}</code>";
         $keyboard = [];
@@ -70,10 +69,10 @@ class TelegramMenuService
         }
         $keyboard[] = [['text' => 'Details', 'url' => route('opportunities.show', $item)]];
         $keyboard[] = [['text' => '‹ Opportunities', 'callback_data' => 'opps']];
-        $this->respond($chatId, $messageId, $text, $keyboard);
+        $this->respond($telegram, $chatId, $messageId, $text, $keyboard);
     }
 
-    public function positions(string $chatId, int $messageId): void
+    public function positions(TelegramBotClient $telegram, string $chatId, int $messageId): void
     {
         $positions = PaperPosition::query()->where('status', 'open')->where('initial_investment_sol', '>', 0)->latest()->limit(5)->get();
         $lines = ['<b>Open Paper Positions</b>', ''];
@@ -87,10 +86,10 @@ class TelegramMenuService
             $lines[] = 'No funded open positions.';
         }
         $keyboard[] = $this->back();
-        $this->respond($chatId, $messageId, implode("\n", $lines), $keyboard);
+        $this->respond($telegram, $chatId, $messageId, implode("\n", $lines), $keyboard);
     }
 
-    public function position(string $chatId, int $messageId, PaperPosition $position, bool $confirm = false): void
+    public function position(TelegramBotClient $telegram, string $chatId, int $messageId, PaperPosition $position, bool $confirm = false): void
     {
         $marketCap = $position->last_market_cap ?: $position->entry_market_cap;
         $multiple = $position->entry_market_cap > 0 ? $marketCap / $position->entry_market_cap : 0;
@@ -103,10 +102,10 @@ class TelegramMenuService
             ? [[['text' => 'Cancel', 'callback_data' => 'pos:'.$position->id], ['text' => '🛑 Close Position', 'callback_data' => 'close_confirm:'.$position->id]]]
             : [[['text' => '🔄 Refresh', 'callback_data' => 'pos:'.$position->id], ['text' => 'Close Trade', 'callback_data' => 'close:'.$position->id]]];
         $keyboard[] = [['text' => '‹ Positions', 'callback_data' => 'positions']];
-        $this->respond($chatId, $messageId, $text, $keyboard);
+        $this->respond($telegram, $chatId, $messageId, $text, $keyboard);
     }
 
-    public function wallets(string $chatId, int $messageId): void
+    public function wallets(TelegramBotClient $telegram, string $chatId, int $messageId): void
     {
         $lines = ['<b>Paper Wallets</b>', ''];
         foreach (Chain::cases() as $chain) {
@@ -117,10 +116,10 @@ class TelegramMenuService
         if ($this->settings->get('trading.execution_mode') === 'live') {
             $lines[] = '⚠️ Live wallet execution is not enabled yet.';
         }
-        $this->respond($chatId, $messageId, implode("\n", $lines), [$this->back()]);
+        $this->respond($telegram, $chatId, $messageId, implode("\n", $lines), [$this->back()]);
     }
 
-    public function modes(string $chatId, int $messageId): void
+    public function modes(TelegramBotClient $telegram, string $chatId, int $messageId): void
     {
         $execution = strtoupper((string) $this->settings->get('trading.execution_mode'));
         $entry = strtoupper((string) $this->settings->get('trading.entry_mode'));
@@ -129,18 +128,18 @@ class TelegramMenuService
             [['text' => 'Signal', 'callback_data' => 'setmode:entry:signal'], ['text' => 'Confirm', 'callback_data' => 'setmode:entry:confirm'], ['text' => 'Auto', 'callback_data' => 'setmode:entry:auto']],
             $this->back(),
         ];
-        $this->respond($chatId, $messageId, "<b>Trading Modes</b>\n\nExecution: {$execution}\nEntry policy: {$entry}\n\nLive execution remains server-side blocked.", $keyboard);
+        $this->respond($telegram, $chatId, $messageId, "<b>Trading Modes</b>\n\nExecution: {$execution}\nEntry policy: {$entry}\n\nLive execution remains server-side blocked.", $keyboard);
     }
 
-    public function strategy(string $chatId, int $messageId): void
+    public function strategy(TelegramBotClient $telegram, string $chatId, int $messageId): void
     {
         $strategy = $this->strategies->forNewPosition();
         $url = route('settings.index');
         $keyboard = [[['text' => 'Edit in Web Settings', 'url' => $url]], $this->back()];
-        $this->respond($chatId, $messageId, "<b>Paper Strategy Defaults</b>\n\nStop loss: -{$strategy['stop_loss_percent']}%\nProtection 1: +{$strategy['protection_level_1_percent']}%\nProtection 2: +{$strategy['protection_level_2_percent']}%\n\nChanges apply only to new positions.", $keyboard);
+        $this->respond($telegram, $chatId, $messageId, "<b>Paper Strategy Defaults</b>\n\nStop loss: -{$strategy['stop_loss_percent']}%\nProtection 1: +{$strategy['protection_level_1_percent']}%\nProtection 2: +{$strategy['protection_level_2_percent']}%\n\nChanges apply only to new positions.", $keyboard);
     }
 
-    public function status(string $chatId, int $messageId): void
+    public function status(TelegramBotClient $telegram, string $chatId, int $messageId): void
     {
         $lines = [
             '<b>System Status</b>',
@@ -153,22 +152,22 @@ class TelegramMenuService
         foreach ($this->integrations->all() as $integration) {
             $lines[] = ($integration['status'] === 'active' || $integration['status'] === 'configured' ? '🟢' : '🟠').' '.$this->escape($integration['label']).': '.str($integration['status'])->replace('_', ' ');
         }
-        $this->respond($chatId, $messageId, implode("\n", $lines), [$this->back()]);
+        $this->respond($telegram, $chatId, $messageId, implode("\n", $lines), [$this->back()]);
     }
 
     /** @param array<int, array<int, array<string, string>>> $keyboard */
-    public function notice(string $chatId, int $messageId, string $message, array $keyboard = []): void
+    public function notice(TelegramBotClient $telegram, string $chatId, int $messageId, string $message, array $keyboard = []): void
     {
-        $this->respond($chatId, $messageId, $message, $keyboard === [] ? [self::MAIN_KEYBOARD[0], $this->back()] : $keyboard);
+        $this->respond($telegram, $chatId, $messageId, $message, $keyboard === [] ? [self::MAIN_KEYBOARD[0], $this->back()] : $keyboard);
     }
 
     /** @param array<int, array<int, array<string, string>>> $keyboard */
-    private function respond(string $chatId, ?int $messageId, string $text, array $keyboard): void
+    private function respond(TelegramBotClient $telegram, string $chatId, ?int $messageId, string $text, array $keyboard): void
     {
         if ($messageId) {
-            $this->telegram->editMessageText($chatId, $messageId, $text, $keyboard);
+            $telegram->editMessageText($chatId, $messageId, $text, $keyboard);
         } else {
-            $this->telegram->sendMessage($chatId, $text, $keyboard);
+            $telegram->sendMessage($chatId, $text, $keyboard);
         }
     }
 
