@@ -15,7 +15,14 @@ class OpportunityController extends Controller
     public function index(OpportunityIndexRequest $request): View
     {
         $filters = $request->validated();
+        $user = $request->user();
         $opportunities = TradeOpportunity::query()
+            ->where(function ($query) use ($user): void {
+                $query->where('user_id', $user->id);
+                if ($user->is_admin) {
+                    $query->orWhereNull('user_id');
+                }
+            })
             ->with('paperPosition:id,symbol,status')
             ->when($filters['status'] ?? null, fn ($query, string $status) => $query->where('status', $status))
             ->when($filters['chain'] ?? null, fn ($query, string $chain) => $query->where('chain', $chain))
@@ -35,6 +42,8 @@ class OpportunityController extends Controller
 
     public function show(TradeOpportunity $opportunity, OpportunityPresentationService $presenter): View
     {
+        $user = request()->user();
+        abort_unless($opportunity->user_id === $user->id || ($user->is_admin && $opportunity->user_id === null), 404);
         $opportunity->load(['paperPosition', 'events.user:id,name']);
 
         return view('opportunities.show', [

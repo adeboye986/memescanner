@@ -15,23 +15,28 @@ use App\Http\Controllers\TestIntegrationController;
 use App\Http\Controllers\TradeHistoryController;
 use App\Http\Controllers\UpdateSettingsController;
 use App\Http\Controllers\UserTelegramBotController;
+use App\Http\Controllers\UserTradingPreferenceController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
     return redirect()->route('dashboard');
 });
 
-Route::get('/dashboard', PaperTradingDashboardController::class)->name('dashboard');
+Route::get('/dashboard', PaperTradingDashboardController::class)->middleware('auth')->name('dashboard');
 Route::post('/dashboard/paper-strategy', PaperStrategySettingController::class)
-    ->middleware(['auth', 'can:manage-settings'])
+    ->middleware('auth')
     ->name('dashboard.paper-strategy.update');
+Route::put('/dashboard/trading-preferences', UserTradingPreferenceController::class)->middleware('auth')->name('dashboard.trading-preferences.update');
 Route::post('/paper-trades/{position}/close', ClosePaperTradeController::class)
+    ->middleware('auth')
     ->name('paper-trades.close');
 Route::post('/dashboard/actions/{action}', DashboardActionController::class)
+    ->middleware('auth')
     ->name('dashboard.actions.store');
 Route::get('/dashboard/activity', SystemActivityController::class)
+    ->middleware('auth')
     ->name('dashboard.activity');
-Route::get('/trades', TradeHistoryController::class)->name('trades.index');
+Route::get('/trades', TradeHistoryController::class)->middleware('auth')->name('trades.index');
 Route::post('/telegram/webhook/{publicId}', TelegramWebhookController::class)->where('publicId', '[A-Za-z0-9]{32}')->middleware('throttle:telegram-webhook')->name('telegram.user-webhook');
 Route::post('/telegram/webhook', TelegramWebhookController::class)->middleware('throttle:telegram-webhook')->name('telegram.webhook');
 
@@ -56,7 +61,7 @@ Route::middleware(['auth', 'can:manage-settings'])->prefix('settings')->name('se
     Route::post('/test/{integration}', TestIntegrationController::class)->name('test');
 });
 
-Route::middleware(['auth', 'can:manage-settings'])->prefix('opportunities')->name('opportunities.')->group(function (): void {
+Route::middleware('auth')->prefix('opportunities')->name('opportunities.')->group(function (): void {
     Route::get('/', [OpportunityController::class, 'index'])->name('index');
     Route::get('/{opportunity}', [OpportunityController::class, 'show'])->name('show');
     Route::post('/{opportunity}/approve', ApproveOpportunityController::class)->name('approve');

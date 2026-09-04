@@ -35,8 +35,8 @@ class OpportunityWorkflowTest extends TestCase
         $this->get(route('opportunities.index'))->assertRedirect(route('login'));
         $this->get(route('opportunities.show', $opportunity))->assertRedirect(route('login'));
         $user = User::factory()->create(['is_admin' => false]);
-        $this->actingAs($user)->get(route('opportunities.index'))->assertForbidden();
-        $this->post(route('opportunities.ignore', $opportunity))->assertForbidden();
+        $this->actingAs($user)->get(route('opportunities.index'))->assertSuccessful()->assertDontSee($opportunity->symbol);
+        $this->post(route('opportunities.ignore', $opportunity))->assertNotFound();
     }
 
     public function test_list_filters_and_detail_render_stored_opportunity_data(): void
@@ -69,7 +69,7 @@ class OpportunityWorkflowTest extends TestCase
         $this->assertSame(TradeOpportunityStatus::Executed, $opportunity->fresh()->status);
         $this->assertDatabaseCount('paper_positions', 1);
         $this->assertDatabaseCount('trade_opportunity_events', 1);
-        $this->assertEqualsWithDelta(4.9, PaperWallet::query()->sole()->available_balance_sol, 0.000001);
+        $this->assertEqualsWithDelta(4.9, (float) PaperWallet::query()->where('user_id', $this->admin->id)->sole()->available_balance_sol, 0.000001);
     }
 
     public function test_ignore_is_idempotent_and_ignored_opportunity_cannot_execute(): void
@@ -82,13 +82,13 @@ class OpportunityWorkflowTest extends TestCase
         $this->assertSame(TradeOpportunityStatus::Ignored, $opportunity->fresh()->status);
         $this->assertDatabaseCount('trade_opportunity_events', 1);
         $this->assertDatabaseCount('paper_positions', 0);
-        $this->assertEqualsWithDelta(5, PaperWallet::query()->sole()->available_balance_sol, 0.000001);
+        $this->assertEqualsWithDelta(5, (float) PaperWallet::query()->whereNull('user_id')->sole()->available_balance_sol, 0.000001);
     }
 
     public function test_live_confirm_approval_is_blocked_and_records_safe_failure(): void
     {
         $opportunity = $this->pendingOpportunity();
-        app(ApplicationSettingsService::class)->update(['trading.execution_mode' => 'live']);
+        $this->admin->tradingPreference()->update(['execution_mode' => 'live']);
         $this->actingAs($this->admin)->post(route('opportunities.approve', $opportunity))->assertSessionHas('error', 'Live execution is not enabled yet.');
 
         $opportunity->refresh();
@@ -96,7 +96,7 @@ class OpportunityWorkflowTest extends TestCase
         $this->assertSame(ExecutionMode::Live, $opportunity->execution_mode);
         $this->assertSame('live_execution_disabled', $opportunity->execution_data['reason']);
         $this->assertDatabaseCount('paper_positions', 0);
-        $this->assertEqualsWithDelta(5, PaperWallet::query()->sole()->available_balance_sol, 0.000001);
+        $this->assertEqualsWithDelta(5, (float) PaperWallet::query()->whereNull('user_id')->sole()->available_balance_sol, 0.000001);
     }
 
     public function test_auto_behavior_remains_automatic_and_opportunity_links_position(): void

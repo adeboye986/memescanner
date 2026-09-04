@@ -14,6 +14,7 @@ class SystemActivity extends Model
 
     protected $fillable = [
         'action',
+        'user_id',
         'chain',
         'command',
         'label',

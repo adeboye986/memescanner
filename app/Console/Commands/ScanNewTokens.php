@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Chain;
 use App\Models\TokenScan;
 use App\Models\TokenScanHistory;
+use App\Models\User;
 use App\Services\ApplicationSettingsService;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
@@ -22,7 +23,7 @@ use Throwable;
 
 class ScanNewTokens extends Command
 {
-    protected $signature = 'tokens:scan {--chain=solana : Blockchain to scan (solana or ethereum)}';
+    protected $signature = 'tokens:scan {--chain=solana : Blockchain to scan (solana or ethereum)} {--user= : Limit opportunity distribution to one user ID}';
 
     protected $description = 'Scan newly listed tokens on a supported blockchain';
 
@@ -30,6 +31,7 @@ class ScanNewTokens extends Command
     {
         try {
             $chain = Chain::fromInput($this->option('chain'));
+            $requestingUser = $this->option('user') ? User::query()->findOrFail($this->option('user')) : null;
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage());
 
@@ -38,7 +40,7 @@ class ScanNewTokens extends Command
 
         if ($chain === Chain::Ethereum) {
             $this->warn('Ethereum security status: Solana-specific Birdeye, GoPlus, holder, developer-sale, and Pump.fun checks are unavailable and are not reported as passed.');
-            $result = $ethereumScanner->scan('new-token');
+            $result = $ethereumScanner->scan('new-token', $requestingUser);
             $this->info(sprintf('Ethereum new-token scan finished: %d profiles, %d qualified, %d paper buys.', $result['profiles'], $result['qualified'], $result['positions']));
 
             return self::SUCCESS;
@@ -578,7 +580,7 @@ class ScanNewTokens extends Command
                                     'pair_address' => $dexData['pair_address'] ?? null,
                                     'dex' => $dexData['dex'] ?? null,
                                 ],
-                            ]);
+                            ], $requestingUser);
 
                             $paperPosition = $execution['position'];
                             $paperBuyExecuted = $paperPosition?->wasRecentlyCreated ?? false;

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\PaperPosition;
+use App\Models\User;
 use App\Services\PaperTradeHistoryService;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
@@ -17,6 +18,7 @@ class TradeHistoryControllerTest extends TestCase
 
         $this->refreshPaperTradingDatabase();
         $this->withoutVite();
+        $this->actingAs(User::factory()->create(['is_admin' => true]));
     }
 
     public function test_history_displays_funded_closed_positions_and_excludes_unfunded_records(): void

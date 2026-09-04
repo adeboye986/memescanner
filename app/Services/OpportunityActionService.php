@@ -19,15 +19,20 @@ class OpportunityActionService
         private ApplicationSettingsService $settings,
         private TradeExecutionManager $executions,
         private PaperTradeExecutor $paperExecutor,
+        private UserTradingPreferenceService $preferences,
     ) {}
 
     public function approve(TradeOpportunity $opportunity, User $actor): PaperPosition
     {
-        $executionMode = ExecutionMode::from((string) $this->settings->get('trading.execution_mode'));
+        $this->authorize($opportunity, $actor);
+        $executionMode = $opportunity->user_id
+            ? $this->preferences->forUser($actor)->execution_mode
+            : ExecutionMode::from((string) $this->settings->get('trading.execution_mode'));
 
         try {
             $position = DB::transaction(function () use ($opportunity, $actor, $executionMode): PaperPosition {
                 $locked = TradeOpportunity::query()->lockForUpdate()->findOrFail($opportunity->id);
+                $this->authorize($locked, $actor);
 
                 if ($locked->status !== TradeOpportunityStatus::PendingConfirmation) {
                     throw new DomainException($this->approvalRejectionMessage($locked));
@@ -61,8 +66,11 @@ class OpportunityActionService
 
     public function ignore(TradeOpportunity $opportunity, User $actor): bool
     {
+        $this->authorize($opportunity, $actor);
+
         return DB::transaction(function () use ($opportunity, $actor): bool {
             $locked = TradeOpportunity::query()->lockForUpdate()->findOrFail($opportunity->id);
+            $this->authorize($locked, $actor);
 
             if ($locked->status === TradeOpportunityStatus::Ignored) {
                 return false;
@@ -98,6 +106,19 @@ class OpportunityActionService
                 'reason' => 'live_execution_disabled',
             ]);
         });
+    }
+
+    private function authorize(TradeOpportunity $opportunity, User $actor): void
+    {
+        if ($opportunity->user_id === $actor->id) {
+            return;
+        }
+
+        if ($opportunity->user_id === null && $actor->is_admin) {
+            return;
+        }
+
+        throw new DomainException('This opportunity does not belong to your account.');
     }
 
     private function approvalRejectionMessage(TradeOpportunity $opportunity): string

@@ -13,6 +13,7 @@ class PaperTradeExecutor implements TradeExecutor
     public function execute(TradeOpportunity $opportunity, bool $sendNotification = true): PaperPosition
     {
         return $this->entries->buy([
+            'user_id' => $opportunity->user_id,
             'chain' => $opportunity->chain->value,
             'address' => $opportunity->address,
             'symbol' => $opportunity->symbol,

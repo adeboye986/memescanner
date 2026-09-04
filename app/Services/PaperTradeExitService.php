@@ -15,6 +15,7 @@ class PaperTradeExitService
         private ChainManager $chains,
         private TelegramService $telegram,
         private PaperWalletService $wallets,
+        private TelegramBotManager $telegramBots,
     ) {}
 
     /**
@@ -91,7 +92,9 @@ class PaperTradeExitService
             $exitEvents = $lockedPosition->exit_events ?? [];
             $exitEvents[] = $event;
 
-            $wallet = $this->wallets->lockedDefault($lockedPosition->chain);
+            $wallet = $lockedPosition->user_id
+                ? $this->wallets->lockedForUser($lockedPosition->user, $lockedPosition->chain)
+                : $this->wallets->lockedDefault($lockedPosition->chain);
 
             $wallet->available_balance_sol = (float) $wallet->available_balance_sol + $solReturned;
             $wallet->invested_balance_sol = max(0.0, (float) $wallet->invested_balance_sol - $costBasis);
@@ -209,8 +212,7 @@ class PaperTradeExitService
         };
 
         try {
-            $this->telegram->send(
-                "🛑🛑 <b>PAPER TRADE MANUALLY CLOSED</b> 🛑🛑\n\n".
+            $message = "🛑🛑 <b>PAPER TRADE MANUALLY CLOSED</b> 🛑🛑\n\n".
                 "💰 <b>{$position->symbol}</b>\n\n".
                 '⛓️ <b>Chain:</b> '.$position->chain->label()."\n".
                 "👤 <b>Manual close requested</b>\n".
@@ -228,8 +230,16 @@ class PaperTradeExitService
                 'Realized P/L: <b>'.sprintf('%+.4f %s', (float) $wallet->realized_pnl_sol, $currency)."</b>\n\n".
                 "❌ <b>POSITION CLOSED</b>\n\n".
                 "📍 <code>{$position->address}</code>\n\n".
-                "⚠️ <b>PAPER TRADE — NO REAL {$currency} USED</b>",
-            );
+                "⚠️ <b>PAPER TRADE — NO REAL {$currency} USED</b>";
+
+            if ($position->user_id) {
+                $bot = $position->user->telegramBot()->where('enabled', true)->with('identity')->first();
+                if ($bot?->identity) {
+                    $this->telegramBots->client($bot)->sendMessage($bot->identity->telegram_chat_id, $message);
+                }
+            } else {
+                $this->telegram->send($message);
+            }
         } catch (Throwable $exception) {
             report($exception);
 

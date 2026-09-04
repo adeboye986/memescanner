@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Chain;
 use App\Models\SystemActivity;
+use App\Models\User;
 use DomainException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
@@ -18,14 +19,16 @@ class SystemActivityService
         private PaperTrackerHealthService $trackerHealth,
     ) {}
 
-    public function createManual(string $action, ?Chain $chain = null): SystemActivity
+    public function createManual(string $action, ?Chain $chain = null, ?User $user = null): SystemActivity
     {
-        return DB::transaction(function () use ($action, $chain): SystemActivity {
+        return DB::transaction(function () use ($action, $chain, $user): SystemActivity {
             $definition = $this->commands->get($action);
 
+            $userScoped = in_array($action, ['token-scan', 'momentum-scan', 'paper-report', 'paper-reconcile'], true);
             $alreadyRunning = SystemActivity::query()
                 ->where('action', $action)
                 ->where('chain', $chain?->value)
+                ->when($userScoped, fn ($query) => $query->where('user_id', $user?->id))
                 ->whereIn('status', ['pending', 'running'])
                 ->lockForUpdate()
                 ->exists();
@@ -36,6 +39,7 @@ class SystemActivityService
 
             return SystemActivity::query()->create([
                 'action' => $action,
+                'user_id' => $user?->id,
                 'chain' => $chain?->value,
                 'command' => $definition['command'],
                 'label' => $definition['label'].($chain ? ' — '.$chain->label() : ''),
@@ -104,9 +108,15 @@ class SystemActivityService
     /**
      * @return array<string, mixed>|null
      */
-    public function currentManualData(): ?array
+    public function currentManualData(?User $user = null): ?array
     {
         $activity = SystemActivity::query()
+            ->when($user, fn ($query) => $query->where(function ($query) use ($user): void {
+                $query->where('user_id', $user->id);
+                if ($user->is_admin) {
+                    $query->orWhereNull('user_id');
+                }
+            }))
             ->where('triggered_by', 'manual')
             ->whereIn('status', ['pending', 'running'])
             ->latest('id')
@@ -116,9 +126,15 @@ class SystemActivityService
     }
 
     /** @return list<array<string, mixed>> */
-    public function recentData(int $limit = 8): array
+    public function recentData(int $limit = 8, ?User $user = null): array
     {
         return SystemActivity::query()
+            ->when($user, fn ($query) => $query->where(function ($query) use ($user): void {
+                $query->where('user_id', $user->id);
+                if ($user->is_admin) {
+                    $query->orWhereNull('user_id');
+                }
+            }))
             ->latest('id')
             ->limit(max(1, min($limit, 10)))
             ->get()
@@ -127,9 +143,15 @@ class SystemActivityService
     }
 
     /** @return list<string> */
-    public function runningActions(): array
+    public function runningActions(?User $user = null): array
     {
         return SystemActivity::query()
+            ->when($user, fn ($query) => $query->where(function ($query) use ($user): void {
+                $query->where('user_id', $user->id);
+                if ($user->is_admin) {
+                    $query->orWhereNull('user_id');
+                }
+            }))
             ->whereIn('status', ['pending', 'running'])
             ->where(function (Builder $query): void {
                 $query

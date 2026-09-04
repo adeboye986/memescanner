@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\PaperPosition;
+use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 
@@ -22,9 +24,10 @@ class PaperTradeHistoryService
     /**
      * @param  array{status: string, result: string, exit_type: string, chain: string}  $filters
      */
-    public function paginate(array $filters, int $page, int $perPage = 24): LengthAwarePaginator
+    public function paginate(array $filters, int $page, int $perPage = 24, ?User $user = null): LengthAwarePaginator
     {
         $query = PaperPosition::query()
+            ->when($user, fn ($query) => $this->scopeForUser($query, $user))
             ->where('initial_investment_sol', '>', 0)
             ->orderByDesc('entry_at')
             ->orderByDesc('id');
@@ -63,36 +66,33 @@ class PaperTradeHistoryService
     }
 
     /** @return array<string, mixed> */
-    public function performanceSummary(): array
+    public function performanceSummary(?User $user = null): array
     {
         $closed = PaperPosition::query()
+            ->when($user, fn ($query) => $this->scopeForUser($query, $user))
             ->where('initial_investment_sol', '>', 0)
             ->where('status', 'closed')
             ->get();
 
         $wins = $closed->filter(
-            fn (PaperPosition $position): bool =>
-                (float) $position->trade_pnl_sol > 0
+            fn (PaperPosition $position): bool => (float) $position->trade_pnl_sol > 0
         );
 
         $losses = $closed->filter(
-            fn (PaperPosition $position): bool =>
-                (float) $position->trade_pnl_sol < 0
+            fn (PaperPosition $position): bool => (float) $position->trade_pnl_sol < 0
         );
 
         $decidedCount = $wins->count() + $losses->count();
 
         $best = $closed
             ->sortByDesc(
-                fn (PaperPosition $position): float =>
-                    (float) $position->trade_pnl_sol
+                fn (PaperPosition $position): float => (float) $position->trade_pnl_sol
             )
             ->first();
 
         $worst = $closed
             ->sortBy(
-                fn (PaperPosition $position): float =>
-                    (float) $position->trade_pnl_sol
+                fn (PaperPosition $position): float => (float) $position->trade_pnl_sol
             )
             ->first();
 
@@ -112,6 +112,16 @@ class PaperTradeHistoryService
             'worst_trade' => $worst ? $this->summaryTrade($worst) : null,
             'exit_breakdown' => $this->exitBreakdown($closed),
         ];
+    }
+
+    private function scopeForUser(Builder $query, User $user): void
+    {
+        $query->where(function ($query) use ($user): void {
+            $query->where('user_id', $user->id);
+            if ($user->is_admin) {
+                $query->orWhereNull('user_id');
+            }
+        });
     }
 
     /** @return array<string, mixed> */
@@ -193,8 +203,7 @@ class PaperTradeHistoryService
             'trigger_multiple' => $triggerMultiple,
             'fill_multiple' => $fillMultiple,
 
-            'duration' =>
-                $position->entry_at
+            'duration' => $position->entry_at
                 && $position->closed_at
                     ? $position->entry_at->diffForHumans(
                         $position->closed_at,
@@ -208,8 +217,7 @@ class PaperTradeHistoryService
             'exit_filter' => $exit['filter'],
             'exit_mode' => $exit['mode'],
 
-            'highest_profit_percent' =>
-                $peakMultiple > 0
+            'highest_profit_percent' => $peakMultiple > 0
                     ? ($peakMultiple - 1) * 100
                     : null,
         ];
@@ -227,8 +235,7 @@ class PaperTradeHistoryService
     {
         $events = collect($position->exit_events ?? [])
             ->filter(
-                fn (mixed $event): bool =>
-                    is_array($event)
+                fn (mixed $event): bool => is_array($event)
             );
 
         $event = $events->last() ?? [];
@@ -277,14 +284,11 @@ class PaperTradeHistoryService
             (float) $position->initial_investment_sol;
 
         return [
-            'symbol' =>
-                $position->symbol ?: $position->address,
+            'symbol' => $position->symbol ?: $position->address,
 
-            'pnl' =>
-                (float) $position->trade_pnl_sol,
+            'pnl' => (float) $position->trade_pnl_sol,
 
-            'return_percent' =>
-                $initialInvestment > 0
+            'return_percent' => $initialInvestment > 0
                     ? (
                         (float) $position->trade_pnl_sol
                         / $initialInvestment

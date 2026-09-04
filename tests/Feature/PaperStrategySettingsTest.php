@@ -35,14 +35,15 @@ class PaperStrategySettingsTest extends TestCase
         $this->assertEqualsWithDelta(3.0, $strategy['protection_level_2_multiple'], 0.000001);
     }
 
-    public function test_admin_can_update_global_strategy(): void
+    public function test_user_can_update_personal_strategy(): void
     {
-        $this->actingAs(User::factory()->create(['is_admin' => true]));
+        $user = User::factory()->create(['is_admin' => false]);
+        $this->actingAs($user);
         $this->post(route('dashboard.paper-strategy.update'), $this->values(15, 75, 180))
             ->assertRedirect(route('dashboard'))
             ->assertSessionHas('success');
 
-        $setting = PaperStrategySetting::query()->where('name', 'default')->firstOrFail();
+        $setting = PaperStrategySetting::query()->where('user_id', $user->id)->where('name', 'default')->firstOrFail();
         $this->assertEqualsWithDelta(15, $setting->stop_loss_percent, 0.000001);
         $this->assertEqualsWithDelta(75, $setting->protection_level_1_percent, 0.000001);
         $this->assertEqualsWithDelta(180, $setting->protection_level_2_percent, 0.000001);
@@ -116,6 +117,7 @@ class PaperStrategySettingsTest extends TestCase
 
     public function test_dashboard_displays_global_defaults_and_each_positions_snapshot(): void
     {
+        $this->actingAs(User::factory()->create(['is_admin' => true]));
         $this->createWallet(Chain::Solana);
         $position = app(PaperTradeEntryService::class)->buy(array_merge(
             $this->entryData(Chain::Solana, 'dashboard-token'),

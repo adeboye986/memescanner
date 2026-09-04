@@ -7,6 +7,7 @@ use App\Jobs\RunDashboardCommand;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
 use App\Models\SystemActivity;
+use App\Models\User;
 use App\Services\PaperTradeEntryService;
 use App\Services\PaperTradeExitService;
 use App\Services\SystemActivityService;
@@ -25,6 +26,7 @@ class MultiChainTradingTest extends TestCase
         parent::setUp();
 
         $this->refreshPaperTradingDatabase();
+        $this->actingAs(User::factory()->create(['is_admin' => true]));
     }
 
     public function test_chain_values_and_invalid_command_options_are_stable(): void

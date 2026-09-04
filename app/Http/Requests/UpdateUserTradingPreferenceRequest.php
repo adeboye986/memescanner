@@ -2,14 +2,10 @@
 
 namespace App\Http\Requests;
 
-use App\Chain;
-use App\Enums\EntryMode;
-use App\Enums\TradeOpportunityStatus;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
-class OpportunityIndexRequest extends FormRequest
+class UpdateUserTradingPreferenceRequest extends FormRequest
 {
     /**
      * Determine if the user is authorized to make this request.
@@ -27,9 +23,8 @@ class OpportunityIndexRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'status' => ['nullable', Rule::enum(TradeOpportunityStatus::class)],
-            'chain' => ['nullable', Rule::enum(Chain::class)],
-            'entry_mode' => ['nullable', Rule::enum(EntryMode::class)],
+            'execution_mode' => ['required', 'in:paper'],
+            'entry_mode' => ['required', 'in:signal,confirm,auto'],
         ];
     }
 }

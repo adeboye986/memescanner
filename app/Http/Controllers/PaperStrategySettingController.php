@@ -12,10 +12,10 @@ class PaperStrategySettingController extends Controller
         UpdatePaperStrategyRequest $request,
         PaperStrategyService $strategies,
     ): RedirectResponse {
-        $strategies->updateGlobal($request->validated());
+        $strategies->updateForUser($request->user(), $request->validated());
 
         return redirect()
             ->route('dashboard')
-            ->with('success', 'Default paper-trading strategy updated. New positions will use these settings.');
+            ->with('success', 'Your paper-trading strategy was updated. New positions will use these settings.');
     }
 }

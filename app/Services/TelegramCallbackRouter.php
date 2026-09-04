@@ -3,10 +3,13 @@
 namespace App\Services;
 
 use App\Chain;
+use App\Enums\EntryMode;
+use App\Enums\ExecutionMode;
 use App\Jobs\RunDashboardCommand;
 use App\Models\PaperPosition;
 use App\Models\TelegramIdentity;
 use App\Models\TradeOpportunity;
+use App\Models\User;
 use DomainException;
 use Throwable;
 
@@ -17,22 +20,18 @@ class TelegramCallbackRouter
         private SystemActivityService $activities,
         private OpportunityActionService $opportunities,
         private PaperTradeExitService $exits,
-        private ApplicationSettingsService $settings,
+        private UserTradingPreferenceService $preferences,
     ) {}
 
     public function handle(TelegramBotClient $telegram, TelegramIdentity $identity, string $chatId, int $messageId, string $action): void
     {
         try {
-            if (! $identity->user->is_admin && $action !== 'menu') {
-                throw new DomainException('Trading data is not user-scoped yet. Private trading controls remain admin-only until multi-user trading ownership is implemented.');
-            }
-
             if ($this->showMenu($telegram, $identity, $chatId, $messageId, $action)) {
                 return;
             }
 
             if (preg_match('/^scan_run:(solana|ethereum):(token-scan|momentum-scan)$/', $action, $matches) === 1) {
-                $activity = $this->activities->createManual($matches[2], Chain::from($matches[1]));
+                $activity = $this->activities->createManual($matches[2], Chain::from($matches[1]), $identity->user);
                 RunDashboardCommand::dispatch($activity->id);
                 $this->menus->notice($telegram, $chatId, $messageId, '✅ <b>'.$this->escape($activity->label)." queued.</b>\n\nUse System Status to monitor the platform.");
 
@@ -40,13 +39,13 @@ class TelegramCallbackRouter
             }
 
             if (preg_match('/^opp:(\d+)$/', $action, $matches) === 1) {
-                $this->menus->opportunity($telegram, $chatId, $messageId, TradeOpportunity::query()->findOrFail($matches[1]));
+                $this->menus->opportunity($telegram, $chatId, $messageId, $this->opportunity((int) $matches[1], $identity->user));
 
                 return;
             }
 
             if (preg_match('/^(approve|ignore):(\d+)$/', $action, $matches) === 1) {
-                $opportunity = TradeOpportunity::query()->findOrFail($matches[2]);
+                $opportunity = $this->opportunity((int) $matches[2], $identity->user);
                 if ($matches[1] === 'approve') {
                     $position = $this->opportunities->approve($opportunity, $identity->user);
                     $this->menus->notice($telegram, $chatId, $messageId, "✅ <b>PAPER TRADE OPENED</b>\nPosition #{$position->id}");
@@ -59,19 +58,19 @@ class TelegramCallbackRouter
             }
 
             if (preg_match('/^pos:(\d+)$/', $action, $matches) === 1) {
-                $this->menus->position($telegram, $chatId, $messageId, $this->openPosition((int) $matches[1]));
+                $this->menus->position($telegram, $chatId, $messageId, $this->openPosition((int) $matches[1], $identity->user));
 
                 return;
             }
 
             if (preg_match('/^close:(\d+)$/', $action, $matches) === 1) {
-                $this->menus->position($telegram, $chatId, $messageId, $this->openPosition((int) $matches[1]), true);
+                $this->menus->position($telegram, $chatId, $messageId, $this->openPosition((int) $matches[1], $identity->user), true);
 
                 return;
             }
 
             if (preg_match('/^close_confirm:(\d+)$/', $action, $matches) === 1) {
-                $result = $this->exits->closeManually($this->openPosition((int) $matches[1]));
+                $result = $this->exits->closeManually($this->openPosition((int) $matches[1], $identity->user));
                 $source = match ($result['price_source']) {
                     'last_known_market' => ' using its last known market value because fresh data was unavailable',
                     'entry_fallback' => ' using its entry value because no newer market value was available',
@@ -89,9 +88,11 @@ class TelegramCallbackRouter
             }
 
             if (preg_match('/^confirmmode:(execution|entry):(live|auto)$/', $action, $matches) === 1) {
-                $key = 'trading.'.$matches[1].'_mode';
-                $this->settings->update([$key => $matches[2]], $identity->user);
-                $this->menus->modes($telegram, $chatId, $messageId);
+                $current = $this->preferences->forUser($identity->user);
+                $execution = $matches[1] === 'execution' ? ExecutionMode::from($matches[2]) : $current->execution_mode;
+                $entry = $matches[1] === 'entry' ? EntryMode::from($matches[2]) : $current->entry_mode;
+                $this->preferences->update($identity->user, $execution, $entry);
+                $this->menus->modes($telegram, $chatId, $messageId, $identity->user);
 
                 return;
             }
@@ -110,12 +111,12 @@ class TelegramCallbackRouter
         match ($action) {
             'menu' => $this->menus->main($telegram, $chatId, $messageId, $identity),
             'scan' => $this->menus->scans($telegram, $chatId, $messageId),
-            'opps' => $this->menus->opportunities($telegram, $chatId, $messageId),
-            'positions' => $this->menus->positions($telegram, $chatId, $messageId),
-            'wallets' => $this->menus->wallets($telegram, $chatId, $messageId),
-            'modes' => $this->menus->modes($telegram, $chatId, $messageId),
-            'strategy' => $this->menus->strategy($telegram, $chatId, $messageId),
-            'status' => $this->menus->status($telegram, $chatId, $messageId),
+            'opps' => $this->menus->opportunities($telegram, $chatId, $messageId, $identity->user),
+            'positions' => $this->menus->positions($telegram, $chatId, $messageId, $identity->user),
+            'wallets' => $this->menus->wallets($telegram, $chatId, $messageId, $identity->user),
+            'modes' => $this->menus->modes($telegram, $chatId, $messageId, $identity->user),
+            'strategy' => $this->menus->strategy($telegram, $chatId, $messageId, $identity->user),
+            'status' => $this->menus->status($telegram, $chatId, $messageId, $identity->user),
             default => null,
         };
 
@@ -130,25 +131,43 @@ class TelegramCallbackRouter
             return;
         }
 
-        if ($group === 'entry' && $value === 'auto' && $this->settings->get('trading.execution_mode') === 'live') {
+        if ($group === 'entry' && $value === 'auto' && $this->preferences->forUser($identity->user)->execution_mode === ExecutionMode::Live) {
             $this->menus->notice($telegram, $chatId, $messageId, "⚠️ <b>Auto + LIVE warning</b>\n\nReal transactions remain blocked, but this changes the configured entry policy.", [[['text' => 'Cancel', 'callback_data' => 'modes'], ['text' => 'Confirm AUTO', 'callback_data' => 'confirmmode:entry:auto']]]);
 
             return;
         }
 
-        $this->settings->update(['trading.'.$group.'_mode' => $value], $identity->user);
-        $this->menus->modes($telegram, $chatId, $messageId);
+        $current = $this->preferences->forUser($identity->user);
+        $execution = $group === 'execution' ? ExecutionMode::from($value) : $current->execution_mode;
+        $entry = $group === 'entry' ? EntryMode::from($value) : $current->entry_mode;
+        $this->preferences->update($identity->user, $execution, $entry);
+        $this->menus->modes($telegram, $chatId, $messageId, $identity->user);
     }
 
-    private function openPosition(int $id): PaperPosition
+    private function openPosition(int $id, User $user): PaperPosition
     {
-        $position = PaperPosition::query()->findOrFail($id);
+        $position = PaperPosition::query()->whereKey($id)->where(function ($query) use ($user): void {
+            $query->where('user_id', $user->id);
+            if ($user->is_admin) {
+                $query->orWhereNull('user_id');
+            }
+        })->firstOrFail();
 
         if ($position->status !== 'open' || (float) $position->initial_investment_sol <= 0 || (float) $position->remaining_fraction <= 0) {
             throw new DomainException('This funded position is no longer open.');
         }
 
         return $position;
+    }
+
+    private function opportunity(int $id, User $user): TradeOpportunity
+    {
+        return TradeOpportunity::query()->whereKey($id)->where(function ($query) use ($user): void {
+            $query->where('user_id', $user->id);
+            if ($user->is_admin) {
+                $query->orWhereNull('user_id');
+            }
+        })->firstOrFail();
     }
 
     private function escape(string $value): string

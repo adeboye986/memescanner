@@ -7,6 +7,7 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -35,5 +36,25 @@ class User extends Authenticatable
     public function telegramBot(): HasOne
     {
         return $this->hasOne(UserTelegramBot::class);
+    }
+
+    public function tradingPreference(): HasOne
+    {
+        return $this->hasOne(UserTradingPreference::class);
+    }
+
+    public function paperWallets(): HasMany
+    {
+        return $this->hasMany(PaperWallet::class);
+    }
+
+    public function paperPositions(): HasMany
+    {
+        return $this->hasMany(PaperPosition::class);
+    }
+
+    public function tradeOpportunities(): HasMany
+    {
+        return $this->hasMany(TradeOpportunity::class);
     }
 }

@@ -15,6 +15,8 @@ class IgnoreOpportunityController extends Controller
      */
     public function __invoke(Request $request, TradeOpportunity $opportunity, OpportunityActionService $actions): RedirectResponse
     {
+        abort_unless($opportunity->user_id === $request->user()->id || ($request->user()->is_admin && $opportunity->user_id === null), 404);
+
         try {
             $changed = $actions->ignore($opportunity, $request->user());
 

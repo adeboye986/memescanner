@@ -6,6 +6,7 @@ use App\Models\PaperPosition;
 use App\Models\PaperWallet;
 use App\Models\SystemActivity;
 use App\Models\TradeOpportunity;
+use App\Models\User;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
 
@@ -19,6 +20,7 @@ class PaperTradingDashboardTest extends TestCase
 
         $this->refreshPaperTradingDatabase();
         $this->withoutVite();
+        $this->actingAs(User::factory()->create(['is_admin' => true]));
     }
 
     public function test_dashboard_renders_wallet_and_only_funded_open_positions(): void

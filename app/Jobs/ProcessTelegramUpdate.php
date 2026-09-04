@@ -11,11 +11,16 @@ class ProcessTelegramUpdate implements ShouldQueue
 {
     use Queueable;
 
+    public int $tries = 3;
+
     /**
      * Create a new job instance.
      */
     /** @param array<string, mixed> $update */
-    public function __construct(public ?int $botId, public array $update) {}
+    public function __construct(public ?int $botId, public array $update)
+    {
+        $this->onQueue('telegram');
+    }
 
     /**
      * Execute the job.

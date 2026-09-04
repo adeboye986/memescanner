@@ -30,7 +30,7 @@ class TelegramBotClient
 
     public function answerCallbackQuery(string $callbackId, ?string $message = null): array
     {
-        return $this->call('answerCallbackQuery', array_filter(['callback_query_id' => $callbackId, 'text' => $message]));
+        return $this->call('answerCallbackQuery', array_filter(['callback_query_id' => $callbackId, 'text' => $message]), 2, 5, 1);
     }
 
     public function setWebhook(string $url, string $secret): array
@@ -49,14 +49,14 @@ class TelegramBotClient
     }
 
     /** @param array<string, mixed> $payload */
-    private function call(string $method, array $payload = []): array
+    private function call(string $method, array $payload = [], int $connectTimeout = 10, int $timeout = 30, int $attempts = 3): array
     {
         if ($this->botToken === '') {
             throw new RuntimeException('Telegram bot credentials are not configured.');
         }
 
-        $response = Http::withOptions(['force_ip_resolve' => 'v4'])->connectTimeout(10)->timeout(30)
-            ->retry(3, 1000, fn ($exception): bool => $exception instanceof ConnectionException)
+        $response = Http::withOptions(['force_ip_resolve' => 'v4'])->connectTimeout($connectTimeout)->timeout($timeout)
+            ->retry($attempts, 1000, fn ($exception): bool => $exception instanceof ConnectionException)
             ->post("https://api.telegram.org/bot{$this->botToken}/{$method}", $payload);
 
         if ($response->failed() || ! $response->json('ok')) {

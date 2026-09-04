@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Chain;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class PaperPosition extends Model
@@ -47,5 +48,10 @@ class PaperPosition extends Model
     public function snapshots(): HasMany
     {
         return $this->hasMany(PaperPositionSnapshot::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
     }
 }

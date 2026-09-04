@@ -3,10 +3,12 @@
 namespace App\Services;
 
 use App\Chain;
+use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Models\PaperPosition;
 use App\Models\TelegramIdentity;
 use App\Models\TradeOpportunity;
+use App\Models\User;
 
 class TelegramMenuService
 {
@@ -22,6 +24,8 @@ class TelegramMenuService
         private PaperWalletService $wallets,
         private PaperStrategyService $strategies,
         private IntegrationStatusService $integrations,
+        private UserTradingPreferenceService $preferences,
+        private OperationalHealthService $operationalHealth,
     ) {}
 
     public function main(TelegramBotClient $telegram, string $chatId, ?int $messageId = null, ?TelegramIdentity $identity = null): void
@@ -41,9 +45,14 @@ class TelegramMenuService
         $this->respond($telegram, $chatId, $messageId, "<b>Scanner Controls</b>\n\nScans run through the existing queue-backed command system.", $keyboard);
     }
 
-    public function opportunities(TelegramBotClient $telegram, string $chatId, int $messageId): void
+    public function opportunities(TelegramBotClient $telegram, string $chatId, int $messageId, User $user): void
     {
-        $items = TradeOpportunity::query()->latest()->limit(5)->get();
+        $items = TradeOpportunity::query()->where(function ($query) use ($user): void {
+            $query->where('user_id', $user->id);
+            if ($user->is_admin) {
+                $query->orWhereNull('user_id');
+            }
+        })->latest()->limit(5)->get();
         $lines = ['<b>Recent Trade Opportunities</b>', ''];
         $keyboard = [];
         foreach ($items as $item) {
@@ -72,9 +81,14 @@ class TelegramMenuService
         $this->respond($telegram, $chatId, $messageId, $text, $keyboard);
     }
 
-    public function positions(TelegramBotClient $telegram, string $chatId, int $messageId): void
+    public function positions(TelegramBotClient $telegram, string $chatId, int $messageId, User $user): void
     {
-        $positions = PaperPosition::query()->where('status', 'open')->where('initial_investment_sol', '>', 0)->latest()->limit(5)->get();
+        $positions = PaperPosition::query()->where(function ($query) use ($user): void {
+            $query->where('user_id', $user->id);
+            if ($user->is_admin) {
+                $query->orWhereNull('user_id');
+            }
+        })->where('status', 'open')->where('initial_investment_sol', '>', 0)->latest()->limit(5)->get();
         $lines = ['<b>Open Paper Positions</b>', ''];
         $keyboard = [];
         foreach ($positions as $position) {
@@ -105,24 +119,25 @@ class TelegramMenuService
         $this->respond($telegram, $chatId, $messageId, $text, $keyboard);
     }
 
-    public function wallets(TelegramBotClient $telegram, string $chatId, int $messageId): void
+    public function wallets(TelegramBotClient $telegram, string $chatId, int $messageId, User $user): void
     {
         $lines = ['<b>Paper Wallets</b>', ''];
         foreach (Chain::cases() as $chain) {
-            $wallet = $this->wallets->default($chain);
+            $wallet = $this->wallets->forUser($user, $chain);
             $currency = $wallet->currencyCode();
             $lines[] = "<b>{$chain->label()}</b>\nAvailable: ".number_format((float) $wallet->available_balance_sol, 4)." {$currency}\nInvested: ".number_format((float) $wallet->invested_balance_sol, 4)." {$currency}\nRealized P/L: ".sprintf('%+.4f', (float) $wallet->realized_pnl_sol)." {$currency}\n";
         }
-        if ($this->settings->get('trading.execution_mode') === 'live') {
+        if ($this->preferences->forUser($user)->execution_mode === ExecutionMode::Live) {
             $lines[] = '⚠️ Live wallet execution is not enabled yet.';
         }
         $this->respond($telegram, $chatId, $messageId, implode("\n", $lines), [$this->back()]);
     }
 
-    public function modes(TelegramBotClient $telegram, string $chatId, int $messageId): void
+    public function modes(TelegramBotClient $telegram, string $chatId, int $messageId, User $user): void
     {
-        $execution = strtoupper((string) $this->settings->get('trading.execution_mode'));
-        $entry = strtoupper((string) $this->settings->get('trading.entry_mode'));
+        $preference = $this->preferences->forUser($user);
+        $execution = strtoupper($preference->execution_mode->value);
+        $entry = strtoupper($preference->entry_mode->value);
         $keyboard = [
             [['text' => 'Paper', 'callback_data' => 'setmode:execution:paper'], ['text' => 'Live ⚠️', 'callback_data' => 'setmode:execution:live']],
             [['text' => 'Signal', 'callback_data' => 'setmode:entry:signal'], ['text' => 'Confirm', 'callback_data' => 'setmode:entry:confirm'], ['text' => 'Auto', 'callback_data' => 'setmode:entry:auto']],
@@ -131,26 +146,38 @@ class TelegramMenuService
         $this->respond($telegram, $chatId, $messageId, "<b>Trading Modes</b>\n\nExecution: {$execution}\nEntry policy: {$entry}\n\nLive execution remains server-side blocked.", $keyboard);
     }
 
-    public function strategy(TelegramBotClient $telegram, string $chatId, int $messageId): void
+    public function strategy(TelegramBotClient $telegram, string $chatId, int $messageId, User $user): void
     {
-        $strategy = $this->strategies->forNewPosition();
+        $strategy = $this->strategies->forUser($user);
         $url = route('settings.index');
         $keyboard = [[['text' => 'Edit in Web Settings', 'url' => $url]], $this->back()];
         $this->respond($telegram, $chatId, $messageId, "<b>Paper Strategy Defaults</b>\n\nStop loss: -{$strategy['stop_loss_percent']}%\nProtection 1: +{$strategy['protection_level_1_percent']}%\nProtection 2: +{$strategy['protection_level_2_percent']}%\n\nChanges apply only to new positions.", $keyboard);
     }
 
-    public function status(TelegramBotClient $telegram, string $chatId, int $messageId): void
+    public function status(TelegramBotClient $telegram, string $chatId, int $messageId, User $user): void
     {
+        $preference = $this->preferences->forUser($user);
         $lines = [
             '<b>System Status</b>',
             '',
-            'Execution: '.strtoupper((string) $this->settings->get('trading.execution_mode')),
-            'Entry: '.strtoupper((string) $this->settings->get('trading.entry_mode')),
+            'Execution: '.strtoupper($preference->execution_mode->value),
+            'Entry: '.strtoupper($preference->entry_mode->value),
+            'Open positions: '.PaperPosition::query()->where('user_id', $user->id)->where('status', 'open')->count(),
+            'Pending opportunities: '.TradeOpportunity::query()->where('user_id', $user->id)->where('status', 'pending_confirmation')->count(),
             'Kill switch: '.($this->settings->get('risk.kill_switch') ? 'ACTIVE' : 'Off'),
             '',
         ];
-        foreach ($this->integrations->all() as $integration) {
-            $lines[] = ($integration['status'] === 'active' || $integration['status'] === 'configured' ? '🟢' : '🟠').' '.$this->escape($integration['label']).': '.str($integration['status'])->replace('_', ' ');
+        $operations = $this->operationalHealth->status();
+        $lines[] = 'Platform: Online';
+        $lines[] = 'Telegram Bot: Connected';
+        $lines[] = 'Tracker: '.str($operations['fast_tracker']['status'])->replace('_', ' ')->headline();
+        if ($user->is_admin) {
+            $lines[] = '';
+            $lines[] = '<b>Admin Operations</b>';
+            $lines[] = 'Scheduler: '.str($operations['scheduler']['status'])->replace('_', ' ')->headline();
+            $lines[] = 'Queue: '.str($operations['queue']['status'])->replace('_', ' ')->headline();
+            $lines[] = 'Failed jobs: '.$operations['failed_jobs'];
+            $lines[] = 'Pending jobs: '.$operations['pending_jobs'];
         }
         $this->respond($telegram, $chatId, $messageId, implode("\n", $lines), [$this->back()]);
     }

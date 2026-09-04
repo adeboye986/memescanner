@@ -26,7 +26,7 @@ class TradeExecutionManager
 
         if ($opportunity->status === TradeOpportunityStatus::Executed) {
             return $opportunity->paper_position_id
-                ? PaperPosition::query()->find($opportunity->paper_position_id)
+                ? PaperPosition::query()->whereKey($opportunity->paper_position_id)->where('user_id', $opportunity->user_id)->first()
                 : null;
         }
 

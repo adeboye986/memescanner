@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Jobs\RunDashboardCommand;
+use App\Models\PaperPosition;
 use App\Models\TelegramIdentity;
 use App\Models\TelegramLinkToken;
+use App\Models\TradeOpportunity;
 use App\Models\User;
 use App\Models\UserTelegramBot;
 use App\Services\ApplicationSettingsService;
@@ -78,8 +80,8 @@ class TelegramInteractionTest extends TestCase
         app(TelegramUpdateService::class)->handle($this->bot, $this->callbackUpdate('setmode:execution:live', 123));
         $this->assertSame('paper', app(ApplicationSettingsService::class)->get('trading.execution_mode'));
         app(TelegramUpdateService::class)->handle($this->bot, $this->callbackUpdate('confirmmode:execution:live', 123));
-        $this->assertSame('live', app(ApplicationSettingsService::class)->get('trading.execution_mode'));
-        $this->assertDatabaseHas('setting_audits', ['user_id' => $identity->user_id, 'setting_key' => 'trading.execution_mode']);
+        $this->assertSame('paper', $identity->user->tradingPreference()->firstOrFail()->execution_mode->value);
+        $this->assertSame('paper', app(ApplicationSettingsService::class)->get('trading.execution_mode'));
     }
 
     public function test_identity_linked_to_another_bot_cannot_use_callbacks(): void
@@ -94,7 +96,7 @@ class TelegramInteractionTest extends TestCase
         Http::assertSent(fn ($request): bool => str_contains((string) ($request['text'] ?? ''), 'not authorized'));
     }
 
-    public function test_non_admin_bot_owner_cannot_access_global_trading_data(): void
+    public function test_non_admin_bot_owner_sees_only_their_paper_wallets(): void
     {
         Queue::fake();
         $userBot = UserTelegramBot::factory()->create(['user_id' => User::factory()->create(['is_admin' => false])]);
@@ -103,7 +105,61 @@ class TelegramInteractionTest extends TestCase
         app(TelegramUpdateService::class)->handle($userBot, $this->callbackUpdate('wallets', 456));
 
         Queue::assertNothingPushed();
-        Http::assertSent(fn ($request): bool => str_contains((string) ($request['text'] ?? ''), 'admin-only'));
+        Http::assertSent(fn ($request): bool => str_contains((string) ($request['text'] ?? ''), 'Paper Wallets'));
+        $this->assertDatabaseCount('paper_wallets', 2);
+    }
+
+    public function test_normal_user_system_status_hides_admin_operational_diagnostics(): void
+    {
+        $userBot = UserTelegramBot::factory()->create(['user_id' => User::factory()->create(['is_admin' => false])]);
+        TelegramIdentity::factory()->create(['user_id' => $userBot->user_id, 'user_telegram_bot_id' => $userBot->id, 'telegram_user_id' => '456']);
+
+        app(TelegramUpdateService::class)->handle($userBot, $this->callbackUpdate('status', 456));
+
+        Http::assertSent(fn ($request): bool => str_contains((string) ($request['text'] ?? ''), 'Platform: Online')
+            && ! str_contains((string) ($request['text'] ?? ''), 'Admin Operations')
+            && ! str_contains((string) ($request['text'] ?? ''), 'Failed jobs'));
+    }
+
+    public function test_telegram_callbacks_cannot_read_or_change_another_users_opportunity(): void
+    {
+        $identity = TelegramIdentity::factory()->create(['user_id' => $this->bot->user_id, 'user_telegram_bot_id' => $this->bot->id, 'telegram_user_id' => '123', 'telegram_chat_id' => '123']);
+        $opportunity = TradeOpportunity::factory()->create([
+            'user_id' => User::factory()->create()->id,
+            'status' => 'pending_confirmation',
+        ]);
+
+        foreach (['opp:', 'approve:', 'ignore:'] as $action) {
+            app(TelegramUpdateService::class)->handle($this->bot, $this->callbackUpdate($action.$opportunity->id, (int) $identity->telegram_user_id));
+        }
+
+        $this->assertSame('pending_confirmation', $opportunity->fresh()->status->value);
+        Http::assertSent(fn ($request): bool => str_contains((string) ($request['text'] ?? ''), 'could not be completed safely'));
+    }
+
+    public function test_telegram_callbacks_cannot_close_another_users_position(): void
+    {
+        $identity = TelegramIdentity::factory()->create(['user_id' => $this->bot->user_id, 'user_telegram_bot_id' => $this->bot->id, 'telegram_user_id' => '123', 'telegram_chat_id' => '123']);
+        $owner = User::factory()->create();
+        $position = PaperPosition::query()->create([
+            'user_id' => $owner->id,
+            'chain' => 'solana',
+            'address' => 'private-position',
+            'symbol' => 'PRIVATE',
+            'entry_market_cap' => 100_000,
+            'last_market_cap' => 100_000,
+            'entry_at' => now(),
+            'status' => 'open',
+            'initial_investment_sol' => 0.1,
+            'remaining_investment_sol' => 0.1,
+            'remaining_fraction' => 1,
+            'exit_events' => [],
+        ]);
+
+        app(TelegramUpdateService::class)->handle($this->bot, $this->callbackUpdate('close_confirm:'.$position->id, (int) $identity->telegram_user_id));
+
+        $this->assertSame('open', $position->fresh()->status);
+        Http::assertSent(fn ($request): bool => str_contains((string) ($request['text'] ?? ''), 'could not be completed safely'));
     }
 
     private function message(string $text, int $userId): array

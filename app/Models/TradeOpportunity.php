@@ -19,6 +19,8 @@ class TradeOpportunity extends Model
 
     protected $fillable = [
         'chain',
+        'user_id',
+        'discovery_key',
         'address',
         'symbol',
         'name',
@@ -62,5 +64,10 @@ class TradeOpportunity extends Model
     public function events(): HasMany
     {
         return $this->hasMany(TradeOpportunityEvent::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
     }
 }

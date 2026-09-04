@@ -20,12 +20,13 @@ class DashboardActionController extends Controller
         SystemActivityService $activities,
     ): RedirectResponse {
         abort_unless($commands->supports($action), 404);
+        abort_if($action === 'paper-track' && ! $request->user()->is_admin, 403);
 
         try {
             $chain = in_array($action, ['token-scan', 'momentum-scan'], true)
                 ? Chain::fromInput($request->input('chain', Chain::Solana->value))
                 : null;
-            $activity = $activities->createManual($action, $chain);
+            $activity = $activities->createManual($action, $chain, $request->user());
         } catch (InvalidArgumentException $exception) {
             return back()->withErrors(['chain' => $exception->getMessage()]);
         } catch (DomainException $exception) {

@@ -75,4 +75,14 @@ return [
         'sqlite_lock_backoff_ms' => env('SQLITE_LOCK_BACKOFF_MS', 50),
     ],
 
+    'operations' => [
+        'cache_store' => env('OPERATIONS_CACHE_STORE', 'file'),
+        'scheduler_stale_seconds' => env('SCHEDULER_STALE_SECONDS', 150),
+        'queue_stale_seconds' => env('QUEUE_STALE_SECONDS', 750),
+        'queue_max_time' => env('QUEUE_DRAIN_MAX_TIME', 50),
+        'queue_memory' => env('QUEUE_DRAIN_MEMORY', 128),
+        'queue_job_timeout' => env('QUEUE_JOB_TIMEOUT', 600),
+        'fast_tracker_stale_seconds' => env('FAST_TRACKER_STALE_SECONDS', 75),
+    ],
+
 ];

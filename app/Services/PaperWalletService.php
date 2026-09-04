@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Chain;
 use App\Models\PaperWallet;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 
 class PaperWalletService
@@ -29,6 +30,23 @@ class PaperWalletService
         $wallet = $this->default($chain);
 
         return $this->query($chain)->whereKey($wallet->getKey())->lockForUpdate()->firstOrFail();
+    }
+
+    public function forUser(User $user, Chain|string $chain): PaperWallet
+    {
+        $resolved = $chain instanceof Chain ? $chain : Chain::fromInput($chain);
+
+        return PaperWallet::query()->firstOrCreate(
+            ['user_id' => $user->id, 'name' => 'default', 'chain' => $resolved->value],
+            ['currency' => $this->currency($resolved), 'starting_balance_sol' => $this->startingBalance($resolved), 'available_balance_sol' => $this->startingBalance($resolved), 'invested_balance_sol' => 0, 'realized_pnl_sol' => 0],
+        );
+    }
+
+    public function lockedForUser(User $user, Chain|string $chain): PaperWallet
+    {
+        $wallet = $this->forUser($user, $chain);
+
+        return PaperWallet::query()->whereKey($wallet->id)->where('user_id', $user->id)->lockForUpdate()->firstOrFail();
     }
 
     /** @return Builder<PaperWallet> */

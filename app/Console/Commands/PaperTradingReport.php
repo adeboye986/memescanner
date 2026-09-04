@@ -4,13 +4,15 @@ namespace App\Console\Commands;
 
 use App\Chain;
 use App\Models\PaperPosition;
+use App\Models\User;
 use App\Services\PaperWalletService;
 use Illuminate\Console\Command;
 
 class PaperTradingReport extends Command
 {
     protected $signature = 'tokens:paper-report
-        {--chain=solana : Paper wallet chain (solana or ethereum)}';
+        {--chain=solana : Paper wallet chain (solana or ethereum)}
+        {--user= : Report one user-owned wallet}';
 
     protected $description = 'Show one chain virtual wallet and paper trading performance';
 
@@ -24,7 +26,9 @@ class PaperTradingReport extends Command
             return self::FAILURE;
         }
 
-        $wallet = $wallets->query($chain)->first();
+        $user = $this->option('user') ? User::query()->findOrFail($this->option('user')) : null;
+
+        $wallet = $user ? $wallets->forUser($user, $chain) : $wallets->query($chain)->whereNull('user_id')->first();
 
         if (! $wallet) {
             $this->error("Default {$chain->label()} paper wallet not found.");
@@ -39,6 +43,7 @@ class PaperTradingReport extends Command
          * investment are intentionally excluded.
          */
         $positions = PaperPosition::query()
+            ->where('user_id', $user?->id)
             ->where('chain', $chain->value)
             ->where('initial_investment_sol', '>', 0)
             ->orderByDesc('id')

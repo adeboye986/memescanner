@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Chain;
 use App\Models\PaperPosition;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 use Throwable;
@@ -14,6 +15,7 @@ class PaperTradeEntryService
         private TelegramService $telegram,
         private PaperWalletService $wallets,
         private PaperStrategyService $strategies,
+        private TelegramBotManager $telegramBots,
     ) {}
 
     /** @param array<string, mixed> $data */
@@ -23,13 +25,15 @@ class PaperTradeEntryService
         $address = $chain === Chain::Ethereum
             ? strtolower((string) $data['address'])
             : (string) $data['address'];
+        $user = isset($data['user_id']) ? User::query()->findOrFail($data['user_id']) : null;
 
-        $position = DB::transaction(function () use ($data, $chain, $address): PaperPosition {
-            $wallet = $this->wallets->lockedDefault($chain);
+        $position = DB::transaction(function () use ($data, $chain, $address, $user): PaperPosition {
+            $wallet = $user ? $this->wallets->lockedForUser($user, $chain) : $this->wallets->lockedDefault($chain);
             $tradeSize = $this->wallets->tradeSize($chain);
             $currency = $wallet->currencyCode();
 
             $existing = PaperPosition::query()
+                ->where('user_id', $user?->id)
                 ->where('chain', $chain->value)
                 ->where('address', $address)
                 ->where('status', 'open')
@@ -44,10 +48,11 @@ class PaperTradeEntryService
                 throw new RuntimeException("Insufficient paper {$currency} balance.");
             }
 
-            $strategy = $this->strategies->forNewPosition($data['strategy_override'] ?? null);
+            $strategy = $user ? $this->strategies->forUser($user, $data['strategy_override'] ?? null) : $this->strategies->forNewPosition($data['strategy_override'] ?? null);
 
             $position = PaperPosition::query()->create([
                 'chain' => $chain->value,
+                'user_id' => $user?->id,
                 'address' => $address,
                 'symbol' => $data['symbol'] ?? null,
                 'name' => $data['name'] ?? null,
@@ -88,7 +93,7 @@ class PaperTradeEntryService
 
     public function sendBuyNotification(PaperPosition $position): void
     {
-        $wallet = $this->wallets->default($position->chain);
+        $wallet = $position->user_id ? $this->wallets->forUser($position->user, $position->chain) : $this->wallets->default($position->chain);
         $discovery = (float) ($position->discovery_market_cap ?? 0);
         $entry = (float) $position->entry_market_cap;
         $scanner = strtoupper(str_replace(['-', '_'], ' ', (string) data_get($position->meta, 'scanner', 'unknown')));
@@ -99,8 +104,7 @@ class PaperTradeEntryService
         $strategy = $this->strategies->forPosition($position);
 
         try {
-            $this->telegram->send(
-                "🟢🟢🟢 <b>PAPER BUY EXECUTED</b> 🟢🟢🟢\n\n".
+            $message = "🟢🟢🟢 <b>PAPER BUY EXECUTED</b> 🟢🟢🟢\n\n".
                 '<b>Scanner:</b> '.$scanner."\n".
                 '<b>Chain:</b> '.strtoupper($position->chain->value)."\n".
                 "<b>Symbol:</b> {$position->symbol}\n".
@@ -116,8 +120,16 @@ class PaperTradeEntryService
                 'Stop Loss: -'.number_format((float) $strategy['stop_loss_percent'], 2).'% / '.number_format((float) $strategy['stop_loss_multiple'], 2)."x / CLOSE 100%\n".
                 'Protection Level 1: +'.number_format((float) $strategy['protection_level_1_percent'], 2).'% / '.number_format((float) $strategy['protection_level_1_multiple'], 2)."x / ARM FLOOR / HOLD\n".
                 'Protection Level 2: +'.number_format((float) $strategy['protection_level_2_percent'], 2).'% / '.number_format((float) $strategy['protection_level_2_multiple'], 2)."x / UPGRADE FLOOR / HOLD\n".
-                "A full exit occurs only on a later observation at or below the active floor, using the actual observed fill.\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>",
-            );
+                "A full exit occurs only on a later observation at or below the active floor, using the actual observed fill.\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>";
+
+            if ($position->user_id) {
+                $bot = $position->user->telegramBot()->where('enabled', true)->with('identity')->first();
+                if ($bot?->identity) {
+                    $this->telegramBots->client($bot)->sendMessage($bot->identity->telegram_chat_id, $message);
+                }
+            } else {
+                $this->telegram->send($message);
+            }
         } catch (Throwable $exception) {
             report($exception);
         }

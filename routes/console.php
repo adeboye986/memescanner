@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\SystemActivity;
+use App\Services\OperationalHealthService;
 use App\Services\SystemActivityService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
@@ -11,6 +12,12 @@ use Illuminate\Support\Stringable;
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
+
+Schedule::useCache((string) config('services.operations.cache_store', 'file'));
+
+Schedule::call(fn () => app(OperationalHealthService::class)->recordSchedulerRun())
+    ->name('operations.scheduler-heartbeat')
+    ->everyMinute();
 
 $paperTrackActivity = null;
 

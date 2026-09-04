@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\RunDashboardCommand;
 use App\Models\SystemActivity;
+use App\Models\User;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Support\Facades\Queue;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
@@ -18,6 +19,7 @@ class DashboardActionControllerTest extends TestCase
         parent::setUp();
 
         $this->refreshPaperTradingDatabase();
+        $this->actingAs(User::factory()->create(['is_admin' => true]));
     }
 
     public function test_allowed_action_creates_activity_and_dispatches_job(): void

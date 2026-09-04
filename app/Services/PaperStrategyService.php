@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\PaperPosition;
 use App\Models\PaperStrategySetting;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
@@ -19,7 +20,7 @@ class PaperStrategyService
     public function global(): PaperStrategySetting
     {
         return PaperStrategySetting::query()->firstOrCreate(
-            ['name' => 'default'],
+            ['name' => 'default', 'user_id' => null],
             self::DEFAULTS,
         );
     }
@@ -47,6 +48,27 @@ class PaperStrategyService
     }
 
     /** @return array<string, float|string> */
+    public function forUser(User $user, ?array $override = null): array
+    {
+        $setting = PaperStrategySetting::query()->firstOrCreate(['user_id' => $user->id, 'name' => 'default'], self::DEFAULTS);
+        $values = ['stop_loss_percent' => (float) $setting->stop_loss_percent, 'protection_level_1_percent' => (float) $setting->protection_level_1_percent, 'protection_level_2_percent' => (float) $setting->protection_level_2_percent];
+        if ($override !== null) {
+            $values = array_replace($values, array_intersect_key($override, self::DEFAULTS));
+        }
+        $this->validate($values);
+
+        return $this->withMultiples($values, $override === null ? 'user' : 'position_override');
+    }
+
+    /** @param array{stop_loss_percent: float|int|string, protection_level_1_percent: float|int|string, protection_level_2_percent: float|int|string} $values */
+    public function updateForUser(User $user, array $values): PaperStrategySetting
+    {
+        $this->validate($values);
+
+        return PaperStrategySetting::query()->updateOrCreate(['user_id' => $user->id, 'name' => 'default'], $values);
+    }
+
+    /** @return array<string, float|string> */
     public function forPosition(PaperPosition $position): array
     {
         if (is_array($position->strategy_snapshot) && $position->strategy_snapshot !== []) {
@@ -71,6 +93,7 @@ class PaperStrategyService
 
         return DB::transaction(function () use ($values): PaperStrategySetting {
             $setting = PaperStrategySetting::query()
+                ->whereNull('user_id')
                 ->where('name', 'default')
                 ->lockForUpdate()
                 ->first() ?? new PaperStrategySetting(['name' => 'default']);

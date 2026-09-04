@@ -9,6 +9,7 @@ use App\Services\Chains\ChainManager;
 use App\Services\DatabaseLockRetryService;
 use App\Services\PaperStrategyService;
 use App\Services\PaperWalletService;
+use App\Services\TelegramBotManager;
 use App\Services\TelegramService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
@@ -562,7 +563,9 @@ class TrackPaperPositions extends Command
                     $walletSolReturned > 0
                     && ! $hasAlreadyAppliedExit
                 ) {
-                    $wallet = $wallets->lockedDefault($lockedPosition->chain);
+                    $wallet = $lockedPosition->user_id
+                        ? $wallets->lockedForUser($lockedPosition->user, $lockedPosition->chain)
+                        : $wallets->lockedDefault($lockedPosition->chain);
 
                     $wallet->available_balance_sol =
                         (float) $wallet->available_balance_sol
@@ -739,7 +742,7 @@ class TrackPaperPositions extends Command
 
         if ($protectionJustArmed && $remainingFraction > 0) {
             try {
-                $telegram->send(
+                $this->sendTelegram($telegram, $position,
                     '🛡️ <b>+'.self::formatPercent($protectionLevel1Percent)."% PROFIT PROTECTED</b>\n\n".
                     "Token: <b>{$position->symbol}</b>\n".
                     'Chain: <b>'.$position->chain->label()."</b>\n".
@@ -759,7 +762,7 @@ class TrackPaperPositions extends Command
 
         if ($twoXProtectionJustArmed && $remainingFraction > 0) {
             try {
-                $telegram->send(
+                $this->sendTelegram($telegram, $position,
                     '🛡️ <b>+'.self::formatPercent($protectionLevel2Percent)."% PROFIT PROTECTED</b>\n\n".
                     "Token: <b>{$position->symbol}</b>\n".
                     'Chain: <b>'.$position->chain->label()."</b>\n".
@@ -779,7 +782,9 @@ class TrackPaperPositions extends Command
 
         foreach ($strategyEvents as $event) {
             try {
-                $walletAfterExit = $wallets->default($position->chain);
+                $walletAfterExit = $position->user_id
+                    ? $wallets->forUser($position->user, $position->chain)
+                    : $wallets->default($position->chain);
 
                 $eventType = $event['type'] ?? 'exit';
 
@@ -834,7 +839,7 @@ class TrackPaperPositions extends Command
                             "</b>\n\n"
                         : '';
 
-                $telegram->send(
+                $this->sendTelegram($telegram, $position,
                     "{$heading}\n\n".
                     "💰 <b>{$position->symbol}</b>\n\n".
                     "{$actionText}\n\n".
@@ -897,7 +902,7 @@ class TrackPaperPositions extends Command
             };
 
             try {
-                $telegram->send(
+                $this->sendTelegram($telegram, $position,
                     "🎯 <b>PAPER MILESTONE: {$label}</b>\n\n".
                     "<b>{$position->symbol}</b>\n".
                     "🧪 Paper only\n".
@@ -924,6 +929,20 @@ class TrackPaperPositions extends Command
                     $e->getMessage()
                 );
             }
+        }
+    }
+
+    private function sendTelegram(TelegramService $legacyTelegram, PaperPosition $position, string $message): void
+    {
+        if (! $position->user_id) {
+            $legacyTelegram->send($message);
+
+            return;
+        }
+
+        $bot = $position->user->telegramBot()->where('enabled', true)->with('identity')->first();
+        if ($bot?->identity) {
+            app(TelegramBotManager::class)->client($bot)->sendMessage($bot->identity->telegram_chat_id, $message);
         }
     }
 

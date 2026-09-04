@@ -16,8 +16,8 @@ class TradeHistoryController extends Controller
 
         return view('trades.index', [
             'filters' => $filters,
-            'trades' => $history->paginate($filters, $request->integer('page', 1)),
-            'performance' => $history->performanceSummary(),
+            'trades' => $history->paginate($filters, $request->integer('page', 1), user: $request->user()),
+            'performance' => $history->performanceSummary($request->user()),
         ]);
     }
 }

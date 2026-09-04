@@ -5,14 +5,17 @@ namespace App\Http\Controllers;
 use App\Models\PaperPosition;
 use App\Services\PaperTradeExitService;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use RuntimeException;
 
 class ClosePaperTradeController extends Controller
 {
     public function __invoke(
+        Request $request,
         PaperPosition $position,
         PaperTradeExitService $exitService,
     ): RedirectResponse {
+        abort_unless($position->user_id === $request->user()->id || ($request->user()->is_admin && $position->user_id === null), 404);
         if ($position->status !== 'open') {
             return back()->with('error', 'This paper position is already closed.');
         }

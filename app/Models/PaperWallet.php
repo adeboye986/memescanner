@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Chain;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class PaperWallet extends Model
 {
@@ -20,5 +21,10 @@ class PaperWallet extends Model
     public function currencyCode(): string
     {
         return $this->currency;
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
     }
 }

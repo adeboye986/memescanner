@@ -74,7 +74,9 @@ class TelegramUpdateService
         $messageId = (int) data_get($callback, 'message.message_id', 0);
         $identity = $this->links->authorized((string) data_get($callback, 'from.id', ''), $bot);
 
-        $telegram->answerCallbackQuery($callbackId);
+        if (! ($callback['_acknowledged'] ?? false)) {
+            $telegram->answerCallbackQuery($callbackId);
+        }
 
         if (data_get($callback, 'message.chat.type') !== 'private') {
             $telegram->sendMessage($chatId, 'Interactive trading controls are available only in a private chat with the bot.');

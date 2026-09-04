@@ -61,6 +61,31 @@
         <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Integrations</p><p class="mt-2 text-lg font-bold text-emerald-300">{{ collect($integrationSummary)->whereIn('status', ['configured', 'active'])->count() }} / {{ count($integrationSummary) }}</p><p class="mt-1 text-xs text-slate-500">Configured or active</p></article>
     </section>
 
+    @can('manage-settings')
+        <section aria-labelledby="operations-heading" class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+            <div class="flex items-center justify-between gap-4"><div><p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Operations</p><h2 id="operations-heading" class="mt-1 text-xl font-semibold text-white">Background Process Health</h2></div><span class="text-xs text-slate-500">Safe operational metadata only</span></div>
+            <div class="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                @foreach (['scheduler' => 'Scheduler', 'queue' => 'Queue', 'fast_tracker' => 'Fast Tracker'] as $key => $label)
+                    @php
+                        $state = $operationalStatus[$key]['status'];
+                    @endphp
+                    <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p class="text-xs uppercase tracking-wider text-slate-500">{{ $label }}</p><p class="mt-2 font-bold {{ $state === 'healthy' ? 'text-emerald-300' : ($state === 'stale' ? 'text-amber-300' : 'text-slate-300') }}">{{ str($state)->replace('_', ' ')->upper() }}</p><p class="mt-1 text-xs text-slate-500">{{ $operationalStatus[$key]['last_run_at']?->diffForHumans() ?? 'No heartbeat recorded' }}</p></article>
+                @endforeach
+                <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p class="text-xs uppercase tracking-wider text-slate-500">Pending Jobs</p><p class="mt-2 text-lg font-bold text-white">{{ $operationalStatus['pending_jobs'] }}</p></article>
+                <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p class="text-xs uppercase tracking-wider text-slate-500">Failed Jobs</p><p class="mt-2 text-lg font-bold {{ $operationalStatus['failed_jobs'] > 0 ? 'text-red-300' : 'text-emerald-300' }}">{{ $operationalStatus['failed_jobs'] }}</p></article>
+            </div>
+        </section>
+    @endcan
+
+    <form method="POST" action="{{ route('dashboard.trading-preferences.update') }}" class="flex flex-wrap items-end gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+        @csrf @method('PUT')
+        <input type="hidden" name="execution_mode" value="paper">
+        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Execution<input value="PAPER" disabled class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-300"></label>
+        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Entry Mode<select name="entry_mode" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white">@foreach(['signal' => 'Signal', 'confirm' => 'Confirm', 'auto' => 'Auto'] as $value => $label)<option value="{{ $value }}" @selected($entryMode === $value)>{{ $label }}</option>@endforeach</select></label>
+        <button class="rounded-xl bg-violet-400 px-5 py-2.5 text-sm font-semibold text-slate-950">Save Modes</button>
+        <p class="text-xs text-slate-500">Live execution remains unavailable.</p>
+    </form>
+
     <section aria-labelledby="wallet-heading" class="flex flex-col gap-4">
         <div class="flex items-center justify-between gap-4">
             <div>
@@ -86,10 +111,29 @@
                         <div><dt class="text-xs uppercase text-slate-500">Invested</dt><dd class="mt-2 font-semibold text-amber-300">{{ number_format((float) $wallet->invested_balance_sol, 4) }} {{ $currency }}</dd></div>
                         <div><dt class="text-xs uppercase text-slate-500">Realized P/L</dt><dd class="mt-2 font-semibold {{ (float) $wallet->realized_pnl_sol >= 0 ? 'text-emerald-300' : 'text-red-300' }}">{{ sprintf('%+.4f %s', (float) $wallet->realized_pnl_sol, $currency) }}</dd></div>
                     </dl>
-                    <p class="mt-4 border-t border-slate-800 pt-3 text-xs text-slate-500">{{ $positions->filter(fn ($trade) => $trade['model']->chain->value === $chain)->count() }} open funded positions</p>
+                    <p class="mt-4 border-t border-slate-800 pt-3 text-xs text-slate-500">{{ $positions->filter(fn ($trade) => $trade['model']->chain->value === $chain && $trade['model']->user_id === auth()->id())->count() }} open funded positions</p>
                 </article>
             @endforeach
         </div>
+
+        @if ($legacyWallets->isNotEmpty())
+            <div class="rounded-2xl border border-amber-400/20 bg-amber-400/5 p-5">
+                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-amber-300">Legacy Admin Ledgers</p>
+                <p class="mt-2 text-sm text-slate-400">These null-owned balances are preserved separately from your personal paper wallets.</p>
+                <div class="mt-4 grid gap-3 md:grid-cols-2">
+                    @foreach ($legacyWallets as $chain => $wallet)
+                        @php
+                            $currency = $wallet->currencyCode();
+                        @endphp
+                        <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                            <div class="flex items-center justify-between"><h3 class="font-semibold text-white">{{ $wallet->chain->label() }} Legacy</h3><span class="text-xs text-amber-300">UNOWNED</span></div>
+                            <dl class="mt-4 grid grid-cols-2 gap-3 text-sm"><div><dt class="text-xs uppercase text-slate-500">Available</dt><dd class="mt-1 text-white">{{ number_format((float) $wallet->available_balance_sol, 4) }} {{ $currency }}</dd></div><div><dt class="text-xs uppercase text-slate-500">Invested</dt><dd class="mt-1 text-white">{{ number_format((float) $wallet->invested_balance_sol, 4) }} {{ $currency }}</dd></div></dl>
+                            <p class="mt-3 text-xs text-slate-500">{{ $positions->filter(fn ($trade) => $trade['model']->chain->value === $chain && $trade['model']->user_id === null)->count() }} legacy open funded positions</p>
+                        </article>
+                    @endforeach
+                </div>
+            </div>
+        @endif
     </section>
 
     <section aria-labelledby="strategy-heading" class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10 sm:p-6">
@@ -106,7 +150,6 @@
             </div>
         </div>
 
-        @can('manage-settings')
         <form method="POST" action="{{ route('dashboard.paper-strategy.update') }}" class="mt-6 grid gap-4 md:grid-cols-3 lg:grid-cols-[1fr_1fr_1fr_auto] lg:items-end">
             @csrf
             <label class="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Stop Loss %
@@ -120,9 +163,6 @@
             </label>
             <button type="submit" class="rounded-xl bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300">Save Strategy</button>
         </form>
-        @else
-            <p class="mt-5 text-sm text-slate-500">Sign in as an administrator to change strategy settings.</p>
-        @endcan
     </section>
 
     <div class="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">

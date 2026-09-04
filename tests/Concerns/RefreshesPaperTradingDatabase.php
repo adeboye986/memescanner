@@ -28,6 +28,10 @@ trait RefreshesPaperTradingDatabase
                 'database/migrations/2026_09_02_224822_create_telegram_link_tokens_table.php',
                 'database/migrations/2026_09_04_112652_create_user_telegram_bots_table.php',
                 'database/migrations/2026_09_04_112703_add_user_telegram_bot_id_to_telegram_access_tables.php',
+                'database/migrations/2026_09_04_121918_create_user_trading_preferences_table.php',
+                'database/migrations/2026_09_04_121919_add_user_ownership_to_paper_trading_tables.php',
+                'database/migrations/2026_09_04_121920_add_user_id_to_paper_strategy_settings_table.php',
+                'database/migrations/2026_09_04_121921_add_user_id_to_system_activities_table.php',
             ],
             '--no-interaction' => true,
         ])->assertSuccessful();

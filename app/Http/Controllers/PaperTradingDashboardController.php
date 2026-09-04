@@ -5,27 +5,47 @@ namespace App\Http\Controllers;
 use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
+use App\Models\User;
 use App\Services\ApplicationSettingsService;
 use App\Services\DashboardCommandRegistry;
 use App\Services\IntegrationStatusService;
+use App\Services\OperationalHealthService;
 use App\Services\PaperStrategyService;
 use App\Services\PaperWalletService;
 use App\Services\SystemActivityService;
+use App\Services\UserTradingPreferenceService;
 use Illuminate\Contracts\View\View;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\Request;
 
 class PaperTradingDashboardController extends Controller
 {
     public function __invoke(
+        Request $request,
         DashboardCommandRegistry $commands,
         SystemActivityService $activities,
         PaperWalletService $wallets,
         PaperStrategyService $strategies,
         ApplicationSettingsService $settings,
         IntegrationStatusService $integrations,
+        UserTradingPreferenceService $preferences,
+        OperationalHealthService $operationalHealth,
     ): View {
+        $user = $request->user();
+        $preference = $preferences->forUser($user);
         $paperWallets = collect(Chain::cases())
-            ->mapWithKeys(fn (Chain $chain): array => [$chain->value => $wallets->default($chain)]);
-        $positions = PaperPosition::query()
+            ->mapWithKeys(fn (Chain $chain): array => [$chain->value => $wallets->forUser($user, $chain)]);
+        $legacyWallets = $user->is_admin
+            ? collect(Chain::cases())->mapWithKeys(fn (Chain $chain): array => [$chain->value => $wallets->query($chain)->whereNull('user_id')->first()])->filter()
+            : collect();
+        $positionQuery = PaperPosition::query();
+        $positionQuery->where(function ($query) use ($user): void {
+            $query->where('user_id', $user->id);
+            if ($user->is_admin) {
+                $query->orWhereNull('user_id');
+            }
+        });
+        $positions = $positionQuery
             ->where('status', 'open')
             ->where('initial_investment_sol', '>', 0)
             ->orderBy('entry_at')
@@ -34,21 +54,35 @@ class PaperTradingDashboardController extends Controller
 
         return view('dashboard', [
             'wallets' => $paperWallets,
+            'legacyWallets' => $legacyWallets,
             'positions' => $positions,
-            'dashboardActions' => $commands->all(),
-            'currentActivity' => $activities->currentManualData(),
-            'recentActivities' => $activities->recentData(),
-            'runningActions' => $activities->runningActions(),
+            'dashboardActions' => collect($commands->all())
+                ->when(! $user->is_admin, fn ($actions) => $actions->except('paper-track'))
+                ->all(),
+            'currentActivity' => $activities->currentManualData($user),
+            'recentActivities' => $activities->recentData(user: $user),
+            'runningActions' => $activities->runningActions($user),
             'systemStatus' => $activities->systemStatus(),
-            'paperStrategy' => $strategies->forNewPosition(),
-            'executionMode' => (string) $settings->get('trading.execution_mode'),
-            'entryMode' => (string) $settings->get('trading.entry_mode'),
+            'paperStrategy' => $strategies->forUser($user),
+            'executionMode' => $preference->execution_mode->value,
+            'entryMode' => $preference->entry_mode->value,
             'opportunitySummary' => [
-                'recent' => TradeOpportunity::query()->where('qualified_at', '>=', now()->subDay())->count(),
-                'pending' => TradeOpportunity::query()->where('status', 'pending_confirmation')->count(),
+                'recent' => $this->opportunityQuery($user)->where('qualified_at', '>=', now()->subDay())->count(),
+                'pending' => $this->opportunityQuery($user)->where('status', 'pending_confirmation')->count(),
             ],
             'integrationSummary' => $integrations->all(),
+            'operationalStatus' => $operationalHealth->status(),
         ]);
+    }
+
+    private function opportunityQuery(User $user): Builder
+    {
+        return TradeOpportunity::query()->where(function ($query) use ($user): void {
+            $query->where('user_id', $user->id);
+            if ($user->is_admin) {
+                $query->orWhereNull('user_id');
+            }
+        });
     }
 
     /**

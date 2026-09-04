@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Chain;
 use App\Models\TokenScan;
 use App\Models\TokenScanHistory;
+use App\Models\User;
 use App\Services\ApplicationSettingsService;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
@@ -21,6 +22,7 @@ class ScanMomentumTokens extends Command
 {
     protected $signature = 'tokens:momentum
                         {--chain=solana : Blockchain to scan (solana or ethereum)}
+                        {--user= : Limit opportunity distribution to one user ID}
                         {--dry-run : Run DexScreener discovery/ranking without Birdeye, GoPlus, database writes, or Telegram}';
 
     protected $description = 'Scan supported-chain tokens showing early momentum';
@@ -38,6 +40,7 @@ class ScanMomentumTokens extends Command
     ): int {
         try {
             $chain = Chain::fromInput($this->option('chain'));
+            $requestingUser = $this->option('user') ? User::query()->findOrFail($this->option('user')) : null;
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage());
 
@@ -46,7 +49,7 @@ class ScanMomentumTokens extends Command
 
         if ($chain === Chain::Ethereum) {
             $this->warn('Ethereum security status: Solana-specific Birdeye, GoPlus, holder, developer-sale, and Pump.fun checks are unavailable and are not reported as passed.');
-            $result = $ethereumScanner->scan('momentum');
+            $result = $ethereumScanner->scan('momentum', $requestingUser);
             $this->info(sprintf('Ethereum momentum scan finished: %d profiles, %d qualified, %d paper buys.', $result['profiles'], $result['qualified'], $result['positions']));
 
             return self::SUCCESS;
@@ -730,7 +733,7 @@ class ScanMomentumTokens extends Command
                                     'source' => 'momentum_fast_paper',
                                 ],
                                 'scanner' => 'momentum',
-                            ]);
+                            ], $requestingUser);
 
                             $paperPosition = $execution['position'];
                             $paperBuyExecuted =
@@ -806,7 +809,9 @@ class ScanMomentumTokens extends Command
                         $fastPaperAlertsEnabled
                         && $paperBuyExecuted
                     ) {
-                        $paperWallet = $wallets->default($chain);
+                        $paperWallet = $requestingUser
+                            ? $wallets->forUser($requestingUser, $chain)
+                            : $wallets->default($chain);
                         $currency = $paperWallet->currencyCode();
 
                         $walletAvailable =

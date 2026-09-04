@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
+use App\Models\User;
 use Illuminate\Support\Facades\Http;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
@@ -17,6 +18,7 @@ class ClosePaperTradeControllerTest extends TestCase
         parent::setUp();
 
         $this->refreshPaperTradingDatabase();
+        $this->actingAs(User::factory()->create(['is_admin' => true]));
     }
 
     public function test_manual_close_updates_position_and_wallet_and_records_exit(): void

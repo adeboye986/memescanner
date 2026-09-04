@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
+use App\Models\User;
 use App\Services\PaperWalletService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -13,6 +14,7 @@ class ReconcilePaperWallet extends Command
 {
     protected $signature = 'tokens:paper-reconcile
         {--chain=solana : Paper wallet chain (solana or ethereum)}
+        {--user= : Reconcile one user-owned wallet}
         {--fix : Rewrite the wallet balances from the paper-position ledger}';
 
     protected $description = 'Check and optionally reconcile one chain paper wallet against its positions';
@@ -27,7 +29,9 @@ class ReconcilePaperWallet extends Command
             return self::FAILURE;
         }
 
-        $wallet = $wallets->query($chain)->first();
+        $user = $this->option('user') ? User::query()->findOrFail($this->option('user')) : null;
+
+        $wallet = $user ? $wallets->forUser($user, $chain) : $wallets->query($chain)->whereNull('user_id')->first();
 
         if (! $wallet) {
             $this->error("Default {$chain->label()} paper wallet not found.");
@@ -37,6 +41,7 @@ class ReconcilePaperWallet extends Command
 
         $currency = $wallet->currencyCode();
         $positions = PaperPosition::query()
+            ->where('user_id', $user?->id)
             ->where('chain', $chain->value)
             ->where('initial_investment_sol', '>', 0)
             ->get();
@@ -136,9 +141,11 @@ class ReconcilePaperWallet extends Command
 
         DB::transaction(function () use (
             $wallet,
-            $chain
+            $chain,
+            $user
         ): void {
             $lockedPositions = PaperPosition::query()
+                ->where('user_id', $user?->id)
                 ->where('chain', $chain->value)
                 ->where('initial_investment_sol', '>', 0)
                 ->orderBy('id')

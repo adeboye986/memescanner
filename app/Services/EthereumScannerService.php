@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Chain;
 use App\Models\TokenScan;
+use App\Models\User;
 use App\Services\Chains\ChainManager;
 
 class EthereumScannerService
@@ -14,7 +15,7 @@ class EthereumScannerService
     ) {}
 
     /** @return array{profiles: int, qualified: int, positions: int, unavailable_checks: list<string>} */
-    public function scan(string $scanner): array
+    public function scan(string $scanner, ?User $requestingUser = null): array
     {
         $adapter = $this->chains->for(Chain::Ethereum);
         $profiles = $adapter->latestProfiles(30);
@@ -102,7 +103,7 @@ class EthereumScannerService
                     'security_status' => 'unavailable',
                     'unavailable_security_checks' => $adapter->unavailableSecurityChecks(),
                 ],
-            ]);
+            ], $requestingUser);
 
             if ($execution['position']?->wasRecentlyCreated) {
                 $positions++;

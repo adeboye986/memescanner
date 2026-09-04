@@ -16,6 +16,8 @@ class ApproveOpportunityController extends Controller
      */
     public function __invoke(Request $request, TradeOpportunity $opportunity, OpportunityActionService $actions): RedirectResponse
     {
+        abort_unless($opportunity->user_id === $request->user()->id || ($request->user()->is_admin && $opportunity->user_id === null), 404);
+
         try {
             $position = $actions->approve($opportunity, $request->user());
 
