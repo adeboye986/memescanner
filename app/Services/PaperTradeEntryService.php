@@ -15,7 +15,7 @@ class PaperTradeEntryService
         private TelegramService $telegram,
         private PaperWalletService $wallets,
         private PaperStrategyService $strategies,
-        private TelegramBotManager $telegramBots,
+        private UserTelegramNotificationService $userTelegram,
     ) {}
 
     /** @param array<string, mixed> $data */
@@ -123,10 +123,7 @@ class PaperTradeEntryService
                 "A full exit occurs only on a later observation at or below the active floor, using the actual observed fill.\n\n<b>NO PARTIAL SELLING</b>\n<b>PAPER TRADE — NO REAL FUNDS USED</b>";
 
             if ($position->user_id) {
-                $bot = $position->user->telegramBot()->where('enabled', true)->with('identity')->first();
-                if ($bot?->identity) {
-                    $this->telegramBots->client($bot)->sendMessage($bot->identity->telegram_chat_id, $message);
-                }
+                $this->userTelegram->send($position->user, $message);
             } else {
                 $this->telegram->send($message);
             }
