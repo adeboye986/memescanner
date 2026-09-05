@@ -73,11 +73,8 @@ Route::middleware('auth')->group(function (): void {
 
 Route::middleware('auth')->prefix('settings/telegram')->name('telegram.')->group(function (): void {
     Route::get('/', [UserTelegramBotController::class, 'show'])->name('settings');
-    Route::put('/', [UserTelegramBotController::class, 'store'])->middleware('customer.verified')->name('connect');
-    Route::post('/test', [UserTelegramBotController::class, 'test'])->middleware('customer.verified')->name('test');
     Route::post('/link', [UserTelegramBotController::class, 'link'])->middleware('customer.verified')->name('link');
     Route::delete('/link', [UserTelegramBotController::class, 'unlink'])->name('unlink');
-    Route::delete('/', [UserTelegramBotController::class, 'destroy'])->name('disconnect');
 });
 
 Route::middleware(['auth', 'can:manage-settings'])->prefix('settings')->name('settings.')->group(function (): void {

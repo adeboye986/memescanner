@@ -28,32 +28,38 @@ class TelegramInteractionTest extends TestCase
     {
         parent::setUp();
         $this->refreshPaperTradingDatabase();
-        app(ApplicationSettingsService::class)->update(['telegram.enabled' => true, 'telegram.bot_token' => 'test-token', 'telegram.bot_username' => 'scanner_bot']);
+        app(ApplicationSettingsService::class)->update([
+            'telegram.enabled' => true,
+            'telegram.bot_token' => 'test-token',
+            'telegram.bot_username' => 'scanner_bot',
+            'telegram.webhook_secret' => 'shared-webhook-secret',
+        ]);
         Http::fake(['api.telegram.org/*' => Http::response(['ok' => true, 'result' => []])]);
         $this->bot = UserTelegramBot::factory()->create(['user_id' => User::factory()->create(['is_admin' => true])]);
     }
 
-    public function test_link_is_one_time_and_numeric_identity_is_authoritative(): void
+    public function test_shared_link_is_one_time_and_numeric_identity_is_authoritative(): void
     {
-        $user = $this->bot->user;
+        $user = User::factory()->create(['is_admin' => false]);
         $url = app(TelegramLinkService::class)->create($user);
         preg_match('/link_([A-Za-z0-9]+)$/', $url, $matches);
-        $identity = app(TelegramLinkService::class)->consume($matches[1], ['id' => 123456, 'username' => 'operator'], '123456', $this->bot);
+        $identity = app(TelegramLinkService::class)->consume($matches[1], ['id' => 123456, 'username' => 'operator'], '123456');
 
         $this->assertSame($user->id, $identity->user_id);
         $this->assertSame('123456', $identity->telegram_user_id);
+        $this->assertNull($identity->user_telegram_bot_id);
         $this->assertNotNull(TelegramLinkToken::query()->firstOrFail()->consumed_at);
         $this->expectException(DomainException::class);
-        app(TelegramLinkService::class)->consume($matches[1], ['id' => 123456], '123456', $this->bot);
+        app(TelegramLinkService::class)->consume($matches[1], ['id' => 123456], '123456');
     }
 
-    public function test_expired_link_is_rejected(): void
+    public function test_expired_shared_link_is_rejected(): void
     {
-        $url = app(TelegramLinkService::class)->create($this->bot->user);
+        $url = app(TelegramLinkService::class)->create(User::factory()->create());
         preg_match('/link_([A-Za-z0-9]+)$/', $url, $matches);
         TelegramLinkToken::query()->update(['expires_at' => now()->subMinute()]);
         $this->expectException(DomainException::class);
-        app(TelegramLinkService::class)->consume($matches[1], ['id' => 123], '123', $this->bot);
+        app(TelegramLinkService::class)->consume($matches[1], ['id' => 123], '123');
     }
 
     public function test_unauthorized_account_cannot_access_private_menu(): void

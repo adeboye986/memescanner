@@ -12,30 +12,36 @@ use Illuminate\Support\Str;
 
 class TelegramLinkService
 {
+    public function __construct(private ApplicationSettingsService $settings) {}
+
     public function create(User $user): string
     {
-        $bot = UserTelegramBot::query()->where('user_id', $user->id)->where('enabled', true)->first();
+        $botUsername = ltrim(trim((string) $this->settings->get('telegram.bot_username')), '@');
+        $enabled = (bool) $this->settings->get('telegram.enabled');
+        $botToken = $this->settings->getSecret('telegram.bot_token');
+        $webhookSecret = $this->settings->getSecret('telegram.webhook_secret');
 
-        if (! $bot || ! $bot->webhook_configured_at) {
-            throw new DomainException('Connect and verify your Telegram bot before linking an account.');
+        if (! $enabled || $botUsername === '' || ! $botToken || ! $webhookSecret) {
+            throw new DomainException('The platform Telegram bot is not available right now. Please try again later.');
         }
 
         $token = Str::random(40);
-        DB::transaction(function () use ($user, $bot, $token): void {
+
+        DB::transaction(function () use ($user, $token): void {
             TelegramLinkToken::query()->where('user_id', $user->id)->whereNull('consumed_at')->delete();
             TelegramLinkToken::query()->create([
                 'user_id' => $user->id,
-                'user_telegram_bot_id' => $bot->id,
+                'user_telegram_bot_id' => null,
                 'token_hash' => hash('sha256', $token),
                 'expires_at' => now()->addMinutes(10),
             ]);
         });
 
-        return "https://t.me/{$bot->bot_username}?start=link_{$token}";
+        return "https://t.me/{$botUsername}?start=link_{$token}";
     }
 
     /** @param array<string, mixed> $from */
-    public function consume(string $token, array $from, string $chatId, UserTelegramBot $bot): TelegramIdentity
+    public function consume(string $token, array $from, string $chatId, ?UserTelegramBot $bot = null): TelegramIdentity
     {
         $telegramUserId = isset($from['id']) ? (string) $from['id'] : '';
 
@@ -44,13 +50,24 @@ class TelegramLinkService
         }
 
         return DB::transaction(function () use ($token, $from, $chatId, $telegramUserId, $bot): TelegramIdentity {
-            $link = TelegramLinkToken::query()->where('token_hash', hash('sha256', $token))->where('user_telegram_bot_id', $bot->id)->lockForUpdate()->first();
+            $query = TelegramLinkToken::query()->where('token_hash', hash('sha256', $token));
+
+            if ($bot) {
+                $query->where('user_telegram_bot_id', $bot->id);
+            } else {
+                $query->whereNull('user_telegram_bot_id');
+            }
+
+            $link = $query->lockForUpdate()->first();
 
             if (! $link || $link->consumed_at || $link->expires_at->isPast()) {
                 throw new DomainException('This Telegram linking link is invalid or expired.');
             }
 
-            $claimed = TelegramIdentity::query()->where('telegram_user_id', $telegramUserId)->where('user_id', '!=', $link->user_id)->exists();
+            $claimed = TelegramIdentity::query()
+                ->where('telegram_user_id', $telegramUserId)
+                ->where('user_id', '!=', $link->user_id)
+                ->exists();
 
             if ($claimed) {
                 throw new DomainException('This Telegram account is already linked elsewhere.');
@@ -60,7 +77,7 @@ class TelegramLinkService
                 ['user_id' => $link->user_id],
                 [
                     'telegram_user_id' => $telegramUserId,
-                    'user_telegram_bot_id' => $bot->id,
+                    'user_telegram_bot_id' => $bot?->id,
                     'telegram_chat_id' => $chatId,
                     'telegram_username' => $from['username'] ?? null,
                     'display_name' => trim(($from['first_name'] ?? '').' '.($from['last_name'] ?? '')) ?: null,
@@ -69,6 +86,7 @@ class TelegramLinkService
                     'last_seen_at' => now(),
                 ],
             );
+
             $link->update(['consumed_at' => now()]);
 
             return $identity;

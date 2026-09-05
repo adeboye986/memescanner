@@ -7,7 +7,7 @@ use App\Jobs\RunDashboardCommand;
 use App\Models\TelegramIdentity;
 use App\Models\TradeOpportunity;
 use App\Models\User;
-use App\Models\UserTelegramBot;
+use App\Services\ApplicationSettingsService;
 use App\Services\OnboardingStatusService;
 use App\Services\UserTradingBootstrapService;
 use Illuminate\Support\Facades\Queue;
@@ -23,9 +23,15 @@ class OnboardingTest extends TestCase
         parent::setUp();
         $this->refreshPaperTradingDatabase();
         $this->withoutVite();
+        app(ApplicationSettingsService::class)->update([
+            'telegram.enabled' => true,
+            'telegram.bot_token' => 'shared-test-token',
+            'telegram.bot_username' => 'scanner_bot',
+            'telegram.webhook_secret' => 'shared-webhook-secret',
+        ]);
     }
 
-    public function test_onboarding_status_is_derived_from_real_state(): void
+    public function test_onboarding_status_is_derived_from_shared_bot_and_user_identity(): void
     {
         $user = User::factory()->create(['is_admin' => false]);
         app(UserTradingBootstrapService::class)->bootstrap($user);
@@ -35,21 +41,22 @@ class OnboardingTest extends TestCase
         $this->assertTrue($initial['account']);
         $this->assertTrue($initial['email']);
         $this->assertTrue($initial['paper_account']);
-        $this->assertFalse($initial['telegram_bot']);
+        $this->assertTrue($initial['telegram_bot']);
+        $this->assertFalse($initial['telegram_link']);
         $this->assertFalse($initial['ready']);
 
-        $bot = UserTelegramBot::factory()->for($user)->create();
-        TelegramIdentity::factory()->for($user)->create(['user_telegram_bot_id' => $bot->id, 'status' => 'active']);
+        TelegramIdentity::factory()->for($user)->create([
+            'user_telegram_bot_id' => null,
+            'status' => 'active',
+        ]);
+
         $complete = app(OnboardingStatusService::class)->forUser($user->fresh());
 
         $this->assertTrue($complete['telegram_bot']);
         $this->assertTrue($complete['telegram_link']);
         $this->assertTrue($complete['ready']);
 
-        $bot->update(['enabled' => false]);
-        $this->assertFalse(app(OnboardingStatusService::class)->forUser($user->fresh())['ready']);
-        $bot->update(['enabled' => true]);
-        $bot->identity()->delete();
+        TelegramIdentity::query()->where('user_id', $user->id)->delete();
         $this->assertFalse(app(OnboardingStatusService::class)->forUser($user->fresh())['ready']);
     }
 
@@ -63,12 +70,12 @@ class OnboardingTest extends TestCase
         $this->actingAs($admin)->get(route('dashboard'))->assertOk()->assertDontSee('Complete your setup');
     }
 
-    public function test_unverified_user_cannot_connect_bot_scan_approve_or_enable_auto(): void
+    public function test_unverified_user_cannot_link_telegram_scan_approve_or_enable_auto(): void
     {
         $user = User::factory()->unverified()->create(['is_admin' => false]);
         $opportunity = TradeOpportunity::factory()->create(['user_id' => $user->id, 'status' => 'pending_confirmation']);
 
-        $this->actingAs($user)->put(route('telegram.connect'), ['bot_token' => 'secret', 'bot_username' => 'ExampleBot'])->assertRedirect(route('verification.notice'));
+        $this->actingAs($user)->post(route('telegram.link'))->assertRedirect(route('verification.notice'));
         $this->post(route('dashboard.actions.store', 'token-scan'), ['chain' => 'solana'])->assertRedirect(route('verification.notice'));
         $this->post(route('opportunities.approve', $opportunity))->assertRedirect(route('verification.notice'));
         $this->put(route('dashboard.trading-preferences.update'), ['execution_mode' => 'paper', 'entry_mode' => 'auto'])->assertForbidden();
