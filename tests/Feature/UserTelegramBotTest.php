@@ -114,6 +114,36 @@ class UserTelegramBotTest extends TestCase
         $this->assertNull(app(TelegramLinkService::class)->authorized('999', null));
     }
 
+    public function test_legacy_byob_identity_does_not_make_shared_telegram_settings_look_linked(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $legacyBotId = DB::table('user_telegram_bots')->insertGetId([
+            'user_id' => $user->id,
+            'public_id' => 'B2345678901234567890123456789012',
+            'bot_token' => encrypt('legacy-token'),
+            'webhook_secret' => encrypt('legacy-secret'),
+            'telegram_bot_id' => '654321',
+            'bot_username' => 'LegacySettingsBot',
+            'display_name' => 'Legacy Settings Bot',
+            'enabled' => true,
+            'last_verified_at' => now(),
+            'webhook_configured_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        TelegramIdentity::factory()->create([
+            'user_id' => $user->id,
+            'user_telegram_bot_id' => $legacyBotId,
+            'telegram_user_id' => '1001',
+            'status' => 'active',
+        ]);
+
+        $response = $this->actingAs($user)->get(route('telegram.settings'))->assertOk();
+
+        $response->assertDontSee('Unlink Telegram');
+        $response->assertSee('action="'.route('telegram.link').'"', false);
+    }
+
     public function test_normal_user_cannot_edit_or_see_global_platform_credentials(): void
     {
         $user = User::factory()->create(['is_admin' => false]);
