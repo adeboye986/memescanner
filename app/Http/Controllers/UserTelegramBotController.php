@@ -15,7 +15,11 @@ class UserTelegramBotController extends Controller
     public function show(Request $request, ApplicationSettingsService $settings): View
     {
         return view('settings.telegram', [
-            'identity' => TelegramIdentity::query()->where('user_id', $request->user()->id)->where('status', 'active')->first(),
+            'identity' => TelegramIdentity::query()
+                ->where('user_id', $request->user()->id)
+                ->whereNull('user_telegram_bot_id')
+                ->where('status', 'active')
+                ->first(),
             'botUsername' => ltrim(trim((string) $settings->get('telegram.bot_username')), '@'),
             'platformBotAvailable' => (bool) $settings->get('telegram.enabled')
                 && (bool) $settings->getSecret('telegram.bot_token')
