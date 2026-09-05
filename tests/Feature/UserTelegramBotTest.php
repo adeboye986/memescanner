@@ -99,7 +99,6 @@ class UserTelegramBotTest extends TestCase
             'bot_username' => 'LegacyBot',
             'display_name' => 'Legacy Bot',
             'enabled' => true,
-            'configured_at' => now(),
             'last_verified_at' => now(),
             'webhook_configured_at' => now(),
             'created_at' => now(),
