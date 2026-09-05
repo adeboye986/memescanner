@@ -2,12 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Models\TelegramIdentity;
 use App\Models\User;
-use App\Models\UserTelegramBot;
+use App\Services\ApplicationSettingsService;
 use App\Services\TelegramLinkService;
 use DomainException;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
 
@@ -20,94 +20,108 @@ class UserTelegramBotTest extends TestCase
         parent::setUp();
         $this->refreshPaperTradingDatabase();
         config(['app.url' => 'https://scanner.example.test']);
-        Http::fake(function ($request) {
-            $id = str_contains($request->url(), 'token-for-bot-b') ? 222 : 111;
-
-            return Http::response(['ok' => true, 'result' => str_ends_with($request->url(), '/getMe')
-                ? ['id' => $id, 'is_bot' => true, 'first_name' => 'Scanner', 'username' => $id === 222 ? 'BotB' : 'BotA']
-                : true]);
-        });
+        app(ApplicationSettingsService::class)->update([
+            'telegram.enabled' => true,
+            'telegram.bot_token' => 'platform-bot-secret-token',
+            'telegram.bot_username' => 'ScannerPlatformBot',
+            'telegram.webhook_secret' => 'platform-webhook-secret',
+        ]);
     }
 
-    public function test_two_users_can_connect_distinct_encrypted_bots(): void
+    public function test_two_users_receive_distinct_links_to_the_same_platform_bot(): void
     {
-        $userA = User::factory()->create();
-        $userB = User::factory()->create();
+        $userA = User::factory()->create(['is_admin' => false]);
+        $userB = User::factory()->create(['is_admin' => false]);
 
-        $this->actingAs($userA)->put(route('telegram.connect'), ['bot_token' => 'token-for-bot-a', 'bot_username' => '@BotA'])->assertRedirect(route('telegram.settings'));
-        $this->actingAs($userB)->put(route('telegram.connect'), ['bot_token' => 'token-for-bot-b', 'bot_username' => 'BotB'])->assertRedirect(route('telegram.settings'));
+        $urlA = app(TelegramLinkService::class)->create($userA);
+        $urlB = app(TelegramLinkService::class)->create($userB);
 
-        $botA = $userA->telegramBot()->firstOrFail();
-        $botB = $userB->telegramBot()->firstOrFail();
-        $this->assertNotSame($botA->public_id, $botB->public_id);
-        $this->assertSame('BotA', $botA->bot_username);
-        $this->assertSame('BotB', $botB->bot_username);
-        $rawTokens = DB::table('user_telegram_bots')->pluck('bot_token')->implode(' ');
-        $rawSecrets = DB::table('user_telegram_bots')->pluck('webhook_secret')->implode(' ');
-        $this->assertStringNotContainsString('token-for-bot-a', $rawTokens);
-        $this->assertStringNotContainsString('token-for-bot-b', $rawTokens);
-        $this->assertStringNotContainsString((string) $botA->webhook_secret, $rawSecrets);
-        $this->assertStringNotContainsString((string) $botB->webhook_secret, $rawSecrets);
+        $this->assertStringContainsString('t.me/ScannerPlatformBot?start=link_', $urlA);
+        $this->assertStringContainsString('t.me/ScannerPlatformBot?start=link_', $urlB);
+        $this->assertNotSame($urlA, $urlB);
+        $this->assertDatabaseCount('telegram_link_tokens', 2);
+        $this->assertDatabaseCount('user_telegram_bots', 0);
     }
 
-    public function test_blank_token_update_preserves_encrypted_credentials_and_never_renders_token(): void
+    public function test_link_tokens_are_stored_hashed_and_not_as_plaintext(): void
     {
-        $user = User::factory()->create(['is_admin' => false]);
-        $this->actingAs($user)->put(route('telegram.connect'), ['bot_token' => 'token-for-bot-a', 'bot_username' => 'BotA']);
-        $encryptedBefore = DB::table('user_telegram_bots')->value('bot_token');
+        $url = app(TelegramLinkService::class)->create(User::factory()->create(['is_admin' => false]));
+        preg_match('/link_([A-Za-z0-9]+)$/', $url, $matches);
+        $plainToken = $matches[1];
+        $stored = (string) DB::table('telegram_link_tokens')->value('token_hash');
 
-        $this->actingAs($user)->put(route('telegram.connect'), ['bot_token' => '', 'bot_username' => 'BotA'])->assertSessionHas('success');
-
-        $this->assertSame($encryptedBefore, DB::table('user_telegram_bots')->value('bot_token'));
-        $this->actingAs($user)->get(route('telegram.settings'))->assertOk()->assertDontSee('token-for-bot-a');
+        $this->assertNotSame($plainToken, $stored);
+        $this->assertSame(hash('sha256', $plainToken), $stored);
     }
 
-    public function test_failed_token_replacement_preserves_existing_bot_and_does_not_flash_token(): void
+    public function test_same_telegram_human_cannot_be_claimed_by_two_platform_users(): void
     {
-        $user = User::factory()->create(['is_admin' => false]);
-        $this->actingAs($user)->put(route('telegram.connect'), ['bot_token' => 'token-for-bot-a', 'bot_username' => 'BotA']);
-        $bot = $user->telegramBot()->firstOrFail();
-        $response = $this->actingAs($user)->put(route('telegram.connect'), ['bot_token' => 'replacement-secret-token', 'bot_username' => 'WrongBot']);
-
-        $response->assertSessionHas('error')->assertSessionMissing('_old_input.bot_token');
-        $this->assertSame('token-for-bot-a', $bot->fresh()->bot_token);
-        $this->assertStringNotContainsString('replacement-secret-token', (string) $response->getContent());
-    }
-
-    public function test_link_urls_use_own_bot_and_cannot_cross_bot_context(): void
-    {
-        $botA = UserTelegramBot::factory()->create(['bot_username' => 'BotA']);
-        $botB = UserTelegramBot::factory()->create(['bot_username' => 'BotB']);
-        $urlA = app(TelegramLinkService::class)->create($botA->user);
-        $urlB = app(TelegramLinkService::class)->create($botB->user);
-        preg_match('/link_([A-Za-z0-9]+)$/', $urlA, $matches);
-
-        $this->assertStringContainsString('t.me/BotA', $urlA);
-        $this->assertStringContainsString('t.me/BotB', $urlB);
-        $this->expectException(DomainException::class);
-        app(TelegramLinkService::class)->consume($matches[1], ['id' => 456], '456', $botB);
-    }
-
-    public function test_same_telegram_human_cannot_be_claimed_by_two_users(): void
-    {
-        $botA = UserTelegramBot::factory()->create();
-        $botB = UserTelegramBot::factory()->create();
-        $linkA = app(TelegramLinkService::class)->create($botA->user);
-        $linkB = app(TelegramLinkService::class)->create($botB->user);
+        $userA = User::factory()->create(['is_admin' => false]);
+        $userB = User::factory()->create(['is_admin' => false]);
+        $linkA = app(TelegramLinkService::class)->create($userA);
+        $linkB = app(TelegramLinkService::class)->create($userB);
         preg_match('/link_([A-Za-z0-9]+)$/', $linkA, $tokenA);
         preg_match('/link_([A-Za-z0-9]+)$/', $linkB, $tokenB);
-        app(TelegramLinkService::class)->consume($tokenA[1], ['id' => 789], '789', $botA);
+
+        app(TelegramLinkService::class)->consume($tokenA[1], ['id' => 789], '789');
 
         $this->expectException(DomainException::class);
-        app(TelegramLinkService::class)->consume($tokenB[1], ['id' => 789], '789', $botB);
+        app(TelegramLinkService::class)->consume($tokenB[1], ['id' => 789], '789');
     }
 
-    public function test_normal_user_cannot_edit_global_platform_credentials(): void
+    public function test_shared_identity_is_user_scoped_and_not_bound_to_personal_bot(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $url = app(TelegramLinkService::class)->create($user);
+        preg_match('/link_([A-Za-z0-9]+)$/', $url, $token);
+
+        $identity = app(TelegramLinkService::class)->consume($token[1], [
+            'id' => 456,
+            'username' => 'customer',
+            'first_name' => 'Test',
+        ], '456');
+
+        $this->assertSame($user->id, $identity->user_id);
+        $this->assertSame('456', $identity->telegram_user_id);
+        $this->assertSame('456', $identity->telegram_chat_id);
+        $this->assertNull($identity->user_telegram_bot_id);
+    }
+
+    public function test_legacy_byob_identity_does_not_authorize_through_shared_platform_bot(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $legacyBotId = DB::table('user_telegram_bots')->insertGetId([
+            'user_id' => $user->id,
+            'public_id' => 'A2345678901234567890123456789012',
+            'bot_token' => encrypt('legacy-token'),
+            'webhook_secret' => encrypt('legacy-secret'),
+            'telegram_bot_id' => '123456',
+            'bot_username' => 'LegacyBot',
+            'display_name' => 'Legacy Bot',
+            'enabled' => true,
+            'configured_at' => now(),
+            'last_verified_at' => now(),
+            'webhook_configured_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        TelegramIdentity::factory()->create([
+            'user_id' => $user->id,
+            'user_telegram_bot_id' => $legacyBotId,
+            'telegram_user_id' => '999',
+            'status' => 'active',
+        ]);
+
+        $this->assertNull(app(TelegramLinkService::class)->authorized('999', null));
+    }
+
+    public function test_normal_user_cannot_edit_or_see_global_platform_credentials(): void
     {
         $user = User::factory()->create(['is_admin' => false]);
 
         $this->actingAs($user)->get(route('settings.index'))->assertForbidden();
-        $this->actingAs($user)->get(route('telegram.settings'))->assertOk();
-        $this->assertDatabaseCount('telegram_link_tokens', 0);
+        $response = $this->actingAs($user)->get(route('telegram.settings'))->assertOk();
+        $response->assertDontSee('platform-bot-secret-token');
+        $response->assertDontSee('platform-webhook-secret');
     }
 }
