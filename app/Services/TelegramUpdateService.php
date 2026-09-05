@@ -38,12 +38,6 @@ class TelegramUpdateService
         }
 
         if (preg_match('/^\/start\s+link_([A-Za-z0-9]+)$/', $text, $matches) === 1) {
-            if (! $bot) {
-                $telegram->sendMessage($chatId, 'Create a new linking link from your personal Telegram Bot settings.');
-
-                return;
-            }
-
             try {
                 $identity = $this->links->consume($matches[1], $from, $chatId, $bot);
                 $telegram->sendMessage($chatId, "✅ <b>Account linked securely.</b>\n\nWelcome, ".$this->escape($identity->display_name ?: 'trader').'.', $this->commands->mainKeyboard());
@@ -57,7 +51,7 @@ class TelegramUpdateService
         $identity = $this->links->authorized((string) ($from['id'] ?? ''), $bot);
 
         if (! $identity) {
-            $telegram->sendMessage($chatId, 'This Telegram account is not linked. Create a secure link from your Telegram Bot settings.');
+            $telegram->sendMessage($chatId, 'This Telegram account is not linked. Sign in to the platform and use Connect Telegram to link this private chat.');
 
             return;
         }
