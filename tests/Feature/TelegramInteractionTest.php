@@ -34,7 +34,7 @@ class TelegramInteractionTest extends TestCase
             'telegram.bot_username' => 'scanner_bot',
             'telegram.webhook_secret' => 'shared-webhook-secret',
         ]);
-        Http::fake(['api.telegram.org/*' => Http::response(['ok' => true, 'result' => [])]);
+        Http::fake(['api.telegram.org/*' => Http::response(['ok' => true, 'result' => []])]);
         $this->bot = UserTelegramBot::factory()->create(['user_id' => User::factory()->create(['is_admin' => true])]);
     }
 
