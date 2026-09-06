@@ -5,8 +5,10 @@ namespace Tests\Feature;
 use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
+use App\Models\User;
 use App\Services\DatabaseLockRetryService;
 use App\Services\TelegramService;
+use App\Services\UserTelegramNotificationService;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -51,6 +53,43 @@ class PaperTrackerStrategyTest extends TestCase
         $this->assertEqualsWithDelta(-0.015, $position->fresh()->trade_pnl_sol, 0.000001);
         $this->assertEqualsWithDelta(4.985, $wallet->fresh()->available_balance_sol, 0.000001);
         $this->assertEqualsWithDelta(0, $wallet->fresh()->invested_balance_sol, 0.000001);
+    }
+
+    public function test_user_owned_stop_loss_routes_through_customer_notification_service(): void
+    {
+        $user = User::factory()->create();
+        $wallet = $this->createWallet(Chain::Solana);
+        $wallet->update(['user_id' => $user->id]);
+        $position = $this->createPosition(Chain::Solana);
+        $position->update(['user_id' => $user->id]);
+
+        $this->mock(UserTelegramNotificationService::class)
+            ->shouldReceive('send')
+            ->once()
+            ->withArgs(fn (User $recipient, string $message): bool => $recipient->is($user) && str_contains($message, 'PAPER STOP LOSS'));
+
+        $this->trackAt($position, 0.85);
+
+        $this->assertSame('closed', $position->fresh()->status);
+    }
+
+    public function test_user_owned_protection_milestone_routes_through_customer_notification_service(): void
+    {
+        $user = User::factory()->create();
+        $wallet = $this->createWallet(Chain::Solana);
+        $wallet->update(['user_id' => $user->id]);
+        $position = $this->createPosition(Chain::Solana);
+        $position->update(['user_id' => $user->id]);
+
+        $this->mock(UserTelegramNotificationService::class)
+            ->shouldReceive('send')
+            ->once()
+            ->withArgs(fn (User $recipient, string $message): bool => $recipient->is($user) && str_contains($message, '+100% PROFIT PROTECTED'));
+
+        $this->trackAt($position, 2.10);
+
+        $this->assertTrue($position->fresh()->tp_50_hit);
+        $this->assertSame('open', $position->fresh()->status);
     }
 
     public function test_two_x_arms_without_selling_then_later_fallback_exits_at_observed_fill(): void

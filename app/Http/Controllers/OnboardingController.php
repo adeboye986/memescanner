@@ -25,7 +25,6 @@ class OnboardingController extends Controller
             'status' => $onboarding->forUser($user->fresh()),
             'preference' => $preferences->forUser($user),
             'strategy' => $strategies->forUser($user),
-            'bot' => $user->telegramBot()->with('identity')->first(),
         ]);
     }
 }

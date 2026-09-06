@@ -15,6 +15,7 @@ use App\Services\NewTokenClassificationService;
 use App\Services\PaperTradeEntryService;
 use App\Services\TelegramService;
 use App\Services\TradeOpportunityService;
+use App\Services\UserTelegramNotificationService;
 use Illuminate\Console\Command;
 use Illuminate\Http\Client\ConnectionException;
 use InvalidArgumentException;
@@ -27,7 +28,7 @@ class ScanNewTokens extends Command
 
     protected $description = 'Scan newly listed tokens on a supported blockchain';
 
-    public function handle(BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener, TradeOpportunityService $opportunities, EthereumScannerService $ethereumScanner, NewTokenClassificationService $classifications, ApplicationSettingsService $settings, PaperTradeEntryService $entries): int
+    public function handle(BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener, TradeOpportunityService $opportunities, EthereumScannerService $ethereumScanner, NewTokenClassificationService $classifications, ApplicationSettingsService $settings, PaperTradeEntryService $entries, UserTelegramNotificationService $userTelegram): int
     {
         try {
             $chain = Chain::fromInput($this->option('chain'));
@@ -417,6 +418,7 @@ class ScanNewTokens extends Command
                         default => 'Entry checks have not run.',
                     },
                 ];
+                $execution = null;
                 $paperPosition = null;
                 $paperBuyExecuted = false;
 
@@ -557,7 +559,7 @@ class ScanNewTokens extends Command
                                 'volume' => $token['v1m'] ?? null,
                                 'move_since_discovery_percent' => $entryMove,
                                 'scanner' => 'new-token',
-                                'send_notification' => false,
+                                'send_notification' => $requestingUser === null,
                                 'security_data' => [
                                     'status' => $securityUnavailable ? 'unavailable' : (($security['passed'] ?? null) === true ? 'passed' : 'failed'),
                                     'provider' => 'GoPlus',
@@ -669,7 +671,11 @@ class ScanNewTokens extends Command
                         '⚠️ Scanner alert only — not a buy recommendation.';
 
                     try {
-                        $telegram->send($message);
+                        if ($requestingUser) {
+                            $userTelegram->send($requestingUser, $message);
+                        } elseif (! isset($execution) || $execution['opportunity']->user_id === null) {
+                            $telegram->send($message);
+                        }
                         $this->info("Telegram alert sent for {$symbol}");
                     } catch (Throwable $e) {
                         $this->error(
@@ -677,7 +683,7 @@ class ScanNewTokens extends Command
                         );
                     }
 
-                    if ($paperBuyExecuted && $paperPosition) {
+                    if ($paperBuyExecuted && $paperPosition && ! data_get($execution['opportunity']->qualification_data, 'send_notification', false)) {
                         $entries->sendBuyNotification($paperPosition);
                     }
                 }
