@@ -15,6 +15,7 @@ use App\Services\PaperWalletService;
 use App\Services\SolanaService;
 use App\Services\TelegramService;
 use App\Services\TradeOpportunityService;
+use App\Services\UserTelegramNotificationService;
 use Illuminate\Console\Command;
 use InvalidArgumentException;
 
@@ -37,6 +38,7 @@ class ScanMomentumTokens extends Command
         PaperWalletService $wallets,
         EthereumScannerService $ethereumScanner,
         ApplicationSettingsService $settings,
+        UserTelegramNotificationService $userTelegram,
     ): int {
         try {
             $chain = Chain::fromInput($this->option('chain'));
@@ -583,6 +585,7 @@ class ScanMomentumTokens extends Command
             $item['holder_analysis'] = $holderAnalysis;
             $item['holder_risk'] = $holderRisk;
 
+            $execution = null;
             $paperEntry = null;
 
             if ($paperTradingEnabled) {
@@ -709,6 +712,8 @@ class ScanMomentumTokens extends Command
                                 'volume' => $paperDex['volume_5m'] ?? $item['volume_5m_usd'] ?? null,
 
                                 'move_since_discovery_percent' => $paperMovePercent,
+
+                                'send_notification' => $requestingUser === null,
 
                                 'security_data' => [
                                     'status' => ($holderRisk['passed'] ?? null) === true ? 'passed' : 'unavailable',
@@ -882,7 +887,11 @@ class ScanMomentumTokens extends Command
                             '⏳ Deep security scan is still running.';
 
                         try {
-                            $telegram->send($fastMessage);
+                            if ($requestingUser) {
+                                $userTelegram->send($requestingUser, $fastMessage);
+                            } elseif ($execution['opportunity']->user_id === null) {
+                                $telegram->send($fastMessage);
+                            }
 
                             $this->info(
                                 "FAST PAPER TELEGRAM SENT: {$symbol}"
@@ -1959,7 +1968,11 @@ class ScanMomentumTokens extends Command
                     '⚠️ Momentum signal only — not financial advice.';
 
                 try {
-                    $telegram->send($message);
+                    if ($requestingUser) {
+                        $userTelegram->send($requestingUser, $message);
+                    } elseif (! isset($execution) || $execution['opportunity']->user_id === null) {
+                        $telegram->send($message);
+                    }
 
                     $this->info(
                         "TELEGRAM SENT: {$symbol} | score {$momentumScore}"

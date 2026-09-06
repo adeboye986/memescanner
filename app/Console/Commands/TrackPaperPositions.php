@@ -9,8 +9,8 @@ use App\Services\Chains\ChainManager;
 use App\Services\DatabaseLockRetryService;
 use App\Services\PaperStrategyService;
 use App\Services\PaperWalletService;
-use App\Services\TelegramBotManager;
 use App\Services\TelegramService;
+use App\Services\UserTelegramNotificationService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -940,10 +940,7 @@ class TrackPaperPositions extends Command
             return;
         }
 
-        $bot = $position->user->telegramBot()->where('enabled', true)->with('identity')->first();
-        if ($bot?->identity) {
-            app(TelegramBotManager::class)->client($bot)->sendMessage($bot->identity->telegram_chat_id, $message);
-        }
+        app(UserTelegramNotificationService::class)->send($position->user, $message);
     }
 
     /** @return array{open_positions: int, priced_positions: int, provider_failures: int, provider_requests: int, rate_limited: bool} */

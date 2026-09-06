@@ -15,7 +15,7 @@ class PaperTradeExitService
         private ChainManager $chains,
         private TelegramService $telegram,
         private PaperWalletService $wallets,
-        private TelegramBotManager $telegramBots,
+        private UserTelegramNotificationService $userTelegram,
     ) {}
 
     /**
@@ -233,10 +233,7 @@ class PaperTradeExitService
                 "⚠️ <b>PAPER TRADE — NO REAL {$currency} USED</b>";
 
             if ($position->user_id) {
-                $bot = $position->user->telegramBot()->where('enabled', true)->with('identity')->first();
-                if ($bot?->identity) {
-                    $this->telegramBots->client($bot)->sendMessage($bot->identity->telegram_chat_id, $message);
-                }
+                $this->userTelegram->send($position->user, $message);
             } else {
                 $this->telegram->send($message);
             }

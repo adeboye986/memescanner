@@ -17,6 +17,7 @@ class TradeOpportunityService
         private ApplicationSettingsService $settings,
         private EntryPolicy $policy,
         private UserTradingPreferenceService $preferences,
+        private UserTelegramNotificationService $userTelegram,
     ) {}
 
     /** @param array<string, mixed> $data
@@ -60,6 +61,7 @@ class TradeOpportunityService
     {
         $chain = Chain::fromInput($data['chain'] ?? 'solana');
         $scanner = (string) ($data['scanner'] ?? 'unknown');
+        $sendNotification = $user !== null && ($data['send_notification'] ?? true);
         $discoveryKey = (string) ($data['discovery_key'] ?? hash('sha256', implode('|', [$chain->value, $scanner, strtolower((string) $data['address']), (string) ($data['discovery_market_cap'] ?? '')])));
         $preference = $user ? $this->preferences->forUser($user) : null;
         $opportunity = TradeOpportunity::query()->firstOrCreate([
@@ -82,7 +84,7 @@ class TradeOpportunityService
             'qualification_data' => [
                 'discovery_market_cap' => $data['discovery_market_cap'] ?? null,
                 'move_since_discovery_percent' => $data['move_since_discovery_percent'] ?? null,
-                'send_notification' => $data['send_notification'] ?? true,
+                'send_notification' => $sendNotification,
                 'meta' => $data['meta'] ?? [],
             ],
             'security_data' => $data['security_data'] ?? null,
@@ -93,6 +95,28 @@ class TradeOpportunityService
             return ['opportunity' => $opportunity, 'position' => $opportunity->paperPosition];
         }
 
-        return ['opportunity' => $opportunity, 'position' => $this->policy->apply($opportunity)];
+        $position = $this->policy->apply($opportunity);
+
+        $status = $opportunity->fresh()->status;
+
+        if ($sendNotification && ! $position && in_array($status, [TradeOpportunityStatus::Qualified, TradeOpportunityStatus::PendingConfirmation], true)) {
+            try {
+                $instruction = $status === TradeOpportunityStatus::PendingConfirmation
+                    ? 'Open Telegram controls or the dashboard to approve or ignore it.'
+                    : 'This signal was recorded for your account and will not execute automatically.';
+                $this->userTelegram->send(
+                    $user,
+                    "🔎 <b>TRADE OPPORTUNITY</b>\n\n".
+                    '<b>'.htmlspecialchars((string) ($opportunity->symbol ?: 'Unknown'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')."</b>\n".
+                    'Chain: '.$opportunity->chain->label()."\n".
+                    'Mode: '.strtoupper($opportunity->entry_mode->value)."\n\n".
+                    $instruction,
+                );
+            } catch (Throwable $exception) {
+                report($exception);
+            }
+        }
+
+        return ['opportunity' => $opportunity, 'position' => $position];
     }
 }
