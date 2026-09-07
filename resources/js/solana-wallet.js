@@ -45,6 +45,16 @@ export async function verifyWallet({ wallet, provider }, post, progress = () => 
     }
 }
 
+export async function disconnectWallet(post) {
+    const result = await post('disconnect', {});
+
+    if (result.disconnected !== true || result.wallet?.chain !== 'solana') {
+        throw new Error('Wallet disconnection was not confirmed. Please reload your account before trying again.');
+    }
+
+    return result;
+}
+
 export function mountWalletCard(card) {
     if (!card) return;
     const connect = card.querySelector('[data-wallet-connect]');
@@ -52,6 +62,10 @@ export function mountWalletCard(card) {
     const feedback = card.querySelector('[data-wallet-feedback]');
     const picker = card.querySelector('[data-wallet-picker]');
     const options = card.querySelector('[data-wallet-options]');
+    const disconnect = card.querySelector('[data-wallet-disconnect]');
+    const disconnectConfirmation = card.querySelector('[data-wallet-disconnect-confirmation]');
+    const disconnectCancel = card.querySelector('[data-wallet-disconnect-cancel]');
+    const disconnectConfirm = card.querySelector('[data-wallet-disconnect-confirm]');
     const say = (message) => { feedback.textContent = message; };
     let busy = false;
     const post = async (step, payload) => {
@@ -83,7 +97,8 @@ export function mountWalletCard(card) {
             address.title = verified.address;
             card.querySelector('[data-wallet-provider]').textContent = { phantom: 'Phantom', solflare: 'Solflare', compatible: 'Compatible wallet' }[verified.provider] ?? 'Compatible wallet';
             card.querySelector('.copy-value').dataset.copyValue = verified.address;
-            connect.textContent = 'Connect another wallet';
+            connect.textContent = 'Change wallet';
+            disconnect.hidden = false;
             say('Wallet ownership verified. Live trading remains disabled.');
         } catch (error) {
             const rejected = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
@@ -113,5 +128,46 @@ export function mountWalletCard(card) {
             options.append(button);
         });
         options.querySelector('button')?.focus();
+    });
+
+    disconnect?.addEventListener('click', () => {
+        disconnectConfirmation.hidden = false;
+        disconnectConfirm?.focus();
+    });
+    disconnectCancel?.addEventListener('click', () => {
+        disconnectConfirmation.hidden = true;
+        disconnect?.focus();
+    });
+    disconnectConfirm?.addEventListener('click', async () => {
+        if (busy) return;
+        busy = true;
+        connect.disabled = true;
+        disconnect.disabled = true;
+        disconnectConfirm.disabled = true;
+        card.setAttribute('aria-busy', 'true');
+        say('Disconnecting wallet…');
+        try {
+            await disconnectWallet(post);
+            card.querySelector('[data-wallet-status]').textContent = 'Not connected';
+            card.querySelector('[data-wallet-empty]').hidden = false;
+            card.querySelector('[data-wallet-details]').hidden = true;
+            const address = card.querySelector('[data-wallet-address]');
+            address.textContent = '';
+            address.title = '';
+            card.querySelector('[data-wallet-provider]').textContent = '';
+            card.querySelector('.copy-value').dataset.copyValue = '';
+            connect.textContent = 'Connect Wallet';
+            disconnect.hidden = true;
+            disconnectConfirmation.hidden = true;
+            say('Wallet disconnected from this account. No funds were moved and your wallet extension remains connected independently.');
+        } catch (error) {
+            say(error instanceof TypeError || error?.name === 'TimeoutError' ? 'Connection interrupted. The verified wallet remains shown; reload before trying again.' : error?.message || 'Could not disconnect this wallet. The verified association remains unchanged.');
+        } finally {
+            busy = false;
+            connect.disabled = false;
+            disconnect.disabled = false;
+            disconnectConfirm.disabled = false;
+            card.setAttribute('aria-busy', 'false');
+        }
     });
 }

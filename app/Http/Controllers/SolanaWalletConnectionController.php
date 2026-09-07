@@ -55,4 +55,20 @@ class SolanaWalletConnectionController extends Controller
             ],
         ]);
     }
+
+    public function disconnect(
+        Request $request,
+        SolanaWalletConnectionService $wallets,
+    ): JsonResponse {
+        $wallet = $wallets->disconnect($request->user());
+
+        return response()->json([
+            'disconnected' => true,
+            'message' => 'The verified Solana wallet was disconnected from this account.',
+            'wallet' => [
+                'chain' => $wallet->chain->value,
+                'disconnected_at' => $wallet->disconnected_at->toIso8601String(),
+            ],
+        ]);
+    }
 }

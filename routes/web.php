@@ -17,6 +17,7 @@ use App\Http\Controllers\PaperTradingDashboardController;
 use App\Http\Controllers\PasswordResetLinkController;
 use App\Http\Controllers\RegisteredUserController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\SolanaWalletConnectionController;
 use App\Http\Controllers\SystemActivityController;
 use App\Http\Controllers\TelegramWebhookController;
 use App\Http\Controllers\TestIntegrationController;
@@ -25,7 +26,6 @@ use App\Http\Controllers\UpdateSettingsController;
 use App\Http\Controllers\UserTelegramBotController;
 use App\Http\Controllers\UserTradingPreferenceController;
 use App\Http\Controllers\VerifyEmailController;
-use App\Http\Controllers\SolanaWalletConnectionController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -61,6 +61,10 @@ Route::middleware(['auth', 'customer.verified'])
         Route::post('/verify', [SolanaWalletConnectionController::class, 'verify'])
             ->middleware('throttle:10,1')
             ->name('verify');
+
+        Route::post('/disconnect', [SolanaWalletConnectionController::class, 'disconnect'])
+            ->middleware('throttle:10,1')
+            ->name('disconnect');
     });
 
 Route::middleware('guest')->group(function (): void {

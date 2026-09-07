@@ -419,6 +419,167 @@ class SolanaWalletConnectionTest extends TestCase
         $this->assertNull($wallet->disconnected_at);
     }
 
+    public function test_verified_user_can_disconnect_own_active_wallet(): void
+    {
+        $user = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        [$address, $secretKey] = $this->solanaKeypair();
+        $challenge = $this->createChallenge($user, $address);
+
+        $this->actingAs($user)->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $challenge->id,
+                'signature' => base64_encode(
+                    sodium_crypto_sign_detached($challenge->message, $secretKey)
+                ),
+            ],
+        )->assertOk();
+
+        $wallet = ConnectedWallet::query()
+            ->where('user_id', $user->id)
+            ->firstOrFail();
+
+        $this->actingAs($user)
+            ->postJson(route('wallets.solana.disconnect'))
+            ->assertOk()
+            ->assertJsonPath('disconnected', true)
+            ->assertJsonPath('wallet.chain', Chain::Solana->value);
+
+        $wallet->refresh();
+
+        $this->assertNotNull($wallet->disconnected_at);
+        $this->assertDatabaseHas('connected_wallets', [
+            'id' => $wallet->id,
+            'user_id' => $user->id,
+            'address' => $address,
+        ]);
+    }
+
+    public function test_user_cannot_disconnect_another_users_wallet(): void
+    {
+        $owner = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        $attacker = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        [$address, $secretKey] = $this->solanaKeypair();
+        $challenge = $this->createChallenge($owner, $address);
+
+        $this->actingAs($owner)->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $challenge->id,
+                'signature' => base64_encode(
+                    sodium_crypto_sign_detached($challenge->message, $secretKey)
+                ),
+            ],
+        )->assertOk();
+
+        $wallet = ConnectedWallet::query()
+            ->where('user_id', $owner->id)
+            ->firstOrFail();
+
+        $this->actingAs($attacker)
+            ->postJson(route('wallets.solana.disconnect'))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('wallet');
+
+        $this->assertNull($wallet->fresh()->disconnected_at);
+    }
+
+    public function test_guest_cannot_disconnect_wallet(): void
+    {
+        $this->postJson(route('wallets.solana.disconnect'))
+            ->assertUnauthorized();
+    }
+
+    public function test_unverified_customer_cannot_disconnect_wallet(): void
+    {
+        $user = User::factory()->create([
+            'email_verified_at' => null,
+            'is_admin' => false,
+        ]);
+
+        $this->actingAs($user)
+            ->postJson(route('wallets.solana.disconnect'))
+            ->assertRedirect(route('verification.notice'));
+    }
+
+    public function test_disconnect_without_active_wallet_is_handled_safely(): void
+    {
+        $user = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($user)
+            ->postJson(route('wallets.solana.disconnect'))
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('wallet');
+
+        $this->assertDatabaseCount('connected_wallets', 0);
+    }
+
+    public function test_disconnected_wallet_is_not_shown_on_account_page(): void
+    {
+        $user = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        [$address, $secretKey] = $this->solanaKeypair();
+        $challenge = $this->createChallenge($user, $address);
+
+        $this->actingAs($user)->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $challenge->id,
+                'signature' => base64_encode(
+                    sodium_crypto_sign_detached($challenge->message, $secretKey)
+                ),
+            ],
+        )->assertOk();
+
+        $this->actingAs($user)
+            ->postJson(route('wallets.solana.disconnect'))
+            ->assertOk();
+
+        $this->actingAs($user)
+            ->get(route('account.edit'))
+            ->assertOk()
+            ->assertSee('No live wallet is connected.')
+            ->assertDontSee($address);
+    }
+
+    public function test_active_wallet_uses_change_wallet_button_text(): void
+    {
+        $user = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        [$address, $secretKey] = $this->solanaKeypair();
+        $challenge = $this->createChallenge($user, $address);
+
+        $this->actingAs($user)->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $challenge->id,
+                'signature' => base64_encode(
+                    sodium_crypto_sign_detached($challenge->message, $secretKey)
+                ),
+            ],
+        )->assertOk();
+
+        $this->actingAs($user)
+            ->get(route('account.edit'))
+            ->assertOk()
+            ->assertSee('Change wallet');
+    }
+
     private function createChallenge(
         User $user,
         string $address,

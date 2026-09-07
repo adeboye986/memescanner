@@ -160,6 +160,30 @@ class SolanaWalletConnectionService
         });
     }
 
+    public function disconnect(User $user): ConnectedWallet
+    {
+        return DB::transaction(function () use ($user): ConnectedWallet {
+            $wallet = $user->connectedWallets()
+                ->where('chain', Chain::Solana->value)
+                ->whereNotNull('verified_at')
+                ->whereNull('disconnected_at')
+                ->lockForUpdate()
+                ->first();
+
+            if (! $wallet) {
+                throw ValidationException::withMessages([
+                    'wallet' => 'No active verified Solana wallet was found for this account.',
+                ]);
+            }
+
+            $wallet->update([
+                'disconnected_at' => now(),
+            ]);
+
+            return $wallet;
+        });
+    }
+
     private function normalizeProvider(?string $provider): ?string
     {
         if ($provider === null || trim($provider) === '') {

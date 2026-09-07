@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectWallets, verifyWallet } from './solana-wallet.js';
+import { detectWallets, disconnectWallet, verifyWallet } from './solana-wallet.js';
 
 const fixture = () => {
     const wallet = { publicKey: 'address-a', connect: async () => {}, signMessage: async () => new Uint8Array(64) };
@@ -69,4 +69,27 @@ test('wallet signing rejection does not send verification request', async () => 
         assert.equal(step, 'challenge');
         return challenge;
     }), /rejected/);
+});
+
+test('disconnect returns only after backend confirmation', async () => {
+    const result = await disconnectWallet(async (step, payload) => {
+        assert.equal(step, 'disconnect');
+        assert.deepEqual(payload, {});
+
+        return { disconnected: true, wallet: { chain: 'solana' } };
+    });
+
+    assert.equal(result.disconnected, true);
+});
+
+test('failed disconnect cannot produce a disconnected result', async () => {
+    await assert.rejects(
+        disconnectWallet(async () => { throw new Error('No active wallet'); }),
+        /No active wallet/,
+    );
+
+    await assert.rejects(
+        disconnectWallet(async () => ({ disconnected: false, wallet: { chain: 'solana' } })),
+        /not confirmed/,
+    );
 });
