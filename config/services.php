@@ -53,6 +53,17 @@ return [
         ),
     ],
 
+    'coingecko' => [
+        'base_url' => env('COINGECKO_BASE_URL', 'https://api.coingecko.com/api/v3'),
+        'api_key' => env('COINGECKO_API_KEY'),
+        'max_price_age_seconds' => env('COINGECKO_MAX_PRICE_AGE_SECONDS', 120),
+    ],
+
+    'jupiter' => [
+        'base_url' => env('JUPITER_BASE_URL', 'https://api.jup.ag/swap/v1'),
+        'api_key' => env('JUPITER_API_KEY'),
+    ],
+
     'trading' => [
         'paper_trading' => env('PAPER_TRADING', true),
 

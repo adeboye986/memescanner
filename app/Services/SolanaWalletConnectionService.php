@@ -184,6 +184,15 @@ class SolanaWalletConnectionService
         });
     }
 
+    public function isValidAddress(string $address): bool
+    {
+        try {
+            return strlen($this->decodeBase58(trim($address))) === SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES;
+        } catch (ValidationException) {
+            return false;
+        }
+    }
+
     private function normalizeProvider(?string $provider): ?string
     {
         if ($provider === null || trim($provider) === '') {

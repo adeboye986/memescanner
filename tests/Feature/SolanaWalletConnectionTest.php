@@ -8,8 +8,8 @@ use App\Models\User;
 use App\Models\WalletConnectionChallenge;
 use App\Services\ApplicationSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
 use Illuminate\Support\Facades\Http;
+use Tests\TestCase;
 
 class SolanaWalletConnectionTest extends TestCase
 {
@@ -634,9 +634,59 @@ class SolanaWalletConnectionTest extends TestCase
             ->assertJsonPath('balance.sol', '2.500000000');
 
         Http::assertSent(function ($request) use ($address): bool {
-            return $request['method'] === 'getBalance'
-                && $request['params'][0] === $address;
+            return ($request['method'] ?? null) === 'getBalance'
+                && ($request['params'][0] ?? null) === $address;
         });
+    }
+
+    public function test_verified_wallet_balance_includes_current_usd_valuation(): void
+    {
+        $this->freezeTime();
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->createVerifiedWallet($user);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.coingecko.com/api/v3/simple/price*' => Http::response([
+                'solana' => ['usd' => 197.2, 'last_updated_at' => now()->subSeconds(30)->timestamp],
+            ]),
+            '*' => Http::response(['jsonrpc' => '2.0', 'result' => ['value' => 6_793_573], 'id' => 1]),
+        ]);
+
+        $this->actingAs($user)->getJson(route('wallets.solana.balance'))
+            ->assertOk()
+            ->assertJsonPath('balance.lamports', 6_793_573)
+            ->assertJsonPath('balance.sol', '0.006793573')
+            ->assertJsonPath('balance.usd', '1.34')
+            ->assertJsonPath('price.sol_usd', '197.2');
+    }
+
+    public function test_price_failure_keeps_valid_sol_balance_available(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $this->createVerifiedWallet($user);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.coingecko.com/api/v3/simple/price*' => Http::response([], 503),
+            '*' => Http::response(['jsonrpc' => '2.0', 'result' => ['value' => 2_500_000_000], 'id' => 1]),
+        ]);
+
+        $this->actingAs($user)->getJson(route('wallets.solana.balance'))
+            ->assertOk()
+            ->assertJsonPath('balance.sol', '2.500000000')
+            ->assertJsonPath('balance.usd', null)
+            ->assertJsonPath('price.sol_usd', null);
+    }
+
+    public function test_unverified_customer_cannot_read_wallet_balance(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => null, 'is_admin' => false]);
+        $this->createVerifiedWallet($user);
+        Http::preventStrayRequests();
+
+        $this->actingAs($user)->getJson(route('wallets.solana.balance'))
+            ->assertRedirect(route('verification.notice'));
+
+        Http::assertNothingSent();
     }
 
     public function test_balance_endpoint_does_not_accept_an_arbitrary_wallet_address(): void
@@ -688,9 +738,9 @@ class SolanaWalletConnectionTest extends TestCase
         )->assertOk();
 
         Http::assertSent(function ($request) use ($ownAddress, $otherAddress): bool {
-            return $request['method'] === 'getBalance'
-                && $request['params'][0] === $ownAddress
-                && $request['params'][0] !== $otherAddress;
+            return ($request['method'] ?? null) === 'getBalance'
+                && ($request['params'][0] ?? null) === $ownAddress
+                && ($request['params'][0] ?? null) !== $otherAddress;
         });
     }
 
@@ -827,6 +877,20 @@ class SolanaWalletConnectionTest extends TestCase
         return WalletConnectionChallenge::findOrFail(
             $response->json('challenge_id'),
         );
+    }
+
+    private function createVerifiedWallet(User $user): ConnectedWallet
+    {
+        $address = 'So11111111111111111111111111111111111111112';
+
+        return $user->connectedWallets()->create([
+            'chain' => Chain::Solana,
+            'address' => $address,
+            'address_hash' => ConnectedWallet::addressHash(Chain::Solana, $address),
+            'provider' => 'phantom',
+            'verified_at' => now(),
+            'last_connected_at' => now(),
+        ]);
     }
 
     /**

@@ -17,6 +17,7 @@ use App\Http\Controllers\PaperTradingDashboardController;
 use App\Http\Controllers\PasswordResetLinkController;
 use App\Http\Controllers\RegisteredUserController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\SolanaSwapQuoteController;
 use App\Http\Controllers\SolanaWalletConnectionController;
 use App\Http\Controllers\SystemActivityController;
 use App\Http\Controllers\TelegramWebhookController;
@@ -69,6 +70,10 @@ Route::middleware(['auth', 'customer.verified'])
         Route::get('/balance', [SolanaWalletConnectionController::class, 'balance'])
             ->middleware('throttle:30,1')
             ->name('balance');
+
+        Route::post('/quote', SolanaSwapQuoteController::class)
+            ->middleware('throttle:30,1')
+            ->name('quote');
     });
 
 Route::middleware('guest')->group(function (): void {

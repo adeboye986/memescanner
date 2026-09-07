@@ -63,11 +63,70 @@ export async function fetchWalletBalance(get) {
         || !Number.isSafeInteger(result.balance?.lamports)
         || result.balance.lamports < 0
         || typeof result.balance?.sol !== 'string'
+        || !/^\d+\.\d{9}$/.test(result.balance.sol)
     ) {
         throw new Error('The server returned an invalid wallet balance.');
     }
 
-    return result.balance;
+    const validUsd = typeof result.balance.usd === 'string' && /^\d+\.\d{2}$/.test(result.balance.usd);
+    const validPrice = typeof result.price?.sol_usd === 'string' && /^\d+(?:\.\d+)?$/.test(result.price.sol_usd);
+
+    return { ...result.balance, usd: validUsd && validPrice ? result.balance.usd : null, sol_usd: validUsd && validPrice ? result.price.sol_usd : null };
+}
+
+export function solToLamports(value) {
+    const match = String(value).trim().match(/^(\d+)(?:\.(\d{1,9}))?$/);
+    if (!match) throw new Error('Enter a valid SOL amount with no more than 9 decimal places.');
+    const lamports = BigInt(match[1]) * 1000000000n + BigInt((match[2] ?? '').padEnd(9, '0'));
+    if (lamports <= 0n) throw new Error('Spend amount must be greater than zero.');
+    return lamports.toString();
+}
+
+export async function fetchSwapQuote(post, payload) {
+    const result = await post('quote', payload);
+    const quote = result.quote;
+    if (quote?.input?.mint !== 'So11111111111111111111111111111111111111112'
+        || quote.input.amount !== payload.amount
+        || quote.output?.mint !== payload.output_mint
+        || !/^[1-9]\d*$/.test(quote.output?.amount ?? '')
+        || !/^[1-9]\d*$/.test(quote.minimum_received ?? '')
+        || !Number.isInteger(quote.slippage_bps)
+        || quote.slippage_bps !== payload.slippage_bps
+        || typeof quote.price_impact_pct !== 'string'
+        || !/^\d+(?:\.\d+)?$/.test(quote.price_impact_pct)
+        || !Array.isArray(quote.route)
+        || quote.route.length === 0
+        || !quote.route.every((step) => typeof step?.label === 'string' && step.label.trim() !== '')) {
+        throw new Error('The server returned an invalid swap quote.');
+    }
+    return quote;
+}
+
+export function formatBaseUnits(amount, decimals) {
+    if (!Number.isInteger(decimals)) return `${amount} base units`;
+    if (decimals === 0) return amount;
+    const padded = amount.padStart(decimals + 1, '0');
+    const whole = padded.slice(0, -decimals) || '0';
+    const fraction = decimals === 0 ? '' : padded.slice(-decimals).replace(/0+$/, '');
+    return fraction ? `${whole}.${fraction}` : whole;
+}
+
+export function quotePresentation(quote) {
+    const outputLabel = quote.output.symbol || 'tokens';
+
+    return {
+        spend: `${formatBaseUnits(quote.input.amount, 9)} SOL`,
+        spendUsd: quote.spend_usd === null ? 'Unavailable' : `≈ $${quote.spend_usd} USD`,
+        output: `${formatBaseUnits(quote.output.amount, quote.output.decimals)} ${outputLabel}`,
+        minimum: `${formatBaseUnits(quote.minimum_received, quote.output.decimals)} ${outputLabel}`,
+        slippage: `${(quote.slippage_bps / 100).toFixed(2)}%`,
+        impact: `${quote.price_impact_pct}%`,
+        route: quote.route.map((step) => step.label).join(' → ') || 'Direct',
+        fees: quote.route
+            .filter((step) => step.fee_amount && step.fee_amount !== '0')
+            .map((step) => `${step.fee_amount} base units`)
+            .join(' + ') || 'Not supplied',
+    };
 }
 
 export function mountWalletCard(card) {
@@ -82,6 +141,7 @@ export function mountWalletCard(card) {
     const disconnectCancel = card.querySelector('[data-wallet-disconnect-cancel]');
     const disconnectConfirm = card.querySelector('[data-wallet-disconnect-confirm]');
     const balance = card.querySelector('[data-wallet-balance]');
+    const balanceUsd = card.querySelector('[data-wallet-balance-usd]');
     const balanceRefresh = card.querySelector('[data-wallet-balance-refresh]');
     const say = (message) => { feedback.textContent = message; };
     let busy = false;
@@ -142,8 +202,10 @@ export function mountWalletCard(card) {
         try {
             const result = await fetchWalletBalance(get);
             balance.textContent = `${result.sol} SOL`;
+            balanceUsd.textContent = result.usd === null ? 'USD value unavailable' : `≈ $${result.usd} USD`;
         } catch {
             balance.textContent = 'Balance unavailable';
+            balanceUsd.textContent = '';
         } finally {
             balanceRefresh.disabled = false;
         }
@@ -237,6 +299,10 @@ export function mountWalletCard(card) {
                 balance.textContent = '—';
             }
 
+            if (balanceUsd) {
+                balanceUsd.textContent = '';
+            }
+
             if (balanceRefresh) {
                 balanceRefresh.hidden = true;
             }
@@ -249,6 +315,42 @@ export function mountWalletCard(card) {
             disconnect.disabled = false;
             disconnectConfirm.disabled = false;
             card.setAttribute('aria-busy', 'false');
+        }
+    });
+
+    const quoteForm = card.querySelector('[data-wallet-quote-form]');
+    quoteForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const submit = card.querySelector('[data-wallet-quote-submit]');
+        const preview = card.querySelector('[data-wallet-quote-preview]');
+        submit.disabled = true;
+        preview.hidden = true;
+        try {
+            const amount = solToLamports(card.querySelector('[data-quote-spend]').value);
+            const slippageValue = card.querySelector('[data-quote-slippage]').value.trim();
+            if (!/^\d+(?:\.\d{1,2})?$/.test(slippageValue)) throw new Error('Enter slippage as a percentage with no more than 2 decimal places.');
+            const slippageBps = Math.round(Number(slippageValue) * 100);
+            const quote = await fetchSwapQuote(post, {
+                input_mint: 'So11111111111111111111111111111111111111112',
+                output_mint: card.querySelector('[data-quote-output-mint]').value.trim(),
+                amount,
+                slippage_bps: slippageBps,
+            });
+            const presentation = quotePresentation(quote);
+            card.querySelector('[data-quote-preview-spend]').textContent = presentation.spend;
+            card.querySelector('[data-quote-preview-usd]').textContent = presentation.spendUsd;
+            card.querySelector('[data-quote-preview-output]').textContent = presentation.output;
+            card.querySelector('[data-quote-preview-minimum]').textContent = presentation.minimum;
+            card.querySelector('[data-quote-preview-slippage]').textContent = presentation.slippage;
+            card.querySelector('[data-quote-preview-impact]').textContent = presentation.impact;
+            card.querySelector('[data-quote-preview-route]').textContent = presentation.route;
+            card.querySelector('[data-quote-preview-fees]').textContent = presentation.fees;
+            preview.hidden = false;
+            say('Quote refreshed. No transaction was created or signed.');
+        } catch (error) {
+            say(error?.message || 'Could not retrieve a swap quote.');
+        } finally {
+            submit.disabled = false;
         }
     });
 }

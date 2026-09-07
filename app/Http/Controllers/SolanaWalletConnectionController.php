@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Chain;
+use App\Services\CryptoPriceService;
 use App\Services\SolanaService;
 use App\Services\SolanaWalletConnectionService;
 use Illuminate\Http\JsonResponse;
@@ -62,6 +63,7 @@ class SolanaWalletConnectionController extends Controller
     public function balance(
         Request $request,
         SolanaService $solana,
+        CryptoPriceService $prices,
     ): JsonResponse {
         $wallet = $request->user()
             ->connectedWallets()
@@ -86,12 +88,25 @@ class SolanaWalletConnectionController extends Controller
 
         $whole = intdiv($lamports, 1_000_000_000);
         $fraction = $lamports % 1_000_000_000;
+        $sol = $whole.'.'.str_pad((string) $fraction, 9, '0', STR_PAD_LEFT);
+
+        try {
+            $solUsd = $prices->solUsdPrice();
+            $usd = $prices->usdForLamports($lamports, $solUsd);
+        } catch (RuntimeException) {
+            $solUsd = null;
+            $usd = null;
+        }
 
         return response()->json([
             'balance' => [
                 'chain' => Chain::Solana->value,
                 'lamports' => $lamports,
-                'sol' => $whole.'.'.str_pad((string) $fraction, 9, '0', STR_PAD_LEFT),
+                'sol' => $sol,
+                'usd' => $usd,
+            ],
+            'price' => [
+                'sol_usd' => $solUsd,
             ],
         ]);
     }

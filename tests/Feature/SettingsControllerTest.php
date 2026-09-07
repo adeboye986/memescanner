@@ -65,6 +65,16 @@ class SettingsControllerTest extends TestCase
             ->assertSee('Automatic real-money trading will require explicit activation');
     }
 
+    public function test_admin_sees_native_asset_unit_for_maximum_trade_amount(): void
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        $this->actingAs($admin)->get(route('settings.index'))
+            ->assertSuccessful()
+            ->assertSee('Maximum Trade Amount (native asset)')
+            ->assertSee('Native-asset amounts mean SOL on Solana and ETH on Ethereum.');
+    }
+
     public function test_blank_secret_form_value_keeps_existing_secret(): void
     {
         $admin = User::factory()->create(['is_admin' => true]);

@@ -4,7 +4,8 @@
         data-challenge-url="{{ route('wallets.solana.challenge') }}"
         data-verify-url="{{ route('wallets.solana.verify') }}"
         data-disconnect-url="{{ route('wallets.solana.disconnect') }}"
-        data-balance-url="{{ route('wallets.solana.balance') }}">
+        data-balance-url="{{ route('wallets.solana.balance') }}"
+        data-quote-url="{{ route('wallets.solana.quote') }}">
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div><p class="text-xs font-semibold uppercase tracking-widest text-sky-400">Solana · Non-custodial</p><h2 id="wallet-heading" class="mt-2 text-xl font-semibold text-white">Connect Wallet</h2></div>
         <span data-wallet-status class="rounded-lg border border-slate-700 px-3 py-1 text-sm text-slate-200">{{ $connectedWallet ? 'Connected / Verified' : 'Not connected' }}</span>
@@ -21,6 +22,7 @@
                 <p data-wallet-balance class="mt-1 text-2xl font-semibold text-white">
                     {{ $connectedWallet ? 'Loading…' : '—' }}
                 </p>
+                <p data-wallet-balance-usd class="mt-1 text-sm text-slate-400">{{ $connectedWallet ? 'Loading USD value…' : '' }}</p>
             </div>
 
             <button
@@ -36,6 +38,26 @@
             <button type="button" class="copy-value rounded-lg border border-slate-700 px-3 py-1 text-sm text-slate-300 hover:text-white" data-copy-value="{{ $connectedWallet?->address }}">Copy</button>
         </div>
         <p class="mt-2 text-xs text-slate-400">Ownership verified for this account. Disconnecting here removes this wallet from active use on your account without moving funds or disconnecting Phantom or Solflare.</p>
+        <form data-wallet-quote-form class="mt-5 space-y-4 border-t border-slate-800 pt-5">
+            <div><p class="text-xs font-semibold uppercase tracking-wider text-sky-400">Read-only preview</p><h3 class="mt-1 font-semibold text-white">SOL swap quote</h3></div>
+            <div class="grid gap-3 md:grid-cols-3">
+                <label class="text-sm text-slate-300">Spend SOL<input data-quote-spend inputmode="decimal" value="0.01" required class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"></label>
+                <label class="text-sm text-slate-300 md:col-span-2">Output token mint<input data-quote-output-mint required autocomplete="off" class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-white" placeholder="Solana token mint address"></label>
+                <label class="text-sm text-slate-300">Slippage %<input data-quote-slippage inputmode="decimal" value="1.00" required class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"></label>
+            </div>
+            <button type="submit" data-wallet-quote-submit class="rounded-lg border border-sky-400/40 px-4 py-2 text-sm font-semibold text-sky-300 disabled:opacity-50">Get quote</button>
+            <p class="text-xs text-amber-200">Quote only — no transaction has been created or signed.</p>
+            <dl data-wallet-quote-preview hidden class="grid gap-3 rounded-xl border border-slate-700 bg-slate-950/60 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                <div><dt class="text-slate-500">Spend</dt><dd data-quote-preview-spend class="mt-1 text-white"></dd></div>
+                <div><dt class="text-slate-500">Spend value</dt><dd data-quote-preview-usd class="mt-1 text-white"></dd></div>
+                <div><dt class="text-slate-500">Expected received</dt><dd data-quote-preview-output class="mt-1 text-white"></dd></div>
+                <div><dt class="text-slate-500">Minimum received</dt><dd data-quote-preview-minimum class="mt-1 text-white"></dd></div>
+                <div><dt class="text-slate-500">Slippage</dt><dd data-quote-preview-slippage class="mt-1 text-white"></dd></div>
+                <div><dt class="text-slate-500">Price impact</dt><dd data-quote-preview-impact class="mt-1 text-white"></dd></div>
+                <div><dt class="text-slate-500">Route</dt><dd data-quote-preview-route class="mt-1 text-white"></dd></div>
+                <div><dt class="text-slate-500">Provider fees</dt><dd data-quote-preview-fees class="mt-1 text-white"></dd></div>
+            </dl>
+        </form>
     </div>
     @if($user->hasVerifiedEmail() || $user->is_admin)
         <div class="flex flex-wrap gap-3">
