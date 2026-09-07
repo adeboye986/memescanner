@@ -25,6 +25,7 @@ use App\Http\Controllers\UpdateSettingsController;
 use App\Http\Controllers\UserTelegramBotController;
 use App\Http\Controllers\UserTradingPreferenceController;
 use App\Http\Controllers\VerifyEmailController;
+use App\Http\Controllers\SolanaWalletConnectionController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -48,6 +49,19 @@ Route::get('/dashboard/activity', SystemActivityController::class)
 Route::get('/trades', TradeHistoryController::class)->middleware('auth')->name('trades.index');
 Route::post('/telegram/webhook/{publicId}', TelegramWebhookController::class)->where('publicId', '[A-Za-z0-9]{32}')->middleware('throttle:telegram-webhook')->name('telegram.user-webhook');
 Route::post('/telegram/webhook', TelegramWebhookController::class)->middleware('throttle:telegram-webhook')->name('telegram.webhook');
+
+Route::middleware(['auth', 'customer.verified'])
+    ->prefix('wallets/solana')
+    ->name('wallets.solana.')
+    ->group(function (): void {
+        Route::post('/challenge', [SolanaWalletConnectionController::class, 'challenge'])
+            ->middleware('throttle:10,1')
+            ->name('challenge');
+
+        Route::post('/verify', [SolanaWalletConnectionController::class, 'verify'])
+            ->middleware('throttle:10,1')
+            ->name('verify');
+    });
 
 Route::middleware('guest')->group(function (): void {
     Route::get('/login', [LoginController::class, 'show'])->name('login');

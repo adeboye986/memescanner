@@ -48,6 +48,16 @@ class User extends Authenticatable implements MustVerifyEmailContract
         return $this->hasMany(PaperWallet::class);
     }
 
+    public function connectedWallets(): HasMany
+    {
+        return $this->hasMany(ConnectedWallet::class);
+    }
+
+    public function walletConnectionChallenges(): HasMany
+    {
+        return $this->hasMany(WalletConnectionChallenge::class);
+    }
+
     public function paperPositions(): HasMany
     {
         return $this->hasMany(PaperPosition::class);
