@@ -8,7 +8,6 @@ use App\Models\User;
 use App\Models\WalletConnectionChallenge;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
-use RuntimeException;
 
 class SolanaWalletConnectionService
 {
@@ -39,8 +38,13 @@ class SolanaWalletConnectionService
         $appUrl = rtrim((string) config('app.url'), '/');
         $domain = parse_url($appUrl, PHP_URL_HOST) ?: $appUrl;
 
+        $configuredName = app(ApplicationSettingsService::class)->get('general.application_name');
+        $applicationName = is_string($configuredName) && trim($configuredName) !== ''
+            ? trim($configuredName)
+            : trim((string) config('app.name'));
+
         $message = implode("\n", [
-            'Jackyba Flash Tracker Wallet Verification',
+            $applicationName.' Wallet Verification',
             '',
             'Domain: '.$domain,
             'Account: '.$user->id,
@@ -198,12 +202,12 @@ class SolanaWalletConnectionService
 
             for ($i = 0, $count = count($bytes); $i < $count; $i++) {
                 $carry += $bytes[$i] * 58;
-                $bytes[$i] = $carry & 0xff;
+                $bytes[$i] = $carry & 0xFF;
                 $carry >>= 8;
             }
 
             while ($carry > 0) {
-                $bytes[] = $carry & 0xff;
+                $bytes[] = $carry & 0xFF;
                 $carry >>= 8;
             }
         }

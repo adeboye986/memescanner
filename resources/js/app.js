@@ -1,3 +1,7 @@
+import { mountWalletCard } from './solana-wallet';
+
+mountWalletCard(document.querySelector('#solana-wallet'));
+
 const closeModal = document.querySelector('#close-position-modal');
 const closeForm = document.querySelector('#close-position-form');
 const adminSidebar = document.querySelector('#admin-sidebar');

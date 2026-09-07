@@ -11,7 +11,12 @@ class AccountSettingsController extends Controller
 {
     public function edit(Request $request): View
     {
-        return view('account.edit', ['user' => $request->user()]);
+        return view('account.edit', [
+            'user' => $request->user(),
+            'connectedWallet' => $request->user()->connectedWallets()
+                ->where('chain', 'solana')->whereNotNull('verified_at')
+                ->whereNull('disconnected_at')->first(),
+        ]);
     }
 
     public function update(UpdateAccountRequest $request): RedirectResponse

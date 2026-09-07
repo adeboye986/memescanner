@@ -6,12 +6,54 @@ use App\Chain;
 use App\Models\ConnectedWallet;
 use App\Models\User;
 use App\Models\WalletConnectionChallenge;
+use App\Services\ApplicationSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class SolanaWalletConnectionTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_account_wallet_card_shows_only_the_current_users_verified_wallet(): void
+    {
+        $owner = User::factory()->create(['is_admin' => false]);
+        $other = User::factory()->create(['is_admin' => false]);
+        [$address, $secret] = $this->solanaKeypair();
+        $challenge = $this->createChallenge($owner, $address);
+        $this->postJson(route('wallets.solana.verify'), [
+            'challenge_id' => $challenge->id,
+            'signature' => base64_encode(sodium_crypto_sign_detached($challenge->message, $secret)),
+        ])->assertOk();
+
+        $this->get(route('account.edit'))->assertOk()->assertSee('Connected / Verified')->assertSee($address);
+        $this->actingAs($other)->get(route('account.edit'))->assertOk()
+            ->assertSee('No live wallet is connected.')->assertDontSee($address)
+            ->assertSee(route('wallets.solana.challenge'))->assertSee(route('wallets.solana.verify'));
+
+        $owner->connectedWallets()->update(['disconnected_at' => now()]);
+        $this->actingAs($owner)->get(route('account.edit'))->assertOk()->assertDontSee($address);
+    }
+
+    public function test_challenge_uses_configured_product_branding(): void
+    {
+        app(ApplicationSettingsService::class)->update(['general.application_name' => 'Meme Scanner']);
+        $user = User::factory()->create();
+        [$address] = $this->solanaKeypair();
+        $challenge = $this->createChallenge($user, $address);
+        $this->assertStringStartsWith('Meme Scanner Wallet Verification', $challenge->message);
+    }
+
+    public function test_blank_application_name_falls_back_to_trimmed_configured_name(): void
+    {
+        config()->set('app.name', '  Configured Application  ');
+        app(ApplicationSettingsService::class)->update(['general.application_name' => '   ']);
+        $user = User::factory()->create();
+        [$address] = $this->solanaKeypair();
+
+        $challenge = $this->createChallenge($user, $address);
+
+        $this->assertSame('Configured Application Wallet Verification', explode("\n", $challenge->message)[0]);
+    }
 
     public function test_verified_user_can_create_and_complete_wallet_challenge(): void
     {
@@ -303,79 +345,79 @@ class SolanaWalletConnectionTest extends TestCase
     }
 
     public function test_unverified_customer_cannot_create_wallet_challenge(): void
-{
-    $user = User::factory()->create([
-        'email_verified_at' => null,
-    ]);
+    {
+        $user = User::factory()->create([
+            'email_verified_at' => null,
+        ]);
 
-    [$address] = $this->solanaKeypair();
+        [$address] = $this->solanaKeypair();
 
-    $this->actingAs($user)->postJson(
-        route('wallets.solana.challenge'),
-        [
-            'address' => $address,
-            'provider' => 'phantom',
-        ],
-    )->assertRedirect(route('verification.notice'));
+        $this->actingAs($user)->postJson(
+            route('wallets.solana.challenge'),
+            [
+                'address' => $address,
+                'provider' => 'phantom',
+            ],
+        )->assertRedirect(route('verification.notice'));
 
-    $this->assertDatabaseCount('wallet_connection_challenges', 0);
-}
+        $this->assertDatabaseCount('wallet_connection_challenges', 0);
+    }
 
-public function test_user_can_replace_their_own_verified_wallet(): void
-{
-    $user = User::factory()->create([
-        'email_verified_at' => now(),
-    ]);
+    public function test_user_can_replace_their_own_verified_wallet(): void
+    {
+        $user = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
 
-    [$firstAddress, $firstSecretKey] = $this->solanaKeypair();
+        [$firstAddress, $firstSecretKey] = $this->solanaKeypair();
 
-    $firstChallenge = $this->createChallenge($user, $firstAddress);
+        $firstChallenge = $this->createChallenge($user, $firstAddress);
 
-    $this->actingAs($user)->postJson(
-        route('wallets.solana.verify'),
-        [
-            'challenge_id' => $firstChallenge->id,
-            'signature' => base64_encode(
-                sodium_crypto_sign_detached(
-                    $firstChallenge->message,
-                    $firstSecretKey,
+        $this->actingAs($user)->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $firstChallenge->id,
+                'signature' => base64_encode(
+                    sodium_crypto_sign_detached(
+                        $firstChallenge->message,
+                        $firstSecretKey,
+                    ),
                 ),
-            ),
-        ],
-    )->assertOk();
+            ],
+        )->assertOk();
 
-    [$secondAddress, $secondSecretKey] = $this->solanaKeypair();
+        [$secondAddress, $secondSecretKey] = $this->solanaKeypair();
 
-    $secondChallenge = $this->createChallenge($user, $secondAddress);
+        $secondChallenge = $this->createChallenge($user, $secondAddress);
 
-    $this->actingAs($user)->postJson(
-        route('wallets.solana.verify'),
-        [
-            'challenge_id' => $secondChallenge->id,
-            'signature' => base64_encode(
-                sodium_crypto_sign_detached(
-                    $secondChallenge->message,
-                    $secondSecretKey,
+        $this->actingAs($user)->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $secondChallenge->id,
+                'signature' => base64_encode(
+                    sodium_crypto_sign_detached(
+                        $secondChallenge->message,
+                        $secondSecretKey,
+                    ),
                 ),
-            ),
-        ],
-    )->assertOk()
-        ->assertJsonPath('wallet.address', $secondAddress);
+            ],
+        )->assertOk()
+            ->assertJsonPath('wallet.address', $secondAddress);
 
-    $this->assertDatabaseCount('connected_wallets', 1);
+        $this->assertDatabaseCount('connected_wallets', 1);
 
-    $wallet = ConnectedWallet::query()
-        ->where('user_id', $user->id)
-        ->firstOrFail();
+        $wallet = ConnectedWallet::query()
+            ->where('user_id', $user->id)
+            ->firstOrFail();
 
-    $this->assertSame($secondAddress, $wallet->address);
-    $this->assertSame(
-        ConnectedWallet::addressHash(Chain::Solana, $secondAddress),
-        $wallet->address_hash,
-    );
-    $this->assertNotNull($wallet->verified_at);
-    $this->assertNull($wallet->disconnected_at);
-}
+        $this->assertSame($secondAddress, $wallet->address);
+        $this->assertSame(
+            ConnectedWallet::addressHash(Chain::Solana, $secondAddress),
+            $wallet->address_hash,
+        );
+        $this->assertNotNull($wallet->verified_at);
+        $this->assertNull($wallet->disconnected_at);
+    }
 
     private function createChallenge(
         User $user,
