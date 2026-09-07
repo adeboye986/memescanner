@@ -14,6 +14,8 @@ class SolanaSwapQuoteService
 
     public const LAMPORTS_PER_SOL = 1_000_000_000;
 
+    public function __construct(private SolanaWalletConnectionService $wallets) {}
+
     /** @return array<string, mixed> */
     public function quote(string $outputMint, string $amount, int $slippageBps): array
     {
@@ -90,7 +92,7 @@ class SolanaSwapQuoteService
                     'label' => is_string($swap['label'] ?? null) ? $swap['label'] : 'Unknown route',
                     'percent' => is_int($step['percent'] ?? null) ? $step['percent'] : null,
                     'fee_amount' => $this->isUnsignedInteger($swap['feeAmount'] ?? null) ? $swap['feeAmount'] : null,
-                    'fee_mint' => is_string($swap['feeMint'] ?? null) ? $swap['feeMint'] : null,
+                    'fee_mint' => is_string($swap['feeMint'] ?? null) ? trim($swap['feeMint']) : null,
                 ];
             })->values()->all(),
         ];
@@ -123,12 +125,21 @@ class SolanaSwapQuoteService
 
         $swap = $step['swapInfo'];
 
+        if (array_key_exists('feeAmount', $swap) && ! $this->isUnsignedInteger($swap['feeAmount'])) {
+            return false;
+        }
+
+        if (array_key_exists('feeMint', $swap)
+            && (! is_string($swap['feeMint'])
+                || trim($swap['feeMint']) === ''
+                || ! $this->wallets->isValidAddress($swap['feeMint']))) {
+            return false;
+        }
+
         return is_string($swap['label'] ?? null)
             && trim($swap['label']) !== ''
             && is_int($step['percent'] ?? null)
             && $step['percent'] > 0
-            && $step['percent'] <= 100
-            && $this->isUnsignedInteger($swap['feeAmount'] ?? null)
-            && is_string($swap['feeMint'] ?? null);
+            && $step['percent'] <= 100;
     }
 }

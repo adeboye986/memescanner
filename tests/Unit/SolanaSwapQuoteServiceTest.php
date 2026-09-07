@@ -23,11 +23,75 @@ class SolanaSwapQuoteServiceTest extends TestCase
         $this->assertSame(SolanaSwapQuoteService::SOL_MINT, $quote['input']['mint']);
         $this->assertSame('2500000', $quote['output']['amount']);
         $this->assertSame('2475000', $quote['minimum_received']);
-        $this->assertSame('Raydium', $quote['route'][0]['label']);
+        $this->assertSame('GoonFi V2', $quote['route'][0]['label']);
+        $this->assertNull($quote['route'][0]['fee_amount']);
+        $this->assertNull($quote['route'][0]['fee_mint']);
         Http::assertSent(fn ($request): bool => $request['inputMint'] === SolanaSwapQuoteService::SOL_MINT
             && $request['outputMint'] === $this->outputMint()
             && $request['amount'] === '10000000'
             && $request['slippageBps'] === 100);
+    }
+
+    public function test_valid_optional_fee_fields_are_normalized(): void
+    {
+        config()->set('services.jupiter.base_url', 'https://jupiter.test');
+        Http::fake(['https://jupiter.test/quote*' => Http::response($this->validResponse([
+            'feeAmount' => '10',
+            'feeMint' => SolanaSwapQuoteService::SOL_MINT,
+        ]))]);
+
+        $quote = app(SolanaSwapQuoteService::class)->quote($this->outputMint(), '10000000', 100);
+
+        $this->assertSame('10', $quote['route'][0]['fee_amount']);
+        $this->assertSame(SolanaSwapQuoteService::SOL_MINT, $quote['route'][0]['fee_mint']);
+    }
+
+    public function test_malformed_optional_fee_amount_is_rejected(): void
+    {
+        config()->set('services.jupiter.base_url', 'https://jupiter.test');
+        Http::fake(['https://jupiter.test/quote*' => Http::response($this->validResponse([
+            'feeAmount' => '1.5',
+        ]))]);
+
+        $this->expectException(RuntimeException::class);
+
+        app(SolanaSwapQuoteService::class)->quote($this->outputMint(), '10000000', 100);
+    }
+
+    public function test_empty_optional_fee_mint_is_rejected(): void
+    {
+        config()->set('services.jupiter.base_url', 'https://jupiter.test');
+        Http::fake(['https://jupiter.test/quote*' => Http::response($this->validResponse([
+            'feeMint' => '',
+        ]))]);
+
+        $this->expectException(RuntimeException::class);
+
+        app(SolanaSwapQuoteService::class)->quote($this->outputMint(), '10000000', 100);
+    }
+
+    public function test_malformed_optional_fee_mint_is_rejected(): void
+    {
+        config()->set('services.jupiter.base_url', 'https://jupiter.test');
+        Http::fake(['https://jupiter.test/quote*' => Http::response($this->validResponse([
+            'feeMint' => 'not-a-solana-mint',
+        ]))]);
+
+        $this->expectException(RuntimeException::class);
+
+        app(SolanaSwapQuoteService::class)->quote($this->outputMint(), '10000000', 100);
+    }
+
+    public function test_route_percentage_total_must_remain_exactly_one_hundred(): void
+    {
+        config()->set('services.jupiter.base_url', 'https://jupiter.test');
+        $response = $this->validResponse();
+        $response['routePlan'][0]['percent'] = 99;
+        Http::fake(['https://jupiter.test/quote*' => Http::response($response)]);
+
+        $this->expectException(RuntimeException::class);
+
+        app(SolanaSwapQuoteService::class)->quote($this->outputMint(), '10000000', 100);
     }
 
     public function test_malformed_response_is_rejected(): void
@@ -74,7 +138,7 @@ class SolanaSwapQuoteServiceTest extends TestCase
     }
 
     /** @return array<string, mixed> */
-    private function validResponse(): array
+    private function validResponse(array $swapOverrides = []): array
     {
         return [
             'inputMint' => SolanaSwapQuoteService::SOL_MINT,
@@ -86,8 +150,17 @@ class SolanaSwapQuoteServiceTest extends TestCase
             'slippageBps' => 100,
             'priceImpactPct' => '0.001',
             'routePlan' => [[
-                'swapInfo' => ['label' => 'Raydium', 'feeAmount' => '10', 'feeMint' => SolanaSwapQuoteService::SOL_MINT],
+                'swapInfo' => array_merge([
+                    'ammKey' => 'GoonFi1111111111111111111111111111111111111',
+                    'label' => 'GoonFi V2',
+                    'inputMint' => SolanaSwapQuoteService::SOL_MINT,
+                    'outputMint' => $this->outputMint(),
+                    'inAmount' => '10000000',
+                    'outAmount' => '2500000',
+                    'updateContextSlot' => '445090017',
+                ], $swapOverrides),
                 'percent' => 100,
+                'bps' => null,
             ]],
         ];
     }

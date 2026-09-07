@@ -35,6 +35,8 @@ class SolanaSwapQuoteTest extends TestCase
             ->assertJsonPath('quote.output.mint', $this->outputMint())
             ->assertJsonPath('quote.output.amount', '2500000')
             ->assertJsonPath('quote.minimum_received', '2475000')
+            ->assertJsonPath('quote.route.0.fee_amount', null)
+            ->assertJsonPath('quote.route.0.fee_mint', null)
             ->assertJsonPath('quote.spend_usd', '2.00');
 
         Http::assertSentCount(2);
@@ -171,8 +173,17 @@ class SolanaSwapQuoteTest extends TestCase
             'slippageBps' => 100,
             'priceImpactPct' => '0.001',
             'routePlan' => [[
-                'swapInfo' => ['label' => 'Raydium', 'feeAmount' => '10', 'feeMint' => SolanaSwapQuoteService::SOL_MINT],
+                'swapInfo' => [
+                    'ammKey' => 'GoonFi1111111111111111111111111111111111111',
+                    'label' => 'GoonFi V2',
+                    'inputMint' => SolanaSwapQuoteService::SOL_MINT,
+                    'outputMint' => $this->outputMint(),
+                    'inAmount' => '10000000',
+                    'outAmount' => '2500000',
+                    'updateContextSlot' => '445090017',
+                ],
                 'percent' => 100,
+                'bps' => null,
             ]],
         ];
     }
