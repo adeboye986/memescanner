@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { detectWallets, disconnectWallet, verifyWallet } from './solana-wallet.js';
+import { fetchWalletBalance } from './solana-wallet.js';
 
 const fixture = () => {
     const wallet = { publicKey: 'address-a', connect: async () => {}, signMessage: async () => new Uint8Array(64) };
@@ -91,5 +92,57 @@ test('failed disconnect cannot produce a disconnected result', async () => {
     await assert.rejects(
         disconnectWallet(async () => ({ disconnected: false, wallet: { chain: 'solana' } })),
         /not confirmed/,
+    );
+});
+
+test('balance helper returns verified solana balance response', async () => {
+    const get = async (step) => {
+        assert.equal(step, 'balance');
+
+        return {
+            balance: {
+                chain: 'solana',
+                lamports: 2500000000,
+                sol: '2.500000000',
+            },
+        };
+    };
+
+    const result = await fetchWalletBalance(get);
+
+    assert.deepEqual(result, {
+        chain: 'solana',
+        lamports: 2500000000,
+        sol: '2.500000000',
+    });
+});
+
+test('balance helper rejects invalid balance responses', async () => {
+    const get = async () => ({
+        balance: {
+            chain: 'solana',
+            lamports: '2500000000',
+            sol: '2.500000000',
+        },
+    });
+
+    await assert.rejects(
+        () => fetchWalletBalance(get),
+        /invalid wallet balance/i,
+    );
+});
+
+test('balance helper rejects non-solana balance responses', async () => {
+    const get = async () => ({
+        balance: {
+            chain: 'ethereum',
+            lamports: 1000000000,
+            sol: '1.000000000',
+        },
+    });
+
+    await assert.rejects(
+        () => fetchWalletBalance(get),
+        /invalid wallet balance/i,
     );
 });

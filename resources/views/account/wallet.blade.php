@@ -1,6 +1,10 @@
-<section id="solana-wallet" aria-labelledby="wallet-heading" class="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-6"
-    data-challenge-url="{{ route('wallets.solana.challenge') }}" data-verify-url="{{ route('wallets.solana.verify') }}"
-    data-disconnect-url="{{ route('wallets.solana.disconnect') }}">
+    <section id="solana-wallet"
+        aria-labelledby="wallet-heading"
+        class="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-6"
+        data-challenge-url="{{ route('wallets.solana.challenge') }}"
+        data-verify-url="{{ route('wallets.solana.verify') }}"
+        data-disconnect-url="{{ route('wallets.solana.disconnect') }}"
+        data-balance-url="{{ route('wallets.solana.balance') }}">
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div><p class="text-xs font-semibold uppercase tracking-widest text-sky-400">Solana · Non-custodial</p><h2 id="wallet-heading" class="mt-2 text-xl font-semibold text-white">Connect Wallet</h2></div>
         <span data-wallet-status class="rounded-lg border border-slate-700 px-3 py-1 text-sm text-slate-200">{{ $connectedWallet ? 'Connected / Verified' : 'Not connected' }}</span>
@@ -9,6 +13,24 @@
     <p data-wallet-empty @if($connectedWallet) hidden @endif class="text-sm text-slate-300">No live wallet is connected.</p>
     <div data-wallet-details @if(!$connectedWallet) hidden @endif class="rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4">
         <p class="text-sm text-emerald-300">Solana · <span data-wallet-provider>{{ ucfirst($connectedWallet?->provider ?? 'compatible') }}</span></p>
+        <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    SOL Balance
+                </p>
+                <p data-wallet-balance class="mt-1 text-2xl font-semibold text-white">
+                    {{ $connectedWallet ? 'Loading…' : '—' }}
+                </p>
+            </div>
+
+            <button
+                type="button"
+                data-wallet-balance-refresh
+                @if(!$connectedWallet) hidden @endif
+                class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:text-white disabled:opacity-50">
+                Refresh balance
+            </button>
+        </div>
         <div class="mt-2 flex flex-wrap items-center gap-3">
             <span data-wallet-address class="font-mono text-slate-100" title="{{ $connectedWallet?->address }}">{{ $connectedWallet ? substr($connectedWallet->address, 0, 4).'…'.substr($connectedWallet->address, -4) : '' }}</span>
             <button type="button" class="copy-value rounded-lg border border-slate-700 px-3 py-1 text-sm text-slate-300 hover:text-white" data-copy-value="{{ $connectedWallet?->address }}">Copy</button>

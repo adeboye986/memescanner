@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Chain;
+use App\Services\SolanaService;
 use App\Services\SolanaWalletConnectionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use RuntimeException;
 
 class SolanaWalletConnectionController extends Controller
 {
@@ -52,6 +55,43 @@ class SolanaWalletConnectionController extends Controller
                 'address' => $wallet->address,
                 'provider' => $wallet->provider,
                 'verified_at' => $wallet->verified_at->toIso8601String(),
+            ],
+        ]);
+    }
+
+    public function balance(
+        Request $request,
+        SolanaService $solana,
+    ): JsonResponse {
+        $wallet = $request->user()
+            ->connectedWallets()
+            ->where('chain', Chain::Solana->value)
+            ->whereNotNull('verified_at')
+            ->whereNull('disconnected_at')
+            ->first();
+
+        if (! $wallet) {
+            return response()->json([
+                'message' => 'No active verified Solana wallet was found for this account.',
+            ], 422);
+        }
+
+        try {
+            $lamports = $solana->getBalanceLamports($wallet->address);
+        } catch (RuntimeException) {
+            return response()->json([
+                'message' => 'Unable to read the Solana wallet balance right now.',
+            ], 503);
+        }
+
+        $whole = intdiv($lamports, 1_000_000_000);
+        $fraction = $lamports % 1_000_000_000;
+
+        return response()->json([
+            'balance' => [
+                'chain' => Chain::Solana->value,
+                'lamports' => $lamports,
+                'sol' => $whole.'.'.str_pad((string) $fraction, 9, '0', STR_PAD_LEFT),
             ],
         ]);
     }

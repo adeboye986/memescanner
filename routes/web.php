@@ -65,6 +65,10 @@ Route::middleware(['auth', 'customer.verified'])
         Route::post('/disconnect', [SolanaWalletConnectionController::class, 'disconnect'])
             ->middleware('throttle:10,1')
             ->name('disconnect');
+
+        Route::get('/balance', [SolanaWalletConnectionController::class, 'balance'])
+            ->middleware('throttle:30,1')
+            ->name('balance');
     });
 
 Route::middleware('guest')->group(function (): void {

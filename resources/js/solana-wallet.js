@@ -55,6 +55,21 @@ export async function disconnectWallet(post) {
     return result;
 }
 
+export async function fetchWalletBalance(get) {
+    const result = await get('balance');
+
+    if (
+        result.balance?.chain !== 'solana'
+        || !Number.isSafeInteger(result.balance?.lamports)
+        || result.balance.lamports < 0
+        || typeof result.balance?.sol !== 'string'
+    ) {
+        throw new Error('The server returned an invalid wallet balance.');
+    }
+
+    return result.balance;
+}
+
 export function mountWalletCard(card) {
     if (!card) return;
     const connect = card.querySelector('[data-wallet-connect]');
@@ -66,6 +81,8 @@ export function mountWalletCard(card) {
     const disconnectConfirmation = card.querySelector('[data-wallet-disconnect-confirmation]');
     const disconnectCancel = card.querySelector('[data-wallet-disconnect-cancel]');
     const disconnectConfirm = card.querySelector('[data-wallet-disconnect-confirm]');
+    const balance = card.querySelector('[data-wallet-balance]');
+    const balanceRefresh = card.querySelector('[data-wallet-balance-refresh]');
     const say = (message) => { feedback.textContent = message; };
     let busy = false;
     const post = async (step, payload) => {
@@ -81,6 +98,58 @@ export function mountWalletCard(card) {
         if (!response.ok) throw new Error(response.status === 422 ? Object.values(data.errors ?? {}).flat()[0] ?? 'Verification failed. Please start again.' : 'Verification is unavailable. Check your account and email verification.');
         return data;
     };
+    const get = async (step) => {
+        const response = await fetch(card.dataset[`${step}Url`], {
+            method: 'GET',
+            credentials: 'same-origin',
+            redirect: 'error',
+            headers: {
+                Accept: 'application/json',
+            },
+            signal: AbortSignal.timeout(30000),
+        });
+
+        if ([401, 419].includes(response.status)) {
+            throw new Error('Your session expired. Reload the page and sign in again.');
+        }
+
+        if (response.status === 429) {
+            throw new Error('Too many requests. Please wait a minute and try again.');
+        }
+
+        if (response.status >= 500) {
+            throw new Error('Balance is temporarily unavailable.');
+        }
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(
+                response.status === 422
+                    ? data.message || 'No active verified wallet was found.'
+                    : 'Balance is unavailable.'
+            );
+        }
+
+        return data;
+    };
+    const loadBalance = async () => {
+        if (!balance || !balanceRefresh) return;
+
+        balanceRefresh.disabled = true;
+        balance.textContent = 'Loading…';
+
+        try {
+            const result = await fetchWalletBalance(get);
+            balance.textContent = `${result.sol} SOL`;
+        } catch {
+            balance.textContent = 'Balance unavailable';
+        } finally {
+            balanceRefresh.disabled = false;
+        }
+    };
+
+    balanceRefresh?.addEventListener('click', loadBalance);
     const run = async (selected) => {
         if (busy) return;
         busy = true;
@@ -99,6 +168,8 @@ export function mountWalletCard(card) {
             card.querySelector('.copy-value').dataset.copyValue = verified.address;
             connect.textContent = 'Change wallet';
             disconnect.hidden = false;
+            balanceRefresh.hidden = false;
+            await loadBalance();
             say('Wallet ownership verified. Live trading remains disabled.');
         } catch (error) {
             const rejected = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
@@ -109,6 +180,9 @@ export function mountWalletCard(card) {
             card.setAttribute('aria-busy', 'false');
         }
     };
+    if (!card.querySelector('[data-wallet-details]').hidden) {
+        loadBalance();
+    }
     connect.addEventListener('click', () => {
         const wallets = detectWallets(window);
         options.replaceChildren();
@@ -159,6 +233,13 @@ export function mountWalletCard(card) {
             connect.textContent = 'Connect Wallet';
             disconnect.hidden = true;
             disconnectConfirmation.hidden = true;
+            if (balance) {
+                balance.textContent = '—';
+            }
+
+            if (balanceRefresh) {
+                balanceRefresh.hidden = true;
+            }
             say('Wallet disconnected from this account. No funds were moved and your wallet extension remains connected independently.');
         } catch (error) {
             say(error instanceof TypeError || error?.name === 'TimeoutError' ? 'Connection interrupted. The verified wallet remains shown; reload before trying again.' : error?.message || 'Could not disconnect this wallet. The verified association remains unchanged.');

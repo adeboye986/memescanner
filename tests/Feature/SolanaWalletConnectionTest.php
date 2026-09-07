@@ -9,6 +9,7 @@ use App\Models\WalletConnectionChallenge;
 use App\Services\ApplicationSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
+use Illuminate\Support\Facades\Http;
 
 class SolanaWalletConnectionTest extends TestCase
 {
@@ -578,6 +579,235 @@ class SolanaWalletConnectionTest extends TestCase
             ->get(route('account.edit'))
             ->assertOk()
             ->assertSee('Change wallet');
+    }
+
+    public function test_verified_user_can_read_balance_for_own_active_wallet(): void
+    {
+        [$address, $secretKey] = $this->solanaKeypair();
+
+        $user = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($user);
+
+        $challenge = $this->postJson(
+            route('wallets.solana.challenge'),
+            [
+                'address' => $address,
+                'provider' => 'phantom',
+            ]
+        )->json();
+
+        $signature = base64_encode(
+            sodium_crypto_sign_detached(
+                $challenge['message'],
+                $secretKey
+            )
+        );
+
+        $this->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $challenge['challenge_id'],
+                'signature' => $signature,
+            ]
+        )->assertOk();
+
+        Http::fake([
+            '*' => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => [
+                    'context' => ['slot' => 123],
+                    'value' => 2_500_000_000,
+                ],
+                'id' => 1,
+            ]),
+        ]);
+
+        $this->getJson(
+            route('wallets.solana.balance')
+        )
+            ->assertOk()
+            ->assertJsonPath('balance.chain', 'solana')
+            ->assertJsonPath('balance.lamports', 2_500_000_000)
+            ->assertJsonPath('balance.sol', '2.500000000');
+
+        Http::assertSent(function ($request) use ($address): bool {
+            return $request['method'] === 'getBalance'
+                && $request['params'][0] === $address;
+        });
+    }
+
+    public function test_balance_endpoint_does_not_accept_an_arbitrary_wallet_address(): void
+    {
+        [$ownAddress, $ownSecretKey] = $this->solanaKeypair();
+        [$otherAddress] = $this->solanaKeypair();
+
+        $user = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($user);
+
+        $challenge = $this->postJson(
+            route('wallets.solana.challenge'),
+            [
+                'address' => $ownAddress,
+                'provider' => 'phantom',
+            ]
+        )->json();
+
+        $signature = base64_encode(
+            sodium_crypto_sign_detached(
+                $challenge['message'],
+                $ownSecretKey
+            )
+        );
+
+        $this->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $challenge['challenge_id'],
+                'signature' => $signature,
+            ]
+        )->assertOk();
+
+        Http::fake([
+            '*' => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => ['value' => 100],
+                'id' => 1,
+            ]),
+        ]);
+
+        $this->getJson(
+            route('wallets.solana.balance', [
+                'address' => $otherAddress,
+            ])
+        )->assertOk();
+
+        Http::assertSent(function ($request) use ($ownAddress, $otherAddress): bool {
+            return $request['method'] === 'getBalance'
+                && $request['params'][0] === $ownAddress
+                && $request['params'][0] !== $otherAddress;
+        });
+    }
+
+    public function test_disconnected_wallet_cannot_read_balance(): void
+    {
+        [$address, $secretKey] = $this->solanaKeypair();
+
+        $user = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($user);
+
+        $challenge = $this->postJson(
+            route('wallets.solana.challenge'),
+            [
+                'address' => $address,
+                'provider' => 'phantom',
+            ]
+        )->json();
+
+        $signature = base64_encode(
+            sodium_crypto_sign_detached(
+                $challenge['message'],
+                $secretKey
+            )
+        );
+
+        $this->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $challenge['challenge_id'],
+                'signature' => $signature,
+            ]
+        )->assertOk();
+
+        $this->postJson(
+            route('wallets.solana.disconnect')
+        )->assertOk();
+
+        Http::fake();
+
+        $this->getJson(
+            route('wallets.solana.balance')
+        )
+            ->assertStatus(422)
+            ->assertJsonPath(
+                'message',
+                'No active verified Solana wallet was found for this account.'
+            );
+
+        Http::assertNothingSent();
+    }
+
+    public function test_guest_cannot_read_wallet_balance(): void
+    {
+        $this->getJson(
+            route('wallets.solana.balance')
+        )->assertUnauthorized();
+    }
+
+    public function test_rpc_failure_returns_safe_balance_unavailable_response(): void
+    {
+        [$address, $secretKey] = $this->solanaKeypair();
+
+        $user = User::factory()->create([
+            'email_verified_at' => now(),
+        ]);
+
+        $this->actingAs($user);
+
+        $challenge = $this->postJson(
+            route('wallets.solana.challenge'),
+            [
+                'address' => $address,
+                'provider' => 'phantom',
+            ]
+        )->json();
+
+        $signature = base64_encode(
+            sodium_crypto_sign_detached(
+                $challenge['message'],
+                $secretKey
+            )
+        );
+
+        $this->postJson(
+            route('wallets.solana.verify'),
+            [
+                'challenge_id' => $challenge['challenge_id'],
+                'signature' => $signature,
+            ]
+        )->assertOk();
+
+        Http::fake([
+            '*' => Http::response([
+                'jsonrpc' => '2.0',
+                'id' => 1,
+                'error' => [
+                    'code' => -32000,
+                    'message' => 'RPC unavailable',
+                ],
+            ]),
+        ]);
+
+        $this->getJson(
+            route('wallets.solana.balance')
+        )
+            ->assertStatus(503)
+            ->assertJson([
+                'message' => 'Unable to read the Solana wallet balance right now.',
+            ]);
+
+        Http::assertSent(function ($request) use ($address): bool {
+            return $request['method'] === 'getBalance'
+                && $request['params'][0] === $address;
+        });
     }
 
     private function createChallenge(

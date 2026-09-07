@@ -1329,6 +1329,29 @@ class SolanaService
         return 'special_account';
     }
 
+    public function getBalanceLamports(string $address): int
+    {
+        $result = $this->rpcRequest(
+            'getBalance',
+            [
+                $address,
+                [
+                    'commitment' => 'confirmed',
+                ],
+            ]
+        );
+
+        $lamports = $result['value'] ?? null;
+
+        if (! is_int($lamports) || $lamports < 0) {
+            throw new RuntimeException(
+                'Solana RPC returned an invalid wallet balance.'
+            );
+        }
+
+        return $lamports;
+    }
+
     public function getSignaturesForAddress(
         string $address,
         int $limit = 100,
