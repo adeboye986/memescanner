@@ -2,8 +2,6 @@
 
 namespace App\Services;
 
-use App\Chain;
-use App\Models\TokenScan;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -14,7 +12,11 @@ class SolanaSwapQuoteService
 
     public const LAMPORTS_PER_SOL = 1_000_000_000;
 
-    public function __construct(private SolanaWalletConnectionService $wallets) {}
+    public function __construct(
+        private SolanaWalletConnectionService $wallets,
+        private SolanaTokenMetadataService $metadata,
+        private TokenAmountFormatter $amounts,
+    ) {}
 
     /** @return array<string, mixed> */
     public function quote(string $outputMint, string $amount, int $slippageBps): array
@@ -71,20 +73,32 @@ class SolanaSwapQuoteService
             throw new RuntimeException('The swap quote provider returned invalid data.');
         }
 
-        $token = TokenScan::query()
-            ->where('chain', Chain::Solana->value)
-            ->where('address', $outputMint)
-            ->latest('last_scanned_at')
-            ->first();
-        $decimals = data_get($token?->raw_data, 'decimals');
-        $decimals = is_int($decimals) && $decimals >= 0 && $decimals <= 18 ? $decimals : null;
+        try {
+            $metadata = $this->metadata->resolve($outputMint);
+        } catch (RuntimeException) {
+            $metadata = $this->metadata->stored($outputMint);
+        }
+
+        $amountFormatted = $metadata['decimals'] === null
+            ? null
+            : $this->amounts->format($outAmount, $metadata['decimals']);
+        $minimumReceivedFormatted = $metadata['decimals'] === null
+            ? null
+            : $this->amounts->format($minimumReceived, $metadata['decimals']);
 
         return [
             'input' => ['mint' => self::SOL_MINT, 'amount' => $amount, 'symbol' => 'SOL', 'decimals' => 9],
-            'output' => ['mint' => $outputMint, 'amount' => $outAmount, 'symbol' => $token?->symbol, 'decimals' => $decimals],
+            'output' => [
+                'mint' => $outputMint,
+                'amount' => $outAmount,
+                'amount_formatted' => $amountFormatted,
+                'symbol' => $metadata['symbol'],
+                'decimals' => $metadata['decimals'],
+            ],
             'slippage_bps' => $slippageBps,
             'price_impact_pct' => (string) $priceImpact,
             'minimum_received' => $minimumReceived,
+            'minimum_received_formatted' => $minimumReceivedFormatted,
             'route' => collect($routePlan)->map(function (mixed $step): array {
                 $swap = is_array($step) ? ($step['swapInfo'] ?? []) : [];
 

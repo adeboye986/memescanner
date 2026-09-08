@@ -51,6 +51,8 @@ return [
             'SOLANA_RPC_URL',
             'https://api.mainnet-beta.solana.com'
         ),
+        'metadata_cache_store' => env('OPERATIONS_CACHE_STORE', 'file'),
+        'token_metadata_cache_seconds' => env('SOLANA_TOKEN_METADATA_CACHE_SECONDS', 86400),
     ],
 
     'coingecko' => [

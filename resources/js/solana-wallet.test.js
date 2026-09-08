@@ -5,7 +5,11 @@ import {
     disconnectWallet,
     fetchSwapQuote,
     fetchWalletBalance,
+    defaultSpendFromBalance,
+    formatBaseUnits,
     quotePresentation,
+    solToLamports,
+    validateQuoteSpend,
     verifyWallet,
 } from './solana-wallet.js';
 
@@ -113,6 +117,7 @@ test('balance helper returns verified solana balance response', async () => {
                 usd: '500.00',
             },
             price: { sol_usd: '200' },
+            quote_limits: { maximum_lamports: 100000000, suggested_spend_lamports: 1000000 },
         };
     };
 
@@ -124,6 +129,8 @@ test('balance helper returns verified solana balance response', async () => {
         sol: '2.500000000',
         usd: '500.00',
         sol_usd: '200',
+        maximum_lamports: 100000000,
+        suggested_spend_lamports: 1000000,
     });
 });
 
@@ -131,6 +138,7 @@ test('missing USD valuation keeps the exact SOL balance available', async () => 
     const result = await fetchWalletBalance(async () => ({
         balance: { chain: 'solana', lamports: 6793573, sol: '0.006793573', usd: null },
         price: { sol_usd: null },
+        quote_limits: { maximum_lamports: 100000000, suggested_spend_lamports: 679357 },
     }));
 
     assert.equal(result.sol, '0.006793573');
@@ -141,6 +149,7 @@ test('malformed USD valuation is ignored without hiding valid SOL', async () => 
     const result = await fetchWalletBalance(async () => ({
         balance: { chain: 'solana', lamports: 1000000000, sol: '1.000000000', usd: 'NaN' },
         price: { sol_usd: 'secret' },
+        quote_limits: { maximum_lamports: 100000000, suggested_spend_lamports: 1000000 },
     }));
 
     assert.equal(result.sol, '1.000000000');
@@ -150,8 +159,9 @@ test('malformed USD valuation is ignored without hiding valid SOL', async () => 
 test('quote preview presents normalized values', () => {
     const presentation = quotePresentation({
         input: { amount: '10000000' },
-        output: { amount: '2500000', decimals: 6, symbol: 'USDC' },
+        output: { amount: '2500000', amount_formatted: '2.5', decimals: 6, symbol: 'USDC' },
         minimum_received: '2475000',
+        minimum_received_formatted: '2.475',
         slippage_bps: 100,
         price_impact_pct: '0.001',
         spend_usd: '2.00',
@@ -168,6 +178,62 @@ test('quote preview presents normalized values', () => {
         route: 'Raydium',
         fees: '10 base units',
     });
+});
+
+test('quote preview uses token fallback when symbol is unavailable', () => {
+    const presentation = quotePresentation({
+        input: { amount: '1000000' },
+        output: { amount: '104444', amount_formatted: '0.104444', decimals: 6, symbol: null },
+        minimum_received: '103400',
+        minimum_received_formatted: '0.1034',
+        slippage_bps: 100,
+        price_impact_pct: '0.001',
+        spend_usd: null,
+        route: [{ label: 'GoonFi V2', fee_amount: null }],
+    });
+
+    assert.equal(presentation.output, '0.104444 tokens');
+    assert.equal(presentation.minimum, '0.1034 tokens');
+});
+
+test('quote preview falls back to raw base units when decimals are unavailable', () => {
+    const presentation = quotePresentation({
+        input: { amount: '1000000' },
+        output: { amount: '104444', amount_formatted: null, decimals: null, symbol: null },
+        minimum_received: '103400',
+        minimum_received_formatted: null,
+        slippage_bps: 100,
+        price_impact_pct: '0.001',
+        spend_usd: null,
+        route: [{ label: 'GoonFi V2', fee_amount: null }],
+    });
+
+    assert.equal(presentation.output, '104444 base units');
+    assert.equal(presentation.minimum, '103400 base units');
+});
+
+test('base-unit formatting preserves padding and large integer precision', () => {
+    assert.equal(formatBaseUnits('104444', 6), '0.104444');
+    assert.equal(formatBaseUnits('103400', 6), '0.1034');
+    assert.equal(formatBaseUnits('44', 6), '0.000044');
+    assert.equal(formatBaseUnits('123456789012345678901234567890', 6), '123456789012345678901234.56789');
+});
+
+test('default quote spend never exceeds wallet balance or configured maximum', () => {
+    const balance = { lamports: 6793573, maximum_lamports: 100000000, suggested_spend_lamports: 679357 };
+
+    assert.equal(defaultSpendFromBalance(balance), '0.000679357');
+    assert.ok(BigInt(solToLamports(defaultSpendFromBalance(balance))) <= BigInt(balance.lamports));
+    assert.ok(BigInt(solToLamports(defaultSpendFromBalance(balance))) <= BigInt(balance.maximum_lamports));
+    assert.equal(defaultSpendFromBalance({ ...balance, suggested_spend_lamports: 0 }), '');
+    assert.equal(defaultSpendFromBalance({ ...balance, suggested_spend_lamports: 7000000 }), '');
+});
+
+test('quote spend guard accepts exact balance and rejects excessive spend', () => {
+    assert.doesNotThrow(() => validateQuoteSpend('1000000', 1000000, 100000000));
+    assert.throws(() => validateQuoteSpend('1000001', 1000000, 100000000), /wallet balance/);
+    assert.throws(() => validateQuoteSpend('10000001', 100000000, 10000000), /maximum trade amount/);
+    assert.throws(() => validateQuoteSpend('1', null, 10000000), /Refresh the wallet balance/);
 });
 
 test('quote failure never requests wallet signing', async () => {

@@ -631,7 +631,9 @@ class SolanaWalletConnectionTest extends TestCase
             ->assertOk()
             ->assertJsonPath('balance.chain', 'solana')
             ->assertJsonPath('balance.lamports', 2_500_000_000)
-            ->assertJsonPath('balance.sol', '2.500000000');
+            ->assertJsonPath('balance.sol', '2.500000000')
+            ->assertJsonPath('quote_limits.maximum_lamports', 100_000_000)
+            ->assertJsonPath('quote_limits.suggested_spend_lamports', 1_000_000);
 
         Http::assertSent(function ($request) use ($address): bool {
             return ($request['method'] ?? null) === 'getBalance'
@@ -657,7 +659,8 @@ class SolanaWalletConnectionTest extends TestCase
             ->assertJsonPath('balance.lamports', 6_793_573)
             ->assertJsonPath('balance.sol', '0.006793573')
             ->assertJsonPath('balance.usd', '1.34')
-            ->assertJsonPath('price.sol_usd', '197.2');
+            ->assertJsonPath('price.sol_usd', '197.2')
+            ->assertJsonPath('quote_limits.suggested_spend_lamports', 679_357);
     }
 
     public function test_price_failure_keeps_valid_sol_balance_available(): void

@@ -57,6 +57,8 @@ export async function disconnectWallet(post) {
 
 export async function fetchWalletBalance(get) {
     const result = await get('balance');
+    const maximumLamports = result.quote_limits?.maximum_lamports;
+    const suggestedSpendLamports = result.quote_limits?.suggested_spend_lamports;
 
     if (
         result.balance?.chain !== 'solana'
@@ -64,6 +66,12 @@ export async function fetchWalletBalance(get) {
         || result.balance.lamports < 0
         || typeof result.balance?.sol !== 'string'
         || !/^\d+\.\d{9}$/.test(result.balance.sol)
+        || !Number.isSafeInteger(maximumLamports)
+        || maximumLamports <= 0
+        || !Number.isSafeInteger(suggestedSpendLamports)
+        || suggestedSpendLamports < 0
+        || suggestedSpendLamports > result.balance.lamports
+        || suggestedSpendLamports > maximumLamports
     ) {
         throw new Error('The server returned an invalid wallet balance.');
     }
@@ -71,7 +79,13 @@ export async function fetchWalletBalance(get) {
     const validUsd = typeof result.balance.usd === 'string' && /^\d+\.\d{2}$/.test(result.balance.usd);
     const validPrice = typeof result.price?.sol_usd === 'string' && /^\d+(?:\.\d+)?$/.test(result.price.sol_usd);
 
-    return { ...result.balance, usd: validUsd && validPrice ? result.balance.usd : null, sol_usd: validUsd && validPrice ? result.price.sol_usd : null };
+    return {
+        ...result.balance,
+        usd: validUsd && validPrice ? result.balance.usd : null,
+        sol_usd: validUsd && validPrice ? result.price.sol_usd : null,
+        maximum_lamports: maximumLamports,
+        suggested_spend_lamports: suggestedSpendLamports,
+    };
 }
 
 export function solToLamports(value) {
@@ -85,11 +99,18 @@ export function solToLamports(value) {
 export async function fetchSwapQuote(post, payload) {
     const result = await post('quote', payload);
     const quote = result.quote;
+    const decimals = quote?.output?.decimals;
+    const hasDecimals = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18;
     if (quote?.input?.mint !== 'So11111111111111111111111111111111111111112'
         || quote.input.amount !== payload.amount
         || quote.output?.mint !== payload.output_mint
         || !/^[1-9]\d*$/.test(quote.output?.amount ?? '')
         || !/^[1-9]\d*$/.test(quote.minimum_received ?? '')
+        || (decimals !== null && !hasDecimals)
+        || (!hasDecimals && quote.output.amount_formatted !== null)
+        || (!hasDecimals && quote.minimum_received_formatted !== null)
+        || (hasDecimals && quote.output.amount_formatted !== formatBaseUnits(quote.output.amount, decimals))
+        || (hasDecimals && quote.minimum_received_formatted !== formatBaseUnits(quote.minimum_received, decimals))
         || !Number.isInteger(quote.slippage_bps)
         || quote.slippage_bps !== payload.slippage_bps
         || typeof quote.price_impact_pct !== 'string'
@@ -111,14 +132,48 @@ export function formatBaseUnits(amount, decimals) {
     return fraction ? `${whole}.${fraction}` : whole;
 }
 
+export function defaultSpendFromBalance(balance) {
+    if (!Number.isSafeInteger(balance?.suggested_spend_lamports) || balance.suggested_spend_lamports <= 0) {
+        return '';
+    }
+
+    if (balance.suggested_spend_lamports > balance.lamports || balance.suggested_spend_lamports > balance.maximum_lamports) {
+        return '';
+    }
+
+    return formatBaseUnits(String(balance.suggested_spend_lamports), 9);
+}
+
+export function validateQuoteSpend(amount, balanceLamports, maximumLamports) {
+    if (!Number.isSafeInteger(balanceLamports) || !Number.isSafeInteger(maximumLamports)) {
+        throw new Error('Refresh the wallet balance before requesting a quote.');
+    }
+
+    if (BigInt(amount) > BigInt(balanceLamports)) {
+        throw new Error('Spend amount exceeds the connected wallet balance.');
+    }
+
+    if (BigInt(amount) > BigInt(maximumLamports)) {
+        throw new Error('Spend amount exceeds the configured maximum trade amount.');
+    }
+}
+
+function displayTokenAmount(baseUnits, formatted, decimals, symbol) {
+    if (!Number.isInteger(decimals)) {
+        return `${baseUnits} base units`;
+    }
+
+    return `${formatted} ${symbol || 'tokens'}`;
+}
+
 export function quotePresentation(quote) {
     const outputLabel = quote.output.symbol || 'tokens';
 
     return {
         spend: `${formatBaseUnits(quote.input.amount, 9)} SOL`,
         spendUsd: quote.spend_usd === null ? 'Unavailable' : `≈ $${quote.spend_usd} USD`,
-        output: `${formatBaseUnits(quote.output.amount, quote.output.decimals)} ${outputLabel}`,
-        minimum: `${formatBaseUnits(quote.minimum_received, quote.output.decimals)} ${outputLabel}`,
+        output: displayTokenAmount(quote.output.amount, quote.output.amount_formatted, quote.output.decimals, outputLabel),
+        minimum: displayTokenAmount(quote.minimum_received, quote.minimum_received_formatted, quote.output.decimals, outputLabel),
         slippage: `${(quote.slippage_bps / 100).toFixed(2)}%`,
         impact: `${quote.price_impact_pct}%`,
         route: quote.route.map((step) => step.label).join(' → ') || 'Direct',
@@ -143,8 +198,13 @@ export function mountWalletCard(card) {
     const balance = card.querySelector('[data-wallet-balance]');
     const balanceUsd = card.querySelector('[data-wallet-balance-usd]');
     const balanceRefresh = card.querySelector('[data-wallet-balance-refresh]');
+    const quoteSpend = card.querySelector('[data-quote-spend]');
+    const quoteSpendHelp = card.querySelector('[data-quote-spend-help]');
     const say = (message) => { feedback.textContent = message; };
     let busy = false;
+    let quoteSpendEdited = false;
+    let currentBalanceLamports = null;
+    let currentMaximumLamports = null;
     const post = async (step, payload) => {
         const response = await fetch(card.dataset[`${step}Url`], {
             method: 'POST', credentials: 'same-origin', redirect: 'error',
@@ -201,9 +261,19 @@ export function mountWalletCard(card) {
 
         try {
             const result = await fetchWalletBalance(get);
+            currentBalanceLamports = result.lamports;
+            currentMaximumLamports = result.maximum_lamports;
             balance.textContent = `${result.sol} SOL`;
             balanceUsd.textContent = result.usd === null ? 'USD value unavailable' : `≈ $${result.usd} USD`;
+            if (!quoteSpendEdited && quoteSpend) {
+                quoteSpend.value = defaultSpendFromBalance(result);
+                quoteSpendHelp.textContent = quoteSpend.value === ''
+                    ? 'No safe default spend is available for the current balance.'
+                    : 'Suggested preview amount based on the current balance and configured risk limit.';
+            }
         } catch {
+            currentBalanceLamports = null;
+            currentMaximumLamports = null;
             balance.textContent = 'Balance unavailable';
             balanceUsd.textContent = '';
         } finally {
@@ -212,6 +282,7 @@ export function mountWalletCard(card) {
     };
 
     balanceRefresh?.addEventListener('click', loadBalance);
+    quoteSpend?.addEventListener('input', () => { quoteSpendEdited = true; });
     const run = async (selected) => {
         if (busy) return;
         busy = true;
@@ -231,6 +302,7 @@ export function mountWalletCard(card) {
             connect.textContent = 'Change wallet';
             disconnect.hidden = false;
             balanceRefresh.hidden = false;
+            quoteSpendEdited = false;
             await loadBalance();
             say('Wallet ownership verified. Live trading remains disabled.');
         } catch (error) {
@@ -306,6 +378,14 @@ export function mountWalletCard(card) {
             if (balanceRefresh) {
                 balanceRefresh.hidden = true;
             }
+
+            if (quoteSpend) {
+                quoteSpend.value = '';
+            }
+
+            currentBalanceLamports = null;
+            currentMaximumLamports = null;
+            quoteSpendEdited = false;
             say('Wallet disconnected from this account. No funds were moved and your wallet extension remains connected independently.');
         } catch (error) {
             say(error instanceof TypeError || error?.name === 'TimeoutError' ? 'Connection interrupted. The verified wallet remains shown; reload before trying again.' : error?.message || 'Could not disconnect this wallet. The verified association remains unchanged.');
@@ -327,6 +407,7 @@ export function mountWalletCard(card) {
         preview.hidden = true;
         try {
             const amount = solToLamports(card.querySelector('[data-quote-spend]').value);
+            validateQuoteSpend(amount, currentBalanceLamports, currentMaximumLamports);
             const slippageValue = card.querySelector('[data-quote-slippage]').value.trim();
             if (!/^\d+(?:\.\d{1,2})?$/.test(slippageValue)) throw new Error('Enter slippage as a percentage with no more than 2 decimal places.');
             const slippageBps = Math.round(Number(slippageValue) * 100);

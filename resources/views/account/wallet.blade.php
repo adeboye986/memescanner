@@ -41,8 +41,8 @@
         <form data-wallet-quote-form class="mt-5 space-y-4 border-t border-slate-800 pt-5">
             <div><p class="text-xs font-semibold uppercase tracking-wider text-sky-400">Read-only preview</p><h3 class="mt-1 font-semibold text-white">SOL swap quote</h3></div>
             <div class="grid gap-3 md:grid-cols-3">
-                <label class="text-sm text-slate-300">Spend SOL<input data-quote-spend inputmode="decimal" value="0.01" required class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"></label>
-                <label class="text-sm text-slate-300 md:col-span-2">Output token mint<input data-quote-output-mint required autocomplete="off" class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-white" placeholder="Solana token mint address"></label>
+                <label class="text-sm text-slate-300">Spend SOL<input data-quote-spend name="spend_sol" inputmode="decimal" required class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" placeholder="Loading safe default…"><span data-quote-spend-help class="mt-1 block text-xs text-slate-500">Based on the verified wallet balance and configured risk limit.</span></label>
+                <label class="text-sm text-slate-300 md:col-span-2">Output token mint<input data-quote-output-mint name="output_mint" required autocomplete="off" class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-white" placeholder="Solana token mint address"></label>
                 <label class="text-sm text-slate-300">Slippage %<input data-quote-slippage inputmode="decimal" value="1.00" required class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"></label>
             </div>
             <button type="submit" data-wallet-quote-submit class="rounded-lg border border-sky-400/40 px-4 py-2 text-sm font-semibold text-sky-300 disabled:opacity-50">Get quote</button>

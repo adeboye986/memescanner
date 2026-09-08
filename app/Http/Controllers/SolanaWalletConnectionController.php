@@ -4,8 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Chain;
 use App\Services\CryptoPriceService;
+use App\Services\SolanaQuoteLimitService;
 use App\Services\SolanaService;
 use App\Services\SolanaWalletConnectionService;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use RuntimeException;
@@ -64,6 +66,7 @@ class SolanaWalletConnectionController extends Controller
         Request $request,
         SolanaService $solana,
         CryptoPriceService $prices,
+        SolanaQuoteLimitService $limits,
     ): JsonResponse {
         $wallet = $request->user()
             ->connectedWallets()
@@ -80,7 +83,7 @@ class SolanaWalletConnectionController extends Controller
 
         try {
             $lamports = $solana->getBalanceLamports($wallet->address);
-        } catch (RuntimeException) {
+        } catch (ConnectionException|RuntimeException) {
             return response()->json([
                 'message' => 'Unable to read the Solana wallet balance right now.',
             ], 503);
@@ -107,6 +110,10 @@ class SolanaWalletConnectionController extends Controller
             ],
             'price' => [
                 'sol_usd' => $solUsd,
+            ],
+            'quote_limits' => [
+                'maximum_lamports' => $limits->maximumLamports(),
+                'suggested_spend_lamports' => $limits->suggestedSpendLamports($lamports),
             ],
         ]);
     }

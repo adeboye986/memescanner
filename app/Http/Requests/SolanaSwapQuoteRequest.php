@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Services\ApplicationSettingsService;
+use App\Services\SolanaQuoteLimitService;
 use App\Services\SolanaSwapQuoteService;
 use App\Services\SolanaWalletConnectionService;
 use Closure;
@@ -26,15 +27,10 @@ class SolanaSwapQuoteRequest extends FormRequest
      * @return array<string, ValidationRule|array<mixed>|string>
      */
     public function rules(
+        SolanaQuoteLimitService $limits,
         ApplicationSettingsService $settings,
         SolanaWalletConnectionService $wallets,
     ): array {
-        $maximumLamports = max(
-            1,
-            (int) floor(
-                (float) $settings->get('risk.max_trade_amount') * SolanaSwapQuoteService::LAMPORTS_PER_SOL,
-            ),
-        );
         $maximumSlippageBps = min(500, max(1, (int) round((float) $settings->get('risk.max_slippage_percent') * 100)));
 
         return [
@@ -49,7 +45,7 @@ class SolanaSwapQuoteRequest extends FormRequest
                     }
                 },
             ],
-            'amount' => ['required', 'integer', 'min:1', 'max:'.$maximumLamports],
+            'amount' => ['required', 'integer', 'min:1', 'max:'.$limits->maximumLamports()],
             'slippage_bps' => ['required', 'integer', 'min:1', 'max:'.$maximumSlippageBps],
         ];
     }
