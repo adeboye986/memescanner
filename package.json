@@ -15,5 +15,11 @@
     },
     "optionalDependencies": {
         "@laravel/multiplex": "^0.4.1"
+    },
+    "dependencies": {
+        "@solana/addresses": "8.2.0",
+        "@solana/keys": "8.2.0",
+        "@solana/transaction-messages": "8.2.0",
+        "@solana/transactions": "8.2.0"
     }
 }

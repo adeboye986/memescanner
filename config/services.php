@@ -53,6 +53,8 @@ return [
         ),
         'metadata_cache_store' => env('OPERATIONS_CACHE_STORE', 'file'),
         'token_metadata_cache_seconds' => env('SOLANA_TOKEN_METADATA_CACHE_SECONDS', 86400),
+        'transaction_validator_node' => env('SOLANA_TRANSACTION_VALIDATOR_NODE', 'node'),
+        'transaction_validator_timeout_seconds' => env('SOLANA_TRANSACTION_VALIDATOR_TIMEOUT_SECONDS', 5),
     ],
 
     'coingecko' => [
@@ -96,6 +98,16 @@ return [
         'queue_memory' => env('QUEUE_DRAIN_MEMORY', 128),
         'queue_job_timeout' => env('QUEUE_JOB_TIMEOUT', 600),
         'fast_tracker_stale_seconds' => env('FAST_TRACKER_STALE_SECONDS', 75),
+    ],
+
+    'solana_transaction_validator' => [
+        'driver' => env('SOLANA_TRANSACTION_VALIDATOR_DRIVER', 'http'),
+        'url' => env('SOLANA_TRANSACTION_VALIDATOR_URL'),
+        'api_key' => env('SOLANA_TRANSACTION_VALIDATOR_API_KEY'),
+        'timeout_seconds' => env(
+            'SOLANA_TRANSACTION_VALIDATOR_TIMEOUT_SECONDS',
+            5
+        ),
     ],
 
 ];
