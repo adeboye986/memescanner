@@ -175,16 +175,20 @@ class TrackPaperPositions extends Command
             ?? $dex['price']
             ?? null;
         $liquidity = $dex['liquidity_usd'] ?? null;
+        $entryMc = (float) $position->entry_market_cap;
+        $entryPrice = (float) ($position->entry_price ?? 0);
 
-        if ($marketCap <= 0 || $position->entry_market_cap <= 0) {
+        if ($marketCap <= 0 && (float) $price > 0 && $entryPrice > 0 && $entryMc > 0) {
+            $marketCap = $entryMc * ((float) $price / $entryPrice);
+        }
+
+        if ($marketCap <= 0 || $entryMc <= 0) {
             $this->warn(
-                "PAPER TRACK SKIP: {$position->symbol} | invalid market cap"
+                "PAPER TRACK SKIP: {$position->symbol} | invalid market cap and no price fallback"
             );
 
             return;
         }
-
-        $entryMc = (float) $position->entry_market_cap;
         $multiple = $marketCap / $entryMc;
         $returnPercent = ($multiple - 1) * 100;
 
