@@ -226,6 +226,42 @@ class PaperTrackerStrategyTest extends TestCase
         }
     }
 
+    public function test_missing_market_cap_uses_price_ratio_and_applies_stop_loss_once(): void
+    {
+        $wallet = $this->createWallet(Chain::Ethereum);
+        $position = $this->createPosition(Chain::Ethereum, '0xprice-fallback');
+        $position->update(['entry_price' => 0.00001]);
+        $http = new Factory;
+        Http::swap($http);
+        Http::fake([
+            'api.dexscreener.com/tokens/v1/ethereum/*' => Http::response([[
+                ...$this->pairFor($position, 1),
+                'priceUsd' => '0.000000001',
+                'marketCap' => null,
+                'fdv' => null,
+                'liquidity' => ['usd' => 0.37],
+            ]]),
+        ]);
+
+        $this->artisan('tokens:paper-track')->assertSuccessful();
+
+        $fresh = $position->fresh();
+        $event = $fresh->exit_events[0];
+        $this->assertSame('closed', $fresh->status);
+        $this->assertSame('stop_loss', $event['type']);
+        $this->assertEqualsWithDelta(10, $fresh->last_market_cap, 0.000001);
+        $this->assertEqualsWithDelta(0.000000001, $fresh->last_price, 0.000000000001);
+        $this->assertNotNull($fresh->last_checked_at);
+        $this->assertEqualsWithDelta(0.00001, $fresh->realized_sol, 0.000001);
+        $this->assertEqualsWithDelta(-0.09999, $fresh->trade_pnl_sol, 0.000001);
+        $this->assertEqualsWithDelta(4.90001, $wallet->fresh()->available_balance_sol, 0.000001);
+
+        $this->artisan('tokens:paper-track')->assertSuccessful();
+
+        $this->assertCount(1, $position->fresh()->exit_events);
+        $this->assertEqualsWithDelta(4.90001, $wallet->fresh()->available_balance_sol, 0.000001);
+    }
+
     public function test_periodic_snapshots_are_throttled_but_exit_snapshot_is_immediate(): void
     {
         config()->set('services.trading.paper_tracker_snapshot_seconds', 10);
