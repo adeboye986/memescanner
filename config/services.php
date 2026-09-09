@@ -65,6 +65,10 @@ return [
 
     'jupiter' => [
         'base_url' => env('JUPITER_BASE_URL', 'https://api.jup.ag/swap/v1'),
+        'swap_v2_base_url' => env(
+            'JUPITER_SWAP_V2_BASE_URL',
+            'https://api.jup.ag/swap/v2'
+        ),
         'api_key' => env('JUPITER_API_KEY'),
     ],
 
