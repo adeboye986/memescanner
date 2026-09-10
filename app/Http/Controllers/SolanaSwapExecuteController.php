@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\SolanaSwapAttempt;
 use App\Services\JupiterSwapExecutionService;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -55,6 +56,8 @@ class SolanaSwapExecuteController extends Controller
                 'provider_error_code' => $result['error_code'],
                 'provider_error_message' => $result['error_message'],
             ]);
+        } catch (ModelNotFoundException) {
+            abort(404);
         } catch (RuntimeException $exception) {
             return response()->json(['message' => $exception->getMessage()], 422);
         }
