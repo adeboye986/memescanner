@@ -17,6 +17,8 @@ use App\Http\Controllers\PaperTradingDashboardController;
 use App\Http\Controllers\PasswordResetLinkController;
 use App\Http\Controllers\RegisteredUserController;
 use App\Http\Controllers\SettingsController;
+use App\Http\Controllers\SolanaSwapExecuteController;
+use App\Http\Controllers\SolanaSwapOrderController;
 use App\Http\Controllers\SolanaSwapQuoteController;
 use App\Http\Controllers\SolanaWalletConnectionController;
 use App\Http\Controllers\SystemActivityController;
@@ -74,6 +76,14 @@ Route::middleware(['auth', 'customer.verified'])
         Route::post('/quote', SolanaSwapQuoteController::class)
             ->middleware('throttle:30,1')
             ->name('quote');
+
+        Route::post('/order', SolanaSwapOrderController::class)
+            ->middleware('throttle:10,1')
+            ->name('order');
+
+        Route::post('/execute', SolanaSwapExecuteController::class)
+            ->middleware('throttle:10,1')
+            ->name('execute');
     });
 
 Route::middleware('guest')->group(function (): void {

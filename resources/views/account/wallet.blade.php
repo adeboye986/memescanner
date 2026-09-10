@@ -5,7 +5,9 @@
         data-verify-url="{{ route('wallets.solana.verify') }}"
         data-disconnect-url="{{ route('wallets.solana.disconnect') }}"
         data-balance-url="{{ route('wallets.solana.balance') }}"
-        data-quote-url="{{ route('wallets.solana.quote') }}">
+        data-quote-url="{{ route('wallets.solana.quote') }}"
+        data-order-url="{{ route('wallets.solana.order') }}"
+        data-execute-url="{{ route('wallets.solana.execute') }}">
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div><p class="text-xs font-semibold uppercase tracking-widest text-sky-400">Solana · Non-custodial</p><h2 id="wallet-heading" class="mt-2 text-xl font-semibold text-white">Connect Wallet</h2></div>
         <span data-wallet-status class="rounded-lg border border-slate-700 px-3 py-1 text-sm text-slate-200">{{ $connectedWallet ? 'Connected / Verified' : 'Not connected' }}</span>
@@ -46,7 +48,7 @@
                 <label class="text-sm text-slate-300">Slippage %<input data-quote-slippage inputmode="decimal" value="1.00" required class="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"></label>
             </div>
             <button type="submit" data-wallet-quote-submit class="rounded-lg border border-sky-400/40 px-4 py-2 text-sm font-semibold text-sky-300 disabled:opacity-50">Get quote</button>
-            <p class="text-xs text-amber-200">Quote only — no transaction has been created or signed.</p>
+            <p class="text-xs text-amber-200">Getting a quote does not create or sign a transaction. A separate confirmation always opens your wallet for final review.</p>
             <dl data-wallet-quote-preview hidden class="grid gap-3 rounded-xl border border-slate-700 bg-slate-950/60 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
                 <div><dt class="text-slate-500">Spend</dt><dd data-quote-preview-spend class="mt-1 text-white"></dd></div>
                 <div><dt class="text-slate-500">Spend value</dt><dd data-quote-preview-usd class="mt-1 text-white"></dd></div>
@@ -57,6 +59,10 @@
                 <div><dt class="text-slate-500">Route</dt><dd data-quote-preview-route class="mt-1 text-white"></dd></div>
                 <div><dt class="text-slate-500">Provider fees</dt><dd data-quote-preview-fees class="mt-1 text-white"></dd></div>
             </dl>
+            <div class="flex flex-wrap items-center gap-3">
+                <button type="button" data-wallet-swap-confirm hidden class="rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Confirm swap in wallet</button>
+                <p class="text-xs text-slate-400">Your private key stays inside Phantom or Solflare. The signed transaction is independently checked before submission.</p>
+            </div>
         </form>
     </div>
     @if($user->hasVerifiedEmail() || $user->is_admin)

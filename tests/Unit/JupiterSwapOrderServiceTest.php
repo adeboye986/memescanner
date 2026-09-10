@@ -11,6 +11,26 @@ use Tests\TestCase;
 
 class JupiterSwapOrderServiceTest extends TestCase
 {
+    public function test_success_response_with_empty_transaction_reports_insufficient_funds(): void
+    {
+        config(['services.jupiter.swap_v2_base_url' => 'https://api.jup.ag/swap/v2']);
+        Http::fake(['https://api.jup.ag/swap/v2/order*' => Http::response([
+            'transaction' => '',
+            'requestId' => 'request-empty',
+            'error' => 'Insufficient funds',
+            'errorMessage' => 'Insufficient funds',
+        ])]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Insufficient funds.');
+
+        app(JupiterSwapOrderService::class)->prepare(
+            self::WALLET,
+            self::OUTPUT_MINT,
+            '1000000',
+            100,
+        );
+    }
     private const WALLET = '6Z7KvfSvatJqaj5kKB53TzZDxMJB8w3e2k2qz6qfYCvP';
 
     private const OUTPUT_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
