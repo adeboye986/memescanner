@@ -116,14 +116,14 @@ export async function sendEthereumSwap(wallet, post, payload) {
         || !/^\d+$/.test(transaction.gas) || !/^\d+$/.test(transaction.gasPrice)) {
         throw new Error('The server returned an invalid Ethereum transaction.');
     }
-    const hash = await wallet.request({ method: 'eth_sendTransaction', params: [[{
+    const hash = await wallet.request({ method: 'eth_sendTransaction', params: [{
         from: transaction.from,
         to: transaction.to,
         data: transaction.data,
         value: toQuantity(BigInt(transaction.value)),
         gas: toQuantity(BigInt(transaction.gas)),
         gasPrice: toQuantity(BigInt(transaction.gasPrice)),
-    }]] });
+    }], });
     if (typeof hash !== 'string' || !/^0x[a-fA-F0-9]{64}$/.test(hash)) throw new Error('The wallet returned an invalid transaction hash.');
 
     return post('submitted', { attempt_id: order.order.attempt_id, transaction_hash: hash });

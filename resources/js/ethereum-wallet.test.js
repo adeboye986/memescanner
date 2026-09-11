@@ -80,9 +80,9 @@ test('requests a firm order only after the active account and network still matc
         methods.push(method);
         if (method === 'eth_accounts') return [address];
         if (method === 'eth_chainId') return '0x1';
-        assert.deepEqual(params, [[{
+        assert.deepEqual(params, [{
             from: address, to: destination, data: '0x1234', value: '0xde0b6b3a7640000', gas: '0x5208', gasPrice: '0x3b9aca00',
-        }]]);
+        }]);
         return hash;
     } };
     const payload = { wallet_address: address, buy_token: destination, sell_amount_wei: '1000000000000000000', slippage_bps: 100 };
