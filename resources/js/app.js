@@ -1,6 +1,8 @@
 import { mountWalletCard } from './solana-wallet';
+import { mountEthereumWalletCard } from './ethereum-wallet';
 
 mountWalletCard(document.querySelector('#solana-wallet'));
+mountEthereumWalletCard(document.querySelector('#ethereum-wallet'));
 
 const closeModal = document.querySelector('#close-position-modal');
 const closeForm = document.querySelector('#close-position-form');

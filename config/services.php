@@ -57,6 +57,16 @@ return [
         'transaction_validator_timeout_seconds' => env('SOLANA_TRANSACTION_VALIDATOR_TIMEOUT_SECONDS', 5),
     ],
 
+    'ethereum' => [
+        'rpc_url' => env('ETHEREUM_RPC_URL'),
+        'chain_id' => 1,
+    ],
+
+    'zero_x' => [
+        'base_url' => env('ZERO_X_BASE_URL', 'https://api.0x.org'),
+        'api_key' => env('ZERO_X_API_KEY'),
+    ],
+
     'coingecko' => [
         'base_url' => env('COINGECKO_BASE_URL', 'https://api.coingecko.com/api/v3'),
         'api_key' => env('COINGECKO_API_KEY'),

@@ -5,11 +5,41 @@ import { getAddressFromPublicKey } from '@solana/addresses';
 import { generateKeyPair } from '@solana/keys';
 import { getCompiledTransactionMessageEncoder } from '@solana/transaction-messages';
 import { getTransactionEncoder, partiallySignTransaction } from '@solana/transactions';
+import { Wallet } from 'ethers';
 import {
     compareSigned,
     inspectPrepared,
     validateRequest,
+    verifyEthereumSignature,
 } from '../../scripts/solana-transaction-validator.mjs';
+
+test('Ethereum personal signature recovers the expected wallet', async () => {
+    const wallet = Wallet.createRandom();
+    const message = 'MemeScanner Ethereum ownership challenge';
+    const signature = await wallet.signMessage(message);
+
+    assert.deepEqual(verifyEthereumSignature({
+        message,
+        signature,
+        expected_wallet: wallet.address,
+    }), {
+        valid: true,
+        recovered_address: wallet.address.toLowerCase(),
+    });
+});
+
+test('Ethereum signature for another wallet is rejected', async () => {
+    const wallet = Wallet.createRandom();
+    const stranger = Wallet.createRandom();
+    const result = await validateRequest({
+        operation: 'verify_ethereum_signature',
+        message: 'Exact ownership message',
+        signature: await stranger.signMessage('Exact ownership message'),
+        expected_wallet: wallet.address,
+    });
+
+    assert.deepEqual(result, { valid: false, error_code: 'ethereum_signature_mismatch' });
+});
 
 async function generatedIdentity() {
     const keyPair = await generateKeyPair();

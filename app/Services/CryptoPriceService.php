@@ -72,6 +72,48 @@ class CryptoPriceService
         return $this->formatRoundedDecimal($product, 9 + strlen($fraction), 2);
     }
 
+    public function ethUsdPrice(): string
+    {
+        try {
+            $request = Http::baseUrl(rtrim((string) config('services.coingecko.base_url'), '/'))
+                ->connectTimeout(3)->timeout(8)->acceptJson();
+            $apiKey = trim((string) config('services.coingecko.api_key'));
+            if ($apiKey !== '') {
+                $request = $request->withHeaders(['x-cg-demo-api-key' => $apiKey]);
+            }
+            $response = $request->get('/simple/price', [
+                    'ids' => 'ethereum',
+                    'vs_currencies' => 'usd',
+                    'include_last_updated_at' => 'true',
+                ]);
+        } catch (ConnectionException $exception) {
+            throw new RuntimeException('ETH market price is temporarily unavailable.', previous: $exception);
+        }
+
+        $lastUpdatedAt = $response->json('ethereum.last_updated_at');
+        $now = now()->timestamp;
+        $maximumAge = max(1, (int) config('services.coingecko.max_price_age_seconds', 120));
+        if (! $response->successful() || ! is_int($lastUpdatedAt) || $lastUpdatedAt <= 0
+            || $lastUpdatedAt > $now + self::MAX_FUTURE_CLOCK_SKEW_SECONDS
+            || $now - $lastUpdatedAt > $maximumAge) {
+            throw new RuntimeException('ETH market price provider returned invalid data.');
+        }
+
+        return $this->normalizePositiveDecimal($response->json('ethereum.usd'));
+    }
+
+    public function usdForWei(string $wei, string $ethUsdPrice): string
+    {
+        if (preg_match('/^\d+$/', $wei) !== 1) {
+            throw new RuntimeException('Wallet balance is invalid.');
+        }
+        $price = $this->normalizePositiveDecimal($ethUsdPrice);
+        [$whole, $fraction] = array_pad(explode('.', $price, 2), 2, '');
+        $product = $this->multiplyUnsignedIntegers($wei, ltrim($whole.$fraction, '0') ?: '0');
+
+        return $this->formatRoundedDecimal($product, 18 + strlen($fraction), 2);
+    }
+
     private function normalizePositiveDecimal(mixed $value): string
     {
         if (! is_int($value) && ! is_float($value) && ! is_string($value)) {

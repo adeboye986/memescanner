@@ -58,6 +58,11 @@ class User extends Authenticatable implements MustVerifyEmailContract
         return $this->hasMany(SolanaSwapAttempt::class);
     }
 
+    public function ethereumSwapAttempts(): HasMany
+    {
+        return $this->hasMany(EthereumSwapAttempt::class);
+    }
+
     public function walletConnectionChallenges(): HasMany
     {
         return $this->hasMany(WalletConnectionChallenge::class);
