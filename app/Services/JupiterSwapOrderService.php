@@ -84,6 +84,11 @@ class JupiterSwapOrderService
         $transaction = data_get($data, 'transaction');
         $requestId = data_get($data, 'requestId');
 
+        if (($data['error'] ?? null) === 'Insufficient funds'
+            || ($data['errorMessage'] ?? null) === 'Insufficient funds') {
+            throw new RuntimeException('Insufficient funds.');
+        }
+
         if (! is_string($transaction)
             || $transaction === ''
             || ! $this->isCanonicalBase64($transaction)

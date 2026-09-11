@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Chain;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class ConnectedWallet extends Model
 {
@@ -32,6 +33,11 @@ class ConnectedWallet extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function solanaSwapAttempts(): HasMany
+    {
+        return $this->hasMany(SolanaSwapAttempt::class);
     }
 
     public static function addressHash(Chain|string $chain, string $address): string

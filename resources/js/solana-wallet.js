@@ -1,3 +1,5 @@
+import { VersionedTransaction } from '@solana/web3.js';
+
 export function detectWallets(browser) {
     const candidates = [browser.phantom?.solana, browser.solflare, browser.solana];
     return [...new Set(candidates.filter(Boolean))]
@@ -123,6 +125,61 @@ export async function fetchSwapQuote(post, payload) {
     return quote;
 }
 
+export async function signAndExecuteSwap(wallet, post, payload, progress = () => {}) {
+    if (!wallet || typeof wallet.signTransaction !== 'function') {
+        throw new Error('Unlock Phantom or Solflare before confirming this swap.');
+    }
+
+    progress('Preparing and independently validating the transaction…');
+    const prepared = await post('order', payload);
+    if (!Number.isInteger(prepared.order?.attempt_id)
+        || typeof prepared.order?.transaction !== 'string'
+        || !Number.isFinite(Date.parse(prepared.order?.expires_at))) {
+        throw new Error('The server returned an invalid swap order.');
+    }
+    if (Date.parse(prepared.order.expires_at) <= Date.now()) {
+        throw new Error('The prepared swap order expired. Request a fresh quote.');
+    }
+
+    let transaction;
+    try {
+        transaction = VersionedTransaction.deserialize(base64ToBytes(prepared.order.transaction));
+    } catch {
+        throw new Error('The prepared swap transaction could not be decoded safely.');
+    }
+
+    progress('Review and approve the exact swap in your wallet…');
+    const signed = await wallet.signTransaction(transaction);
+    if (!(signed instanceof VersionedTransaction)) {
+        throw new Error('The wallet returned an unsupported signed transaction.');
+    }
+
+    progress('Validating the wallet signature before submission…');
+    const result = await post('execute', {
+        attempt_id: prepared.order.attempt_id,
+        signed_transaction: bytesToBase64(signed.serialize()),
+    });
+
+    if (!['submitted', 'failed'].includes(result.swap?.status)) {
+        throw new Error('The server returned an invalid swap result.');
+    }
+
+    return result.swap;
+}
+
+export function base64ToBytes(value) {
+    const decoded = atob(value);
+    return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+}
+
+export function bytesToBase64(value) {
+    let binary = '';
+    for (let index = 0; index < value.length; index += 0x8000) {
+        binary += String.fromCharCode(...value.subarray(index, index + 0x8000));
+    }
+    return btoa(binary);
+}
+
 export function formatBaseUnits(amount, decimals) {
     if (!Number.isInteger(decimals)) return `${amount} base units`;
     if (decimals === 0) return amount;
@@ -205,6 +262,8 @@ export function mountWalletCard(card) {
     let quoteSpendEdited = false;
     let currentBalanceLamports = null;
     let currentMaximumLamports = null;
+    let activeWallet = null;
+    let quotedPayload = null;
     const post = async (step, payload) => {
         const response = await fetch(card.dataset[`${step}Url`], {
             method: 'POST', credentials: 'same-origin', redirect: 'error',
@@ -215,7 +274,7 @@ export function mountWalletCard(card) {
         if (response.status === 429) throw new Error('Too many attempts. Please wait a minute and try again.');
         if (response.status >= 500) throw new Error('The server is temporarily unavailable. Please try again later.');
         const data = await response.json();
-        if (!response.ok) throw new Error(response.status === 422 ? Object.values(data.errors ?? {}).flat()[0] ?? 'Verification failed. Please start again.' : 'Verification is unavailable. Check your account and email verification.');
+        if (!response.ok) throw new Error(response.status === 422 ? Object.values(data.errors ?? {}).flat()[0] ?? data.message ?? 'Request failed. Please try again.' : 'The requested service is unavailable.');
         return data;
     };
     const get = async (step) => {
@@ -282,7 +341,14 @@ export function mountWalletCard(card) {
     };
 
     balanceRefresh?.addEventListener('click', loadBalance);
-    quoteSpend?.addEventListener('input', () => { quoteSpendEdited = true; });
+    const invalidateQuote = () => {
+        quotedPayload = null;
+        const confirm = card.querySelector('[data-wallet-swap-confirm]');
+        if (confirm) confirm.hidden = true;
+    };
+    quoteSpend?.addEventListener('input', () => { quoteSpendEdited = true; invalidateQuote(); });
+    card.querySelector('[data-quote-output-mint]')?.addEventListener('input', invalidateQuote);
+    card.querySelector('[data-quote-slippage]')?.addEventListener('input', invalidateQuote);
     const run = async (selected) => {
         if (busy) return;
         busy = true;
@@ -291,6 +357,7 @@ export function mountWalletCard(card) {
         card.setAttribute('aria-busy', 'true');
         try {
             const verified = await verifyWallet(selected, post, say);
+            activeWallet = selected.wallet;
             card.querySelector('[data-wallet-status]').textContent = 'Connected / Verified';
             card.querySelector('[data-wallet-empty]').hidden = true;
             card.querySelector('[data-wallet-details]').hidden = false;
@@ -304,7 +371,7 @@ export function mountWalletCard(card) {
             balanceRefresh.hidden = false;
             quoteSpendEdited = false;
             await loadBalance();
-            say('Wallet ownership verified. Live trading remains disabled.');
+            say('Wallet ownership verified. Confirm-first swaps are ready; every transaction still requires your wallet approval.');
         } catch (error) {
             const rejected = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
             say(rejected ? 'Wallet request cancelled. Nothing was verified in this attempt. You can try again.' : error instanceof TypeError || error?.name === 'TimeoutError' ? 'Connection interrupted. Reload your account to check verification status, then try again.' : error?.message || 'Could not connect this wallet. Please try again.');
@@ -385,6 +452,8 @@ export function mountWalletCard(card) {
 
             currentBalanceLamports = null;
             currentMaximumLamports = null;
+            activeWallet = null;
+            quotedPayload = null;
             quoteSpendEdited = false;
             say('Wallet disconnected from this account. No funds were moved and your wallet extension remains connected independently.');
         } catch (error) {
@@ -411,12 +480,13 @@ export function mountWalletCard(card) {
             const slippageValue = card.querySelector('[data-quote-slippage]').value.trim();
             if (!/^\d+(?:\.\d{1,2})?$/.test(slippageValue)) throw new Error('Enter slippage as a percentage with no more than 2 decimal places.');
             const slippageBps = Math.round(Number(slippageValue) * 100);
-            const quote = await fetchSwapQuote(post, {
+            const payload = {
                 input_mint: 'So11111111111111111111111111111111111111112',
                 output_mint: card.querySelector('[data-quote-output-mint]').value.trim(),
                 amount,
                 slippage_bps: slippageBps,
-            });
+            };
+            const quote = await fetchSwapQuote(post, payload);
             const presentation = quotePresentation(quote);
             card.querySelector('[data-quote-preview-spend]').textContent = presentation.spend;
             card.querySelector('[data-quote-preview-usd]').textContent = presentation.spendUsd;
@@ -427,11 +497,39 @@ export function mountWalletCard(card) {
             card.querySelector('[data-quote-preview-route]').textContent = presentation.route;
             card.querySelector('[data-quote-preview-fees]').textContent = presentation.fees;
             preview.hidden = false;
-            say('Quote refreshed. No transaction was created or signed.');
+            quotedPayload = payload;
+            card.querySelector('[data-wallet-swap-confirm]').hidden = false;
+            say('Quote refreshed. Review it carefully, then confirm in your wallet when ready.');
         } catch (error) {
             say(error?.message || 'Could not retrieve a swap quote.');
         } finally {
             submit.disabled = false;
+        }
+    });
+
+    card.querySelector('[data-wallet-swap-confirm]')?.addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        if (busy) return;
+        busy = true;
+        button.disabled = true;
+        try {
+            const detected = detectWallets(window);
+            const wallet = activeWallet ?? detected[0]?.wallet;
+            if (!quotedPayload) throw new Error('Request and review a fresh quote before confirming.');
+            validateQuoteSpend(quotedPayload.amount, currentBalanceLamports, currentMaximumLamports);
+            const result = await signAndExecuteSwap(wallet, post, quotedPayload, say);
+            say(result.status === 'submitted'
+                ? `Swap submitted successfully. Signature: ${result.signature}`
+                : `Swap was not completed: ${result.error_message || result.error_code || 'provider rejected the transaction'}.`);
+            button.hidden = true;
+            quotedPayload = null;
+            await loadBalance();
+        } catch (error) {
+            const rejected = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
+            say(rejected ? 'Swap cancelled in your wallet. Nothing was submitted.' : error?.message || 'Could not complete the swap.');
+        } finally {
+            busy = false;
+            button.disabled = false;
         }
     });
 }

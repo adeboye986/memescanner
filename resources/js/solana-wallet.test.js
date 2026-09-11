@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import {
     detectWallets,
     disconnectWallet,
@@ -9,9 +10,62 @@ import {
     formatBaseUnits,
     quotePresentation,
     solToLamports,
+    signAndExecuteSwap,
     validateQuoteSpend,
     verifyWallet,
 } from './solana-wallet.js';
+
+test('confirm-first swap prepares, wallet-signs, then submits exact serialized transaction', async () => {
+    const signer = Keypair.generate();
+    const transaction = new VersionedTransaction(new TransactionMessage({
+        payerKey: signer.publicKey,
+        recentBlockhash: Keypair.generate().publicKey.toBase58(),
+        instructions: [],
+    }).compileToV0Message());
+    const prepared = Buffer.from(transaction.serialize()).toString('base64');
+    const calls = [];
+
+    const result = await signAndExecuteSwap({
+        signTransaction: async (candidate) => {
+            candidate.sign([signer]);
+            return candidate;
+        },
+    }, async (step, payload) => {
+        calls.push(step);
+        if (step === 'order') {
+            assert.equal(payload.amount, '1000000');
+            return { order: { attempt_id: 7, transaction: prepared, expires_at: new Date(Date.now() + 60000).toISOString() } };
+        }
+        assert.equal(payload.attempt_id, 7);
+        assert.notEqual(payload.signed_transaction, prepared);
+        return { swap: { status: 'submitted', signature: 'chain-signature' } };
+    }, {
+        amount: '1000000',
+    }, () => {});
+
+    assert.deepEqual(calls, ['order', 'execute']);
+    assert.equal(result.signature, 'chain-signature');
+});
+
+test('wallet rejection never submits a prepared swap', async () => {
+    const signer = Keypair.generate();
+    const transaction = new VersionedTransaction(new TransactionMessage({
+        payerKey: signer.publicKey,
+        recentBlockhash: Keypair.generate().publicKey.toBase58(),
+        instructions: [],
+    }).compileToV0Message());
+    let calls = 0;
+
+    await assert.rejects(signAndExecuteSwap({ signTransaction: async () => { throw new Error('User rejected'); } }, async (step) => {
+        calls += 1;
+        assert.equal(step, 'order');
+        return { order: { attempt_id: 8, transaction: Buffer.from(transaction.serialize()).toString('base64'), expires_at: new Date(Date.now() + 60000).toISOString() } };
+    }, {
+        amount: '1000000',
+    }), /rejected/);
+
+    assert.equal(calls, 1);
+});
 
 const fixture = () => {
     const wallet = { publicKey: 'address-a', connect: async () => {}, signMessage: async () => new Uint8Array(64) };
