@@ -40,6 +40,11 @@ class ConnectedWallet extends Model
         return $this->hasMany(SolanaSwapAttempt::class);
     }
 
+    public function ethereumSwapAttempts(): HasMany
+    {
+        return $this->hasMany(EthereumSwapAttempt::class);
+    }
+
     public static function addressHash(Chain|string $chain, string $address): string
     {
         $resolvedChain = $chain instanceof Chain

@@ -3,6 +3,7 @@ import { assertIsSignatureBytes, verifySignature } from '@solana/keys';
 import { getCompiledTransactionMessageDecoder } from '@solana/transaction-messages';
 import { getTransactionDecoder } from '@solana/transactions';
 import { createHash } from 'node:crypto';
+import { getAddress, verifyMessage } from 'ethers';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
@@ -142,10 +143,38 @@ export async function compareSigned(input) {
     return safeMetadata(signed, signedMetadata, expectedWallet);
 }
 
+export function verifyEthereumSignature(input) {
+    if (typeof input?.message !== 'string' || input.message.length === 0 || input.message.length > 4096) {
+        throw new ValidationFailure('invalid_ethereum_message');
+    }
+    if (typeof input?.signature !== 'string' || !/^0x[a-fA-F0-9]{130}$/.test(input.signature)) {
+        throw new ValidationFailure('invalid_ethereum_signature');
+    }
+
+    let expectedWallet;
+    let recoveredWallet;
+    try {
+        expectedWallet = getAddress(input.expected_wallet);
+        recoveredWallet = verifyMessage(input.message, input.signature);
+    } catch {
+        throw new ValidationFailure('invalid_ethereum_signature');
+    }
+
+    if (recoveredWallet !== expectedWallet) {
+        throw new ValidationFailure('ethereum_signature_mismatch');
+    }
+
+    return {
+        valid: true,
+        recovered_address: recoveredWallet.toLowerCase(),
+    };
+}
+
 export async function validateRequest(request) {
     try {
         if (request?.operation === 'inspect_prepared') return inspectPrepared(request);
         if (request?.operation === 'compare_signed') return await compareSigned(request);
+        if (request?.operation === 'verify_ethereum_signature') return verifyEthereumSignature(request);
         throw new ValidationFailure('unsupported_operation');
     } catch (error) {
         return { valid: false, error_code: error instanceof ValidationFailure ? error.code : 'validator_failure' };

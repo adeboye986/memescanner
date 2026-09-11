@@ -16,6 +16,9 @@ class AccountSettingsController extends Controller
             'connectedWallet' => $request->user()->connectedWallets()
                 ->where('chain', 'solana')->whereNotNull('verified_at')
                 ->whereNull('disconnected_at')->first(),
+            'ethereumWallet' => $request->user()->connectedWallets()
+                ->where('chain', 'ethereum')->whereNotNull('verified_at')
+                ->whereNull('disconnected_at')->first(),
         ]);
     }
 

@@ -7,6 +7,8 @@ use App\Http\Controllers\ClosePaperTradeController;
 use App\Http\Controllers\DashboardActionController;
 use App\Http\Controllers\EmailVerificationNotificationController;
 use App\Http\Controllers\EmailVerificationPromptController;
+use App\Http\Controllers\EthereumWalletConnectionController;
+use App\Http\Controllers\EthereumSwapController;
 use App\Http\Controllers\IgnoreOpportunityController;
 use App\Http\Controllers\LoginController;
 use App\Http\Controllers\NewPasswordController;
@@ -84,6 +86,19 @@ Route::middleware(['auth', 'customer.verified'])
         Route::post('/execute', SolanaSwapExecuteController::class)
             ->middleware('throttle:10,1')
             ->name('execute');
+    });
+
+Route::middleware(['auth', 'customer.verified'])
+    ->prefix('wallets/ethereum')
+    ->name('wallets.ethereum.')
+    ->group(function (): void {
+        Route::post('/challenge', [EthereumWalletConnectionController::class, 'challenge'])->middleware('throttle:10,1')->name('challenge');
+        Route::post('/verify', [EthereumWalletConnectionController::class, 'verify'])->middleware('throttle:10,1')->name('verify');
+        Route::post('/disconnect', [EthereumWalletConnectionController::class, 'disconnect'])->middleware('throttle:10,1')->name('disconnect');
+        Route::get('/balance', [EthereumWalletConnectionController::class, 'balance'])->middleware('throttle:30,1')->name('balance');
+        Route::post('/price', [EthereumSwapController::class, 'price'])->middleware('throttle:30,1')->name('price');
+        Route::post('/order', [EthereumSwapController::class, 'order'])->middleware('throttle:10,1')->name('order');
+        Route::post('/submitted', [EthereumSwapController::class, 'submitted'])->middleware('throttle:10,1')->name('submitted');
     });
 
 Route::middleware('guest')->group(function (): void {
