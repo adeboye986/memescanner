@@ -19,6 +19,10 @@ Schedule::call(fn () => app(OperationalHealthService::class)->recordSchedulerRun
     ->name('operations.scheduler-heartbeat')
     ->everyMinute();
 
+Schedule::command('ethereum:expire-prepared-swaps')
+    ->everyMinute()
+    ->withoutOverlapping();
+
 $paperTrackActivity = null;
 
 Schedule::command('tokens:paper-track')
