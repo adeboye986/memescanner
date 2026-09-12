@@ -5,8 +5,10 @@ namespace App\Http\Controllers;
 use App\Chain;
 use App\Http\Requests\EthereumSwapRequest;
 use App\Models\EthereumSwapAttempt;
+use App\Services\CryptoPriceService;
 use App\Services\EthereumQuoteLimitService;
 use App\Services\EthereumService;
+use App\Services\TokenAmountFormatter;
 use App\Services\ZeroXSwapService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
@@ -16,7 +18,7 @@ use RuntimeException;
 
 class EthereumSwapController extends Controller
 {
-    public function price(EthereumSwapRequest $request, ZeroXSwapService $swaps, EthereumService $ethereum, EthereumQuoteLimitService $limits): JsonResponse
+    public function price(EthereumSwapRequest $request, ZeroXSwapService $swaps, EthereumService $ethereum, EthereumQuoteLimitService $limits, CryptoPriceService $prices, TokenAmountFormatter $amounts): JsonResponse
     {
         $wallet = $this->wallet($request);
         if (! $wallet) {
@@ -35,6 +37,29 @@ class EthereumSwapController extends Controller
             $price = $swaps->price($wallet->address, $request->validated('buy_token'), $request->validated('sell_amount_wei'), (int) $request->validated('slippage_bps'));
         } catch (RuntimeException) {
             return response()->json(['message' => 'Unable to retrieve an Ethereum swap price right now.'], 503);
+        }
+
+        $networkFeeWei = $price['network_fee_wei'] ?? null;
+
+        if (is_string($networkFeeWei) && preg_match('/^\d+$/', $networkFeeWei) === 1) {
+            $price['network_fee'] = [
+                'wei' => $networkFeeWei,
+                'eth' => $amounts->format($networkFeeWei, 18),
+                'usd' => null,
+            ];
+
+            try {
+                $ethUsdPrice = $prices->ethUsdPrice();
+
+                $price['network_fee']['usd'] = $prices->usdForWei(
+                    $networkFeeWei,
+                    $ethUsdPrice,
+                );
+            } catch (RuntimeException) {
+                // USD is display enrichment only. Keep the valid swap price usable.
+            }
+        } else {
+            $price['network_fee'] = null;
         }
 
         return response()->json(['price' => $price]);
@@ -75,7 +100,7 @@ class EthereumSwapController extends Controller
             'slippage_bps' => $request->validated('slippage_bps'),
             'quote_id' => $quote['quote_id'],
             'transaction_payload' => $quote['transaction'],
-            'status' => 'authorized',
+            'status' => 'prepared',
             'expires_at' => now()->addMinute(),
         ]);
 
@@ -96,10 +121,21 @@ class EthereumSwapController extends Controller
             $attempt = DB::transaction(function () use ($request, $validated): EthereumSwapAttempt {
                 $attempt = EthereumSwapAttempt::query()->whereKey($validated['attempt_id'])
                     ->where('user_id', $request->user()->id)->lockForUpdate()->firstOrFail();
-                if ($attempt->status !== 'authorized' || $attempt->expires_at->isPast()) {
-                    throw new RuntimeException('This Ethereum swap order expired or was already reported.');
+                if ($attempt->status !== 'prepared') {
+                    throw new RuntimeException('This Ethereum swap order is no longer available for submission.');
                 }
-                $attempt->update(['status' => 'reported', 'transaction_hash' => strtolower($validated['transaction_hash']), 'submitted_at' => now()]);
+
+                if ($attempt->expires_at->isPast()) {
+                    $attempt->update(['status' => 'expired']);
+
+                    return $attempt;
+                }
+
+                $attempt->update([
+                    'status' => 'submitted',
+                    'transaction_hash' => strtolower($validated['transaction_hash']),
+                    'submitted_at' => now(),
+                ]);
 
                 return $attempt;
             });
@@ -109,7 +145,59 @@ class EthereumSwapController extends Controller
             return response()->json(['message' => $exception->getMessage()], 422);
         }
 
-        return response()->json(['swap' => ['status' => $attempt->status, 'transaction_hash' => $attempt->transaction_hash]]);
+        if ($attempt->status === 'expired') {
+            return response()->json([
+                'message' => 'This Ethereum swap order has expired.',
+            ], 422);
+        }
+
+        return response()->json([
+            'swap' => [
+                'status' => $attempt->status,
+                'transaction_hash' => $attempt->transaction_hash,
+            ],
+        ]);
+    }
+
+    public function cancelled(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'attempt_id' => ['required', 'integer'],
+        ]);
+
+        try {
+            $attempt = DB::transaction(function () use ($request, $validated): EthereumSwapAttempt {
+                $attempt = EthereumSwapAttempt::query()
+                    ->whereKey($validated['attempt_id'])
+                    ->where('user_id', $request->user()->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                if ($attempt->status !== 'prepared') {
+                    throw new RuntimeException('This Ethereum swap order can no longer be cancelled.');
+                }
+
+                if ($attempt->expires_at->isPast()) {
+                    $attempt->update(['status' => 'expired']);
+
+                    return $attempt;
+                }
+
+                $attempt->update(['status' => 'cancelled']);
+
+                return $attempt;
+            });
+        } catch (ModelNotFoundException) {
+            abort(404);
+        } catch (RuntimeException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        return response()->json([
+            'swap' => [
+                'status' => $attempt->status,
+            ],
+        ]);
     }
 
     private function wallet(Request $request): mixed

@@ -30,6 +30,56 @@ class EthereumService
         return $this->hexToDecimal($hex);
     }
 
+    public function call(string $to, string $data): string
+    {
+        $rpcUrl = trim((string) config('services.ethereum.rpc_url'));
+
+        if (! str_starts_with($rpcUrl, 'https://')) {
+            throw new RuntimeException('Ethereum RPC is not configured securely.');
+        }
+
+        if (preg_match('/^0x[a-fA-F0-9]{40}$/', $to) !== 1) {
+            throw new RuntimeException('Ethereum contract address is invalid.');
+        }
+
+        if (preg_match('/^0x[a-fA-F0-9]*$/', $data) !== 1) {
+            throw new RuntimeException('Ethereum call data is invalid.');
+        }
+
+        try {
+            $response = Http::connectTimeout(3)
+                ->timeout(8)
+                ->acceptJson()
+                ->post($rpcUrl, [
+                    'jsonrpc' => '2.0',
+                    'id' => 1,
+                    'method' => 'eth_call',
+                    'params' => [
+                        [
+                            'to' => strtolower($to),
+                            'data' => strtolower($data),
+                        ],
+                        'latest',
+                    ],
+                ]);
+        } catch (ConnectionException $exception) {
+            throw new RuntimeException(
+                'Ethereum RPC is temporarily unavailable.',
+                previous: $exception,
+            );
+        }
+
+        $result = $response->json('result');
+
+        if (! $response->successful()
+            || ! is_string($result)
+            || preg_match('/^0x[a-fA-F0-9]*$/', $result) !== 1) {
+            throw new RuntimeException('Ethereum RPC returned an invalid contract call response.');
+        }
+
+        return strtolower($result);
+    }
+
     private function hexToDecimal(string $hex): string
     {
         $value = '0';

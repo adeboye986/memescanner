@@ -94,12 +94,70 @@ test('requests a firm order only after the active account and network still matc
             gas: '21000', gasPrice: '1000000000', chainId: '1',
         } } };
         assert.deepEqual(body, { attempt_id: 9, transaction_hash: hash });
-        return { swap: { status: 'reported', transaction_hash: hash } };
+        return { swap: { status: 'submitted', transaction_hash: hash } };
     }, payload);
 
     assert.equal(result.swap.transaction_hash, hash);
     assert.deepEqual(methods, ['eth_accounts', 'eth_chainId', 'eth_sendTransaction']);
     assert.deepEqual(posts, ['order', 'submitted']);
+});
+
+test('reports a prepared attempt as cancelled when the wallet rejects the transaction', async () => {
+    const address = '0x1111111111111111111111111111111111111111';
+    const destination = '0x2222222222222222222222222222222222222222';
+    const posts = [];
+
+    const wallet = {
+        request: async ({ method }) => {
+            if (method === 'eth_accounts') return [address];
+            if (method === 'eth_chainId') return '0x1';
+
+            const error = new Error('User rejected the request.');
+            error.code = 4001;
+            throw error;
+        },
+    };
+
+    const payload = {
+        wallet_address: address,
+        buy_token: destination,
+        sell_amount_wei: '1000000000000000000',
+        slippage_bps: 100,
+    };
+
+    await assert.rejects(
+        sendEthereumSwap(wallet, async (step, body) => {
+            posts.push(step);
+
+            if (step === 'order') {
+                return {
+                    order: {
+                        attempt_id: 9,
+                        transaction: {
+                            from: address,
+                            to: destination,
+                            data: '0x1234',
+                            value: payload.sell_amount_wei,
+                            gas: '21000',
+                            gasPrice: '1000000000',
+                            chainId: '1',
+                        },
+                    },
+                };
+            }
+
+            if (step === 'cancelled') {
+                assert.deepEqual(body, { attempt_id: 9 });
+
+                return { swap: { status: 'cancelled' } };
+            }
+
+            throw new Error(`Unexpected backend step: ${step}`);
+        }, payload),
+        /User rejected/,
+    );
+
+    assert.deepEqual(posts, ['order', 'cancelled']);
 });
 
 test('does not request an order when a different wallet account is active', async () => {

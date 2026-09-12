@@ -7,7 +7,8 @@
     data-balance-url="{{ route('wallets.ethereum.balance') }}"
     data-price-url="{{ route('wallets.ethereum.price') }}"
     data-order-url="{{ route('wallets.ethereum.order') }}"
-    data-submitted-url="{{ route('wallets.ethereum.submitted') }}">
+    data-submitted-url="{{ route('wallets.ethereum.submitted') }}"
+    data-cancelled-url="{{ route('wallets.ethereum.cancelled') }}">
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
             <p class="text-xs font-semibold uppercase tracking-widest text-violet-400">Ethereum · Non-custodial</p>
@@ -42,12 +43,13 @@
             </div>
             <button type="submit" data-eth-price-submit class="rounded-lg border border-violet-400/40 px-4 py-2 text-sm font-semibold text-violet-300 disabled:opacity-50">Get price</button>
             <dl data-eth-price-preview hidden class="grid gap-3 rounded-xl border border-slate-700 bg-slate-950/60 p-4 text-sm sm:grid-cols-2">
-                <div><dt class="text-slate-500">Expected token units</dt><dd data-eth-buy-amount class="mt-1 text-white"></dd></div>
-                <div><dt class="text-slate-500">Minimum token units</dt><dd data-eth-minimum class="mt-1 text-white"></dd></div>
+                <div><dt class="text-slate-500">Expected amount</dt><dd data-eth-buy-amount class="mt-1 text-white"></dd></div>
+                <div><dt class="text-slate-500">Minimum received</dt><dd data-eth-minimum class="mt-1 text-white"></dd></div>
                 <div><dt class="text-slate-500">Estimated network fee</dt><dd data-eth-network-fee class="mt-1 text-white"></dd></div>
                 <div><dt class="text-slate-500">Route</dt><dd data-eth-route class="mt-1 text-white"></dd></div>
             </dl>
             <button type="button" data-eth-swap-confirm hidden class="rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">Confirm swap in wallet</button>
+            <p data-eth-feedback role="status" aria-live="polite" class="text-sm text-slate-300"></p>
             <p class="text-xs text-amber-200">The firm 0x transaction is validated by Laravel before Phantom, MetaMask, or your compatible wallet displays the final approval.</p>
         </form>
     </div>
@@ -59,5 +61,4 @@
         <p class="text-sm text-slate-300">Choose an Ethereum wallet:</p>
         <div data-eth-options class="flex flex-wrap gap-3"></div>
     </div>
-    <p data-eth-feedback role="status" aria-live="polite" class="text-sm text-slate-300"></p>
 </section>

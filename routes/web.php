@@ -99,6 +99,7 @@ Route::middleware(['auth', 'customer.verified'])
         Route::post('/price', [EthereumSwapController::class, 'price'])->middleware('throttle:30,1')->name('price');
         Route::post('/order', [EthereumSwapController::class, 'order'])->middleware('throttle:10,1')->name('order');
         Route::post('/submitted', [EthereumSwapController::class, 'submitted'])->middleware('throttle:10,1')->name('submitted');
+        Route::post('/cancelled', [EthereumSwapController::class, 'cancelled'])->middleware('throttle:10,1')->name('cancelled');
     });
 
 Route::middleware('guest')->group(function (): void {

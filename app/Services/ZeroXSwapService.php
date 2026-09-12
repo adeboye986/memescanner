@@ -10,6 +10,11 @@ class ZeroXSwapService
 {
     public const NATIVE_ETH = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 
+    public function __construct(
+        private EthereumTokenMetadataService $tokenMetadata,
+        private TokenAmountFormatter $amountFormatter,
+    ) {}
+
     /** @return array<string, mixed> */
     public function price(string $wallet, string $buyToken, string $sellAmount, int $slippageBps): array
     {
@@ -62,11 +67,43 @@ class ZeroXSwapService
             'sell_amount' => $sellAmount,
             'buy_amount' => $data['buyAmount'],
             'minimum_buy_amount' => $data['minBuyAmount'],
-            'network_fee_wei' => $this->unsignedInteger($data['totalNetworkFee'] ?? null) ? $data['totalNetworkFee'] : null,
-            'sources' => collect(data_get($data, 'route.fills', []))->pluck('source')->filter()->unique()->values()->all(),
+            'network_fee_wei' => $this->unsignedInteger($data['totalNetworkFee'] ?? null)
+                ? $data['totalNetworkFee']
+                : null,
+            'sources' => collect(data_get($data, 'route.fills', []))
+                ->pluck('source')
+                ->filter()
+                ->unique()
+                ->values()
+                ->all(),
+            'output' => null,
         ];
 
-        if (! $firm) return $normalized;
+        try {
+            $metadata = $this->tokenMetadata->resolve(strtolower($buyToken));
+
+            $normalized['output'] = [
+                'address' => strtolower($buyToken),
+                'amount' => $data['buyAmount'],
+                'amount_formatted' => $this->amountFormatter->format(
+                    $data['buyAmount'],
+                    $metadata['decimals'],
+                ),
+                'minimum_amount' => $data['minBuyAmount'],
+                'minimum_amount_formatted' => $this->amountFormatter->format(
+                    $data['minBuyAmount'],
+                    $metadata['decimals'],
+                ),
+                'symbol' => $metadata['symbol'],
+                'decimals' => $metadata['decimals'],
+            ];
+        } catch (RuntimeException) {
+            // Token metadata is display enrichment only.
+        }
+
+        if (! $firm) {
+            return $normalized;
+        }
 
         $transaction = $data['transaction'] ?? null;
         if (! is_array($transaction)
@@ -89,7 +126,18 @@ class ZeroXSwapService
         ]];
     }
 
-    private function address(mixed $value): bool { return is_string($value) && preg_match('/^0x[a-fA-F0-9]{40}$/', $value) === 1; }
-    private function unsignedInteger(mixed $value): bool { return is_string($value) && preg_match('/^\d+$/', $value) === 1; }
-    private function positiveInteger(mixed $value): bool { return $this->unsignedInteger($value) && preg_match('/[1-9]/', $value) === 1; }
+    private function address(mixed $value): bool
+    {
+        return is_string($value) && preg_match('/^0x[a-fA-F0-9]{40}$/', $value) === 1;
+    }
+
+    private function unsignedInteger(mixed $value): bool
+    {
+        return is_string($value) && preg_match('/^\d+$/', $value) === 1;
+    }
+
+    private function positiveInteger(mixed $value): bool
+    {
+        return $this->unsignedInteger($value) && preg_match('/[1-9]/', $value) === 1;
+    }
 }

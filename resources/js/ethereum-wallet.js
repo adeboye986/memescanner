@@ -116,14 +116,31 @@ export async function sendEthereumSwap(wallet, post, payload) {
         || !/^\d+$/.test(transaction.gas) || !/^\d+$/.test(transaction.gasPrice)) {
         throw new Error('The server returned an invalid Ethereum transaction.');
     }
-    const hash = await wallet.request({ method: 'eth_sendTransaction', params: [{
-        from: transaction.from,
-        to: transaction.to,
-        data: transaction.data,
-        value: toQuantity(BigInt(transaction.value)),
-        gas: toQuantity(BigInt(transaction.gas)),
-        gasPrice: toQuantity(BigInt(transaction.gasPrice)),
-    }], });
+    let hash;
+
+    try {
+        hash = await wallet.request({ method: 'eth_sendTransaction', params: [{
+            from: transaction.from,
+            to: transaction.to,
+            data: transaction.data,
+            value: toQuantity(BigInt(transaction.value)),
+            gas: toQuantity(BigInt(transaction.gas)),
+            gasPrice: toQuantity(BigInt(transaction.gasPrice)),
+        }], });
+    } catch (error) {
+        const cancelled = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
+
+        if (cancelled) {
+            try {
+                await post('cancelled', { attempt_id: order.order.attempt_id });
+            } catch {
+                // Preserve the wallet rejection as the primary user-facing result.
+            }
+        }
+
+        throw error;
+    }
+
     if (typeof hash !== 'string' || !/^0x[a-fA-F0-9]{64}$/.test(hash)) throw new Error('The wallet returned an invalid transaction hash.');
 
     return post('submitted', { attempt_id: order.order.attempt_id, transaction_hash: hash });
@@ -243,9 +260,20 @@ export function mountEthereumWalletCard(card) {
                 wallet_address: activeAddress,
             };
             const result = await post('price', quotedPayload);
-            card.querySelector('[data-eth-buy-amount]').textContent = `${result.price.buy_amount} base units`;
-            card.querySelector('[data-eth-minimum]').textContent = `${result.price.minimum_buy_amount} base units`;
-            card.querySelector('[data-eth-network-fee]').textContent = result.price.network_fee_wei ? `${result.price.network_fee_wei} wei` : 'Unavailable';
+            const output = result.price.output;
+
+            card.querySelector('[data-eth-buy-amount]').textContent = output
+                ? `${output.amount_formatted}${output.symbol ? ` ${output.symbol}` : ''}`
+                : `${result.price.buy_amount} base units`;
+
+            card.querySelector('[data-eth-minimum]').textContent = output
+                ? `${output.minimum_amount_formatted}${output.symbol ? ` ${output.symbol}` : ''}`
+                : `${result.price.minimum_buy_amount} base units`;
+            const networkFee = result.price.network_fee;
+
+            card.querySelector('[data-eth-network-fee]').textContent = networkFee
+                ? `${networkFee.eth} ETH${networkFee.usd ? ` (≈ $${networkFee.usd})` : ''}`
+                : 'Unavailable';
             card.querySelector('[data-eth-route]').textContent = result.price.sources.join(' → ') || 'Direct';
             card.querySelector('[data-eth-price-preview]').hidden = false;
             card.querySelector('[data-eth-swap-confirm]').hidden = false;

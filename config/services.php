@@ -60,6 +60,8 @@ return [
     'ethereum' => [
         'rpc_url' => env('ETHEREUM_RPC_URL'),
         'chain_id' => 1,
+        'metadata_cache_store' => env('ETHEREUM_METADATA_CACHE_STORE', 'file'),
+        'token_metadata_cache_seconds' => env('ETHEREUM_TOKEN_METADATA_CACHE_SECONDS', 86400),
     ],
 
     'zero_x' => [
