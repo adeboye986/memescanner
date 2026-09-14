@@ -155,4 +155,75 @@ class EthereumServiceTest extends TestCase
         app(EthereumService::class)
             ->getTransactionByHash('0x'.str_repeat('a', 64));
     }
+
+    public function test_transaction_receipt_returns_null_when_transaction_is_not_mined_yet(): void
+    {
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+
+        Http::fake([
+            'https://ethereum.test' => Http::response([
+                'jsonrpc' => '2.0',
+                'id' => 1,
+                'result' => null,
+            ]),
+        ]);
+
+        $result = app(EthereumService::class)
+            ->getTransactionReceipt('0x'.str_repeat('a', 64));
+
+        $this->assertNull($result);
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://ethereum.test'
+            && $request['method'] === 'eth_getTransactionReceipt'
+            && $request['params'] === ['0x'.str_repeat('a', 64)]
+        );
+    }
+
+    public function test_successful_transaction_receipt_is_normalized(): void
+    {
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+
+        Http::fake([
+            'https://ethereum.test' => Http::response([
+                'jsonrpc' => '2.0',
+                'id' => 1,
+                'result' => [
+                    'transactionHash' => '0x'.str_repeat('A', 64),
+                    'status' => '0x1',
+                    'blockNumber' => '0x10',
+                ],
+            ]),
+        ]);
+
+        $result = app(EthereumService::class)
+            ->getTransactionReceipt('0x'.str_repeat('A', 64));
+
+        $this->assertSame('0x'.str_repeat('a', 64), $result['transaction_hash']);
+        $this->assertTrue($result['succeeded']);
+        $this->assertSame('16', $result['block_number']);
+    }
+
+    public function test_failed_transaction_receipt_is_normalized(): void
+    {
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+
+        Http::fake([
+            'https://ethereum.test' => Http::response([
+                'jsonrpc' => '2.0',
+                'id' => 1,
+                'result' => [
+                    'transactionHash' => '0x'.str_repeat('b', 64),
+                    'status' => '0x0',
+                    'blockNumber' => '0x2a',
+                ],
+            ]),
+        ]);
+
+        $result = app(EthereumService::class)
+            ->getTransactionReceipt('0x'.str_repeat('b', 64));
+
+        $this->assertSame('0x'.str_repeat('b', 64), $result['transaction_hash']);
+        $this->assertFalse($result['succeeded']);
+        $this->assertSame('42', $result['block_number']);
+    }
 }

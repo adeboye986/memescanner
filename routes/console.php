@@ -23,6 +23,10 @@ Schedule::command('ethereum:expire-prepared-swaps')
     ->everyMinute()
     ->withoutOverlapping();
 
+Schedule::command('ethereum:reconcile-submitted-swaps')
+    ->everyMinute()
+    ->withoutOverlapping();
+
 $paperTrackActivity = null;
 
 Schedule::command('tokens:paper-track')
