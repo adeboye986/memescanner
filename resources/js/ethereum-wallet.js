@@ -177,6 +177,87 @@ export function mountEthereumWalletCard(card) {
             card.querySelector('[data-eth-balance-usd]').textContent = '';
         }
     };
+    const loadHistory = async () => {
+        const section = card.querySelector('[data-eth-history]');
+        const loading = card.querySelector('[data-eth-history-loading]');
+        const empty = card.querySelector('[data-eth-history-empty]');
+        const list = card.querySelector('[data-eth-history-list]');
+        const error = card.querySelector('[data-eth-history-error]');
+
+        if (!section || !list) return;
+
+        loading.hidden = false;
+        empty.hidden = true;
+        error.hidden = true;
+        list.replaceChildren();
+
+        try {
+            const result = await get('history');
+            const transactions = Array.isArray(result.transactions) ? result.transactions : [];
+
+            loading.hidden = true;
+
+            if (!transactions.length) {
+                empty.hidden = false;
+
+                return;
+            }
+
+            transactions.forEach((transaction) => {
+                const item = document.createElement('div');
+                item.className = 'rounded-xl border border-slate-800 bg-slate-950/60 p-4';
+
+                const header = document.createElement('div');
+                header.className = 'flex flex-wrap items-center justify-between gap-3';
+
+                const amount = document.createElement('p');
+                amount.className = 'font-semibold text-white';
+                amount.textContent = `${transaction.sell_amount_eth} ETH`;
+
+                const status = document.createElement('span');
+                status.className = 'rounded-lg border border-slate-700 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-slate-300';
+                status.textContent = transaction.status;
+
+                header.append(amount, status);
+                item.append(header);
+
+                const token = document.createElement('p');
+                token.className = 'mt-2 break-all font-mono text-xs text-slate-400';
+                token.textContent = `Token: ${transaction.buy_token}`;
+                item.append(token);
+
+                if (transaction.actual_network_fee_eth) {
+                    const fee = document.createElement('p');
+                    fee.className = 'mt-2 text-sm text-slate-400';
+                    fee.textContent = `Actual network fee: ${transaction.actual_network_fee_eth} ETH`;
+                    item.append(fee);
+                }
+
+                if (transaction.transaction_hash) {
+                    const link = document.createElement('a');
+                    link.className = 'mt-3 inline-block text-sm font-medium text-violet-300 hover:text-violet-200';
+                    link.href = `https://etherscan.io/tx/${transaction.transaction_hash}`;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    link.textContent = 'View on Etherscan';
+                    item.append(link);
+                }
+
+                if (transaction.failure_reason) {
+                    const failure = document.createElement('p');
+                    failure.className = 'mt-2 text-sm text-red-300';
+                    failure.textContent = transaction.failure_reason;
+                    item.append(failure);
+                }
+
+                list.append(item);
+            });
+        } catch (historyError) {
+            loading.hidden = true;
+            error.hidden = false;
+            error.textContent = historyError?.message || 'Could not load Ethereum transaction history.';
+        }
+    };
     const announced = [];
     let activeWallet = null;
     let activeAddress = card.querySelector('[data-eth-address]')?.title?.toLowerCase() || null;
@@ -212,6 +293,7 @@ export function mountEthereumWalletCard(card) {
                     card.querySelector('[data-eth-disconnect]').hidden = false;
                     card.querySelector('[data-eth-balance-refresh]').hidden = false;
                     await loadBalance();
+                    await loadHistory();
                     say('Ethereum wallet ownership verified. No transaction was authorized.');
                 } catch (error) {
                     say(error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '') ? 'Ethereum wallet request cancelled.' : error?.message || 'Could not connect this Ethereum wallet.');
@@ -236,6 +318,7 @@ export function mountEthereumWalletCard(card) {
         }
     });
     card.querySelector('[data-eth-balance-refresh]')?.addEventListener('click', loadBalance);
+    card.querySelector('[data-eth-history-refresh]')?.addEventListener('click', loadHistory);
     const swapForm = card.querySelector('[data-eth-swap-form]');
     const invalidatePrice = () => {
         quotedPayload = null;
@@ -296,11 +379,15 @@ export function mountEthereumWalletCard(card) {
             button.hidden = true;
             say(`Ethereum swap submitted: ${result.swap.transaction_hash}`);
             await loadBalance();
+            await loadHistory();
         } catch (error) {
             say(error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '') ? 'Ethereum swap cancelled. Nothing was submitted.' : error?.message || 'Could not submit the Ethereum swap.');
         } finally {
             button.disabled = false;
         }
     });
-    if (!card.querySelector('[data-eth-details]')?.hidden) loadBalance();
+    if (!card.querySelector('[data-eth-details]')?.hidden) {
+        loadBalance();
+        loadHistory();
+    }
 }

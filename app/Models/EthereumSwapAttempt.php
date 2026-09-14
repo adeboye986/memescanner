@@ -11,7 +11,8 @@ class EthereumSwapAttempt extends Model
         'user_id', 'connected_wallet_id', 'buy_token', 'sell_amount_wei',
         'slippage_bps', 'quote_id', 'transaction_payload', 'status',
         'transaction_hash', 'expires_at', 'submitted_at', 'confirmed_at',
-        'failed_at', 'failure_reason',
+        'failed_at', 'failure_reason', 'block_number', 'gas_used', 'effective_gas_price_wei',
+        'actual_network_fee_wei',
     ];
 
     protected $hidden = ['transaction_payload'];

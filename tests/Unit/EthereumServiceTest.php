@@ -191,6 +191,8 @@ class EthereumServiceTest extends TestCase
                     'transactionHash' => '0x'.str_repeat('A', 64),
                     'status' => '0x1',
                     'blockNumber' => '0x10',
+                    'gasUsed' => '0x5208',
+                    'effectiveGasPrice' => '0x3b9aca00',
                 ],
             ]),
         ]);
@@ -198,9 +200,15 @@ class EthereumServiceTest extends TestCase
         $result = app(EthereumService::class)
             ->getTransactionReceipt('0x'.str_repeat('A', 64));
 
-        $this->assertSame('0x'.str_repeat('a', 64), $result['transaction_hash']);
+        $this->assertSame(
+            '0x'.str_repeat('a', 64),
+            $result['transaction_hash'],
+        );
         $this->assertTrue($result['succeeded']);
         $this->assertSame('16', $result['block_number']);
+        $this->assertSame('21000', $result['gas_used']);
+        $this->assertSame('1000000000', $result['effective_gas_price_wei']);
+        $this->assertSame('21000000000000', $result['actual_network_fee_wei']);
     }
 
     public function test_failed_transaction_receipt_is_normalized(): void
@@ -215,6 +223,8 @@ class EthereumServiceTest extends TestCase
                     'transactionHash' => '0x'.str_repeat('b', 64),
                     'status' => '0x0',
                     'blockNumber' => '0x2a',
+                    'gasUsed' => '0x5208',
+                    'effectiveGasPrice' => '0x3b9aca00',
                 ],
             ]),
         ]);
@@ -222,8 +232,14 @@ class EthereumServiceTest extends TestCase
         $result = app(EthereumService::class)
             ->getTransactionReceipt('0x'.str_repeat('b', 64));
 
-        $this->assertSame('0x'.str_repeat('b', 64), $result['transaction_hash']);
+        $this->assertSame(
+            '0x'.str_repeat('b', 64),
+            $result['transaction_hash'],
+        );
         $this->assertFalse($result['succeeded']);
         $this->assertSame('42', $result['block_number']);
+        $this->assertSame('21000', $result['gas_used']);
+        $this->assertSame('1000000000', $result['effective_gas_price_wei']);
+        $this->assertSame('21000000000000', $result['actual_network_fee_wei']);
     }
 }

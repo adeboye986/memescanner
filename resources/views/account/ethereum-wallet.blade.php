@@ -7,6 +7,7 @@
     data-balance-url="{{ route('wallets.ethereum.balance') }}"
     data-price-url="{{ route('wallets.ethereum.price') }}"
     data-order-url="{{ route('wallets.ethereum.order') }}"
+    data-history-url="{{ route('wallets.ethereum.history') }}"
     data-submitted-url="{{ route('wallets.ethereum.submitted') }}"
     data-cancelled-url="{{ route('wallets.ethereum.cancelled') }}">
     <div class="flex flex-wrap items-start justify-between gap-4">
@@ -52,6 +53,33 @@
             <p data-eth-feedback role="status" aria-live="polite" class="text-sm text-slate-300"></p>
             <p class="text-xs text-amber-200">The firm 0x transaction is validated by Laravel before Phantom, MetaMask, or your compatible wallet displays the final approval.</p>
         </form>
+        <div data-eth-history @if(!$ethereumWallet) hidden @endif class="space-y-3 border-t border-slate-800 pt-5">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-violet-400">Recent activity</p>
+                    <h3 class="mt-1 font-semibold text-white">Ethereum Transactions</h3>
+                </div>
+
+                <button
+                    type="button"
+                    data-eth-history-refresh
+                    class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:text-white disabled:opacity-50">
+                    Refresh
+                </button>
+            </div>
+
+            <div data-eth-history-loading class="text-sm text-slate-400">
+                Loading recent transactions…
+            </div>
+
+            <div data-eth-history-empty hidden class="rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-sm text-slate-400">
+                No Ethereum transactions yet.
+            </div>
+
+            <div data-eth-history-list class="space-y-3"></div>
+
+            <p data-eth-history-error hidden class="text-sm text-red-300"></p>
+        </div>
     </div>
     <div class="flex flex-wrap gap-3">
         <button type="button" data-eth-connect class="rounded-xl bg-violet-400 px-5 py-3 font-semibold text-slate-950 disabled:opacity-50">{{ $ethereumWallet ? 'Change wallet' : 'Connect Ethereum Wallet' }}</button>

@@ -63,6 +63,10 @@ class ReconcileSubmittedEthereumSwaps extends Command
                                 'confirmed_at' => now(),
                                 'failed_at' => null,
                                 'failure_reason' => null,
+                                'block_number' => $receipt['block_number'],
+                                'gas_used' => $receipt['gas_used'],
+                                'effective_gas_price_wei' => $receipt['effective_gas_price_wei'],
+                                'actual_network_fee_wei' => $receipt['actual_network_fee_wei'],
                                 'updated_at' => now(),
                             ]);
 
@@ -80,6 +84,10 @@ class ReconcileSubmittedEthereumSwaps extends Command
                             'status' => 'failed',
                             'failed_at' => now(),
                             'failure_reason' => 'Ethereum transaction reverted on-chain.',
+                            'block_number' => $receipt['block_number'],
+                            'gas_used' => $receipt['gas_used'],
+                            'effective_gas_price_wei' => $receipt['effective_gas_price_wei'],
+                            'actual_network_fee_wei' => $receipt['actual_network_fee_wei'],
                             'updated_at' => now(),
                         ]);
 

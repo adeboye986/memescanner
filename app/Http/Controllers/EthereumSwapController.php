@@ -284,6 +284,55 @@ class EthereumSwapController extends Controller
         ]);
     }
 
+    public function history(Request $request, TokenAmountFormatter $amounts): JsonResponse
+    {
+        $attempts = EthereumSwapAttempt::query()
+            ->where('user_id', $request->user()->id)
+            ->latest('id')
+            ->limit(10)
+            ->get([
+                'id',
+                'buy_token',
+                'sell_amount_wei',
+                'status',
+                'transaction_hash',
+                'submitted_at',
+                'confirmed_at',
+                'failed_at',
+                'failure_reason',
+                'block_number',
+                'gas_used',
+                'effective_gas_price_wei',
+                'actual_network_fee_wei',
+                'created_at',
+            ]);
+
+        return response()->json([
+            'transactions' => $attempts->map(function (EthereumSwapAttempt $attempt) use ($amounts): array {
+                return [
+                    'id' => $attempt->id,
+                    'buy_token' => $attempt->buy_token,
+                    'sell_amount_wei' => $attempt->sell_amount_wei,
+                    'sell_amount_eth' => $amounts->format($attempt->sell_amount_wei, 18),
+                    'status' => $attempt->status,
+                    'transaction_hash' => $attempt->transaction_hash,
+                    'submitted_at' => $attempt->submitted_at?->toIso8601String(),
+                    'confirmed_at' => $attempt->confirmed_at?->toIso8601String(),
+                    'failed_at' => $attempt->failed_at?->toIso8601String(),
+                    'failure_reason' => $attempt->failure_reason,
+                    'block_number' => $attempt->block_number,
+                    'gas_used' => $attempt->gas_used,
+                    'effective_gas_price_wei' => $attempt->effective_gas_price_wei,
+                    'actual_network_fee_wei' => $attempt->actual_network_fee_wei,
+                    'actual_network_fee_eth' => $attempt->actual_network_fee_wei
+                        ? $amounts->format($attempt->actual_network_fee_wei, 18)
+                        : null,
+                    'created_at' => $attempt->created_at?->toIso8601String(),
+                ];
+            })->values(),
+        ]);
+    }
+
     private function wallet(Request $request): mixed
     {
         return $request->user()->connectedWallets()->where('chain', Chain::Ethereum->value)

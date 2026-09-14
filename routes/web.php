@@ -7,8 +7,8 @@ use App\Http\Controllers\ClosePaperTradeController;
 use App\Http\Controllers\DashboardActionController;
 use App\Http\Controllers\EmailVerificationNotificationController;
 use App\Http\Controllers\EmailVerificationPromptController;
-use App\Http\Controllers\EthereumWalletConnectionController;
 use App\Http\Controllers\EthereumSwapController;
+use App\Http\Controllers\EthereumWalletConnectionController;
 use App\Http\Controllers\IgnoreOpportunityController;
 use App\Http\Controllers\LoginController;
 use App\Http\Controllers\NewPasswordController;
@@ -100,6 +100,7 @@ Route::middleware(['auth', 'customer.verified'])
         Route::post('/order', [EthereumSwapController::class, 'order'])->middleware('throttle:10,1')->name('order');
         Route::post('/submitted', [EthereumSwapController::class, 'submitted'])->middleware('throttle:10,1')->name('submitted');
         Route::post('/cancelled', [EthereumSwapController::class, 'cancelled'])->middleware('throttle:10,1')->name('cancelled');
+        Route::get('/history', [EthereumSwapController::class, 'history'])->name('history');
     });
 
 Route::middleware('guest')->group(function (): void {

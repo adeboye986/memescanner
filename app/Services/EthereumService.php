@@ -181,22 +181,44 @@ class EthereumService
             throw new RuntimeException('Ethereum RPC returned an invalid transaction receipt.');
         }
 
-        foreach (['transactionHash', 'status', 'blockNumber'] as $field) {
+        foreach (
+            [
+                'transactionHash',
+                'status',
+                'blockNumber',
+                'gasUsed',
+                'effectiveGasPrice',
+            ] as $field
+        ) {
             if (! array_key_exists($field, $result) || ! is_string($result[$field])) {
                 throw new RuntimeException('Ethereum RPC returned an invalid transaction receipt.');
             }
         }
 
-        if (preg_match('/^0x[a-fA-F0-9]{64}$/', $result['transactionHash']) !== 1
+        if (
+            preg_match('/^0x[a-fA-F0-9]{64}$/', $result['transactionHash']) !== 1
             || ! in_array(strtolower($result['status']), ['0x0', '0x1'], true)
-            || preg_match('/^0x[0-9a-fA-F]+$/', $result['blockNumber']) !== 1) {
+            || preg_match('/^0x[0-9a-fA-F]+$/', $result['blockNumber']) !== 1
+            || preg_match('/^0x[0-9a-fA-F]+$/', $result['gasUsed']) !== 1
+            || preg_match('/^0x[0-9a-fA-F]+$/', $result['effectiveGasPrice']) !== 1
+        ) {
             throw new RuntimeException('Ethereum RPC returned an invalid transaction receipt.');
         }
+
+        $gasUsed = $this->hexToDecimal($result['gasUsed']);
+        $effectiveGasPriceWei = $this->hexToDecimal($result['effectiveGasPrice']);
 
         return [
             'transaction_hash' => strtolower($result['transactionHash']),
             'succeeded' => strtolower($result['status']) === '0x1',
             'block_number' => $this->hexToDecimal($result['blockNumber']),
+            'gas_used' => $gasUsed,
+            'effective_gas_price_wei' => $effectiveGasPriceWei,
+            'actual_network_fee_wei' => bcmul(
+                $gasUsed,
+                $effectiveGasPriceWei,
+                0,
+            ),
         ];
     }
 
