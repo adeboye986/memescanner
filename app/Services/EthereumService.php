@@ -80,6 +80,64 @@ class EthereumService
         return strtolower($result);
     }
 
+    public function getTransactionByHash(string $transactionHash): array
+    {
+        $rpcUrl = trim((string) config('services.ethereum.rpc_url'));
+
+        if (! str_starts_with($rpcUrl, 'https://')) {
+            throw new RuntimeException('Ethereum RPC is not configured securely.');
+        }
+
+        if (preg_match('/^0x[a-fA-F0-9]{64}$/', $transactionHash) !== 1) {
+            throw new RuntimeException('Ethereum transaction hash is invalid.');
+        }
+
+        try {
+            $response = Http::connectTimeout(3)
+                ->timeout(8)
+                ->acceptJson()
+                ->post($rpcUrl, [
+                    'jsonrpc' => '2.0',
+                    'id' => 1,
+                    'method' => 'eth_getTransactionByHash',
+                    'params' => [strtolower($transactionHash)],
+                ]);
+        } catch (ConnectionException $exception) {
+            throw new RuntimeException(
+                'Ethereum RPC is temporarily unavailable.',
+                previous: $exception,
+            );
+        }
+
+        $result = $response->json('result');
+
+        if (! $response->successful() || ! is_array($result)) {
+            throw new RuntimeException('Ethereum transaction could not be verified.');
+        }
+
+        foreach (['hash', 'from', 'to', 'value', 'input'] as $field) {
+            if (! array_key_exists($field, $result) || ! is_string($result[$field])) {
+                throw new RuntimeException('Ethereum RPC returned an invalid transaction response.');
+            }
+        }
+
+        if (preg_match('/^0x[a-fA-F0-9]{64}$/', $result['hash']) !== 1
+            || preg_match('/^0x[a-fA-F0-9]{40}$/', $result['from']) !== 1
+            || preg_match('/^0x[a-fA-F0-9]{40}$/', $result['to']) !== 1
+            || preg_match('/^0x[0-9a-fA-F]+$/', $result['value']) !== 1
+            || preg_match('/^0x[0-9a-fA-F]*$/', $result['input']) !== 1) {
+            throw new RuntimeException('Ethereum RPC returned an invalid transaction response.');
+        }
+
+        return [
+            'hash' => strtolower($result['hash']),
+            'from' => strtolower($result['from']),
+            'to' => strtolower($result['to']),
+            'value' => $this->hexToDecimal($result['value']),
+            'input' => strtolower($result['input']),
+        ];
+    }
+
     private function hexToDecimal(string $hex): string
     {
         $value = '0';

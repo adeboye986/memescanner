@@ -102,7 +102,56 @@ class EthereumSwapTest extends TestCase
             ->assertUnprocessable();
     }
 
-    public function test_expired_prepared_attempt_is_persisted_as_expired_when_submission_is_reported(): void
+    public function test_expired_prepared_attempt_can_be_recorded_as_submitted_when_broadcast_matches(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $wallet = $this->wallet($user);
+
+        $attempt = EthereumSwapAttempt::query()->create([
+            'user_id' => $user->id,
+            'connected_wallet_id' => $wallet->id,
+            'buy_token' => self::TOKEN,
+            'sell_amount_wei' => '1000000000000000',
+            'slippage_bps' => 100,
+            'transaction_payload' => $this->quote()['transaction'],
+            'status' => 'prepared',
+            'expires_at' => now()->subSecond(),
+        ]);
+
+        $hash = '0x'.str_repeat('cd', 32);
+
+        $prepared = $attempt->transaction_payload;
+
+        $this->mock(EthereumService::class, function ($mock) use ($hash, $wallet, $prepared): void {
+            $mock->shouldReceive('getTransactionByHash')
+                ->once()
+                ->with($hash)
+                ->andReturn([
+                    'hash' => $hash,
+                    'from' => strtolower($wallet->address),
+                    'to' => strtolower($prepared['to']),
+                    'value' => (string) $prepared['value'],
+                    'input' => strtolower($prepared['data']),
+                ]);
+        });
+
+        $this->actingAs($user)
+            ->postJson(route('wallets.ethereum.submitted'), [
+                'attempt_id' => $attempt->id,
+                'transaction_hash' => $hash,
+            ])
+            ->assertOk()
+            ->assertJsonPath('swap.status', 'submitted')
+            ->assertJsonPath('swap.transaction_hash', $hash);
+
+        $attempt->refresh();
+
+        $this->assertSame('submitted', $attempt->status);
+        $this->assertSame($hash, $attempt->transaction_hash);
+        $this->assertNotNull($attempt->submitted_at);
+    }
+
+    public function test_expired_prepared_attempt_rejects_unverifiable_broadcast(): void
     {
         $user = User::factory()->create(['email_verified_at' => now()]);
 
@@ -117,19 +166,28 @@ class EthereumSwapTest extends TestCase
             'expires_at' => now()->subSecond(),
         ]);
 
-        $payload = [
-            'attempt_id' => $attempt->id,
-            'transaction_hash' => '0x'.str_repeat('cd', 32),
-        ];
+        $hash = '0x'.str_repeat('ef', 32);
+
+        $this->mock(EthereumService::class, fn ($mock) => $mock
+            ->shouldReceive('getTransactionByHash')
+            ->once()
+            ->with($hash)
+            ->andThrow(new RuntimeException('Ethereum transaction could not be verified.')));
 
         $this->actingAs($user)
-            ->postJson(route('wallets.ethereum.submitted'), $payload)
+            ->postJson(route('wallets.ethereum.submitted'), [
+                'attempt_id' => $attempt->id,
+                'transaction_hash' => $hash,
+            ])
             ->assertUnprocessable()
-            ->assertJsonPath('message', 'This Ethereum swap order has expired.');
+            ->assertJsonPath(
+                'message',
+                'The broadcast Ethereum transaction could not be verified.'
+            );
 
         $attempt->refresh();
 
-        $this->assertSame('expired', $attempt->status);
+        $this->assertSame('prepared', $attempt->status);
         $this->assertNull($attempt->transaction_hash);
         $this->assertNull($attempt->submitted_at);
     }
@@ -258,6 +316,54 @@ class EthereumSwapTest extends TestCase
             ->assertJsonPath('price.output.amount_formatted', '5')
             ->assertJsonPath('price.network_fee.eth', '0.000021')
             ->assertJsonPath('price.network_fee.usd', null);
+    }
+
+    public function test_scheduler_expired_attempt_can_be_recorded_as_submitted_when_broadcast_matches(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $wallet = $this->wallet($user);
+
+        $attempt = EthereumSwapAttempt::query()->create([
+            'user_id' => $user->id,
+            'connected_wallet_id' => $wallet->id,
+            'buy_token' => self::TOKEN,
+            'sell_amount_wei' => '1000000000000000',
+            'slippage_bps' => 100,
+            'transaction_payload' => $this->quote()['transaction'],
+            'status' => 'expired',
+            'expires_at' => now()->subMinute(),
+        ]);
+
+        $hash = '0x'.str_repeat('ab', 32);
+        $prepared = $attempt->transaction_payload;
+
+        $this->mock(EthereumService::class, function ($mock) use ($hash, $wallet, $prepared): void {
+            $mock->shouldReceive('getTransactionByHash')
+                ->once()
+                ->with($hash)
+                ->andReturn([
+                    'hash' => $hash,
+                    'from' => strtolower($wallet->address),
+                    'to' => strtolower($prepared['to']),
+                    'value' => (string) $prepared['value'],
+                    'input' => strtolower($prepared['data']),
+                ]);
+        });
+
+        $this->actingAs($user)
+            ->postJson(route('wallets.ethereum.submitted'), [
+                'attempt_id' => $attempt->id,
+                'transaction_hash' => $hash,
+            ])
+            ->assertOk()
+            ->assertJsonPath('swap.status', 'submitted')
+            ->assertJsonPath('swap.transaction_hash', $hash);
+
+        $attempt->refresh();
+
+        $this->assertSame('submitted', $attempt->status);
+        $this->assertSame($hash, $attempt->transaction_hash);
+        $this->assertNotNull($attempt->submitted_at);
     }
 
     private function wallet(User $user): ConnectedWallet

@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use App\Services\EthereumService;
 use Illuminate\Support\Facades\Http;
+use RuntimeException;
 use Tests\TestCase;
 
 class EthereumServiceTest extends TestCase
@@ -59,7 +60,7 @@ class EthereumServiceTest extends TestCase
 
         Http::preventStrayRequests();
 
-        $this->expectException(\RuntimeException::class);
+        $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Ethereum contract address is invalid.');
 
         app(EthereumService::class)->call(
@@ -80,12 +81,78 @@ class EthereumServiceTest extends TestCase
             ]),
         ]);
 
-        $this->expectException(\RuntimeException::class);
+        $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Ethereum RPC returned an invalid contract call response.');
 
         app(EthereumService::class)->call(
             '0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
             '0x313ce567',
         );
+    }
+
+    public function test_transaction_is_read_and_normalized_by_hash(): void
+    {
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+
+        Http::fake([
+            'https://ethereum.test' => Http::response([
+                'jsonrpc' => '2.0',
+                'id' => 1,
+                'result' => [
+                    'hash' => '0x'.str_repeat('A', 64),
+                    'from' => '0x'.str_repeat('1', 40),
+                    'to' => '0x'.str_repeat('2', 40),
+                    'value' => '0x186a0',
+                    'input' => '0xabcdef',
+                ],
+            ]),
+        ]);
+
+        $result = app(EthereumService::class)
+            ->getTransactionByHash('0x'.str_repeat('A', 64));
+
+        $this->assertSame('0x'.str_repeat('a', 64), $result['hash']);
+        $this->assertSame('0x'.str_repeat('1', 40), $result['from']);
+        $this->assertSame('0x'.str_repeat('2', 40), $result['to']);
+        $this->assertSame('100000', $result['value']);
+        $this->assertSame('0xabcdef', $result['input']);
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://ethereum.test'
+            && $request['method'] === 'eth_getTransactionByHash'
+            && $request['params'] === ['0x'.str_repeat('a', 64)]
+        );
+    }
+
+    public function test_transaction_lookup_rejects_invalid_hash_without_rpc(): void
+    {
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+
+        Http::fake();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Ethereum transaction hash is invalid.');
+
+        app(EthereumService::class)->getTransactionByHash('not-a-hash');
+
+        Http::assertNothingSent();
+    }
+
+    public function test_transaction_lookup_rejects_missing_rpc_transaction(): void
+    {
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+
+        Http::fake([
+            'https://ethereum.test' => Http::response([
+                'jsonrpc' => '2.0',
+                'id' => 1,
+                'result' => null,
+            ]),
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Ethereum transaction could not be verified.');
+
+        app(EthereumService::class)
+            ->getTransactionByHash('0x'.str_repeat('a', 64));
     }
 }
