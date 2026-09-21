@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { getAddressFromPublicKey } from '@solana/addresses';
+import { getBase58Decoder } from '@solana/codecs-strings';
 import { generateKeyPair } from '@solana/keys';
 import { getCompiledTransactionMessageEncoder } from '@solana/transaction-messages';
 import { getTransactionEncoder, partiallySignTransaction } from '@solana/transactions';
@@ -115,6 +116,10 @@ test('compare_signed accepts a valid expected-wallet signature over an unchanged
 
     assert.equal(result.valid, true);
     assert.equal(result.expected_wallet_signature_present, true);
+    assert.equal(
+        result.transaction_signature,
+        getBase58Decoder().decode(signed.signatures[wallet.address]),
+    );
 });
 
 test('compare_signed rejects an altered transaction message', async () => {

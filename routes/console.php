@@ -27,6 +27,10 @@ Schedule::command('ethereum:reconcile-submitted-swaps')
     ->everyMinute()
     ->withoutOverlapping();
 
+Schedule::command('solana:reconcile-submitted-swaps')
+    ->everyMinute()
+    ->withoutOverlapping();
+
 $paperTrackActivity = null;
 
 Schedule::command('tokens:paper-track')

@@ -22,21 +22,65 @@ class JupiterSwapExecutionServiceTest extends TestCase
         ])]);
 
         $validator = Mockery::mock(RemoteSolanaTransactionValidator::class);
-        $validator->shouldReceive('compareSigned')
-            ->once()
-            ->with(base64_encode('prepared'), base64_encode('signed'), 'wallet-address')
-            ->andReturn($this->validation(true));
 
         $result = (new JupiterSwapExecutionService($validator))->execute(
             $this->attempt(),
             base64_encode('signed'),
-            'wallet-address',
         );
 
         $this->assertSame('submitted', $result['status']);
         $this->assertSame('chain-signature', $result['signature']);
         Http::assertSent(fn ($request): bool => $request['requestId'] === 'request-123'
             && $request['signedTransaction'] === base64_encode('signed'));
+    }
+
+    public function test_success_response_with_different_signature_is_rejected(): void
+    {
+        config(['services.jupiter.swap_v2_base_url' => 'https://api.jup.ag/swap/v2']);
+
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.jup.ag/swap/v2/execute' => Http::response([
+                'status' => 'Success',
+                'signature' => 'different-signature',
+            ]),
+        ]);
+
+        $validator = Mockery::mock(RemoteSolanaTransactionValidator::class);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(
+            'Jupiter returned a different transaction signature. Check transaction history before retrying.'
+        );
+
+        (new JupiterSwapExecutionService($validator))->execute(
+            $this->attempt(),
+            base64_encode('signed'),
+        );
+    }
+
+    public function test_signed_transaction_validation_returns_its_verified_transaction_signature(): void
+    {
+        Http::preventStrayRequests();
+
+        $validator = Mockery::mock(RemoteSolanaTransactionValidator::class);
+        $validator->shouldReceive('compareSigned')
+            ->once()
+            ->with(base64_encode('prepared'), base64_encode('signed'), 'wallet-address')
+            ->andReturn($this->validation(true));
+
+        $result = (new JupiterSwapExecutionService($validator))->validateSigned(
+            $this->attempt(),
+            base64_encode('signed'),
+            'wallet-address',
+        );
+
+        $this->assertSame(
+            str_repeat('1', 88),
+            $result['transaction_signature']
+        );
+
+        Http::assertNothingSent();
     }
 
     public function test_changed_message_is_never_submitted(): void
@@ -52,7 +96,7 @@ class JupiterSwapExecutionServiceTest extends TestCase
         $this->expectExceptionMessage('failed validation');
 
         try {
-            (new JupiterSwapExecutionService($validator))->execute(
+            (new JupiterSwapExecutionService($validator))->validateSigned(
                 $this->attempt(),
                 base64_encode('signed'),
                 'wallet-address',
@@ -68,6 +112,7 @@ class JupiterSwapExecutionServiceTest extends TestCase
             'request_id' => 'request-123',
             'message_hash' => str_repeat('a', 64),
             'prepared_transaction' => base64_encode('prepared'),
+            'transaction_signature' => 'chain-signature',
         ]);
     }
 
@@ -84,6 +129,9 @@ class JupiterSwapExecutionServiceTest extends TestCase
             'expected_wallet_is_fee_payer' => true,
             'signature_count' => 1,
             'expected_wallet_signature_present' => $signed,
+            'transaction_signature' => $signed
+                ? str_repeat('1', 88)
+                : null,
             'recent_blockhash' => 'blockhash',
             'address_lookup_table_references' => [],
         ];

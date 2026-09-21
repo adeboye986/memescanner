@@ -1,4 +1,5 @@
 import { address, getPublicKeyFromAddress } from '@solana/addresses';
+import { getBase58Decoder } from '@solana/codecs-strings';
 import { assertIsSignatureBytes, verifySignature } from '@solana/keys';
 import { getCompiledTransactionMessageDecoder } from '@solana/transaction-messages';
 import { getTransactionDecoder } from '@solana/transactions';
@@ -140,7 +141,10 @@ export async function compareSigned(input) {
         }
     }
 
-    return safeMetadata(signed, signedMetadata, expectedWallet);
+    return {
+        ...safeMetadata(signed, signedMetadata, expectedWallet),
+        transaction_signature: getBase58Decoder().decode(signature),
+    };
 }
 
 export function verifyEthereumSignature(input) {

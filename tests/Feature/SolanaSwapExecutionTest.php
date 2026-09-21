@@ -21,12 +21,20 @@ class SolanaSwapExecutionTest extends TestCase
         $attempt = $this->attempt($user, $wallet);
 
         $this->mock(JupiterSwapExecutionService::class, function ($mock): void {
-            $mock->shouldReceive('execute')->once()->andReturn([
-                'status' => 'submitted',
-                'signature' => 'chain-signature',
-                'error_code' => null,
-                'error_message' => null,
-            ]);
+            $mock->shouldReceive('validateSigned')
+                ->once()
+                ->andReturn([
+                    'transaction_signature' => 'verified-signature',
+                ]);
+
+            $mock->shouldReceive('execute')
+                ->once()
+                ->andReturn([
+                    'status' => 'submitted',
+                    'signature' => 'verified-signature',
+                    'error_code' => null,
+                    'error_message' => null,
+                ]);
         });
 
         $payload = [
@@ -37,7 +45,7 @@ class SolanaSwapExecutionTest extends TestCase
         $this->actingAs($user)->postJson(route('wallets.solana.execute'), $payload)
             ->assertOk()
             ->assertJsonPath('swap.status', 'submitted')
-            ->assertJsonPath('swap.signature', 'chain-signature');
+            ->assertJsonPath('swap.signature', 'verified-signature');
 
         $this->actingAs($user)->postJson(route('wallets.solana.execute'), $payload)
             ->assertUnprocessable()
@@ -46,7 +54,7 @@ class SolanaSwapExecutionTest extends TestCase
         $this->assertDatabaseHas('solana_swap_attempts', [
             'id' => $attempt->id,
             'status' => 'submitted',
-            'transaction_signature' => 'chain-signature',
+            'transaction_signature' => 'verified-signature',
         ]);
     }
 
@@ -64,6 +72,76 @@ class SolanaSwapExecutionTest extends TestCase
         ])->assertNotFound();
 
         $this->assertSame('prepared', $attempt->fresh()->status);
+    }
+
+    public function test_verified_signature_is_preserved_when_external_submission_is_ambiguous(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $wallet = $this->wallet($user);
+        $attempt = $this->attempt($user, $wallet);
+
+        $this->mock(JupiterSwapExecutionService::class, function ($mock): void {
+            $mock->shouldReceive('validateSigned')
+                ->once()
+                ->andReturn([
+                    'transaction_signature' => 'verified-signature',
+                ]);
+
+            $mock->shouldReceive('execute')
+                ->once()
+                ->andThrow(new \RuntimeException(
+                    'The signed swap could not be submitted. Check transaction history before retrying.'
+                ));
+        });
+
+        $this->actingAs($user)->postJson(route('wallets.solana.execute'), [
+            'attempt_id' => $attempt->id,
+            'signed_transaction' => base64_encode('signed'),
+        ])
+            ->assertUnprocessable()
+            ->assertJsonPath(
+                'message',
+                'The signed swap could not be submitted. Check transaction history before retrying.'
+            );
+
+        $this->assertDatabaseHas('solana_swap_attempts', [
+            'id' => $attempt->id,
+            'status' => 'submitting',
+            'transaction_signature' => 'verified-signature',
+        ]);
+    }
+
+    public function test_validation_failure_returns_attempt_to_prepared_for_safe_retry(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $wallet = $this->wallet($user);
+        $attempt = $this->attempt($user, $wallet);
+
+        $this->mock(JupiterSwapExecutionService::class, function ($mock): void {
+            $mock->shouldReceive('validateSigned')
+                ->once()
+                ->andThrow(new \RuntimeException(
+                    'The signed transaction failed validation.'
+                ));
+
+            $mock->shouldNotReceive('execute');
+        });
+
+        $this->actingAs($user)->postJson(route('wallets.solana.execute'), [
+            'attempt_id' => $attempt->id,
+            'signed_transaction' => base64_encode('invalid-signed'),
+        ])
+            ->assertUnprocessable()
+            ->assertJsonPath(
+                'message',
+                'The signed transaction failed validation.'
+            );
+
+        $attempt->refresh();
+
+        $this->assertSame('prepared', $attempt->status);
+        $this->assertNull($attempt->transaction_signature);
+        $this->assertNull($attempt->submitted_at);
     }
 
     private function wallet(User $user): ConnectedWallet

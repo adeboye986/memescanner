@@ -44,15 +44,37 @@ class SolanaSwapExecuteController extends Controller
                 return $attempt;
             });
 
+            try {
+                $validation = $executions->validateSigned(
+                    $attempt,
+                    $validated['signed_transaction'],
+                    $attempt->connectedWallet->address,
+                );
+            } catch (RuntimeException $exception) {
+                SolanaSwapAttempt::query()
+                    ->whereKey($attempt->id)
+                    ->where('status', 'submitting')
+                    ->whereNull('transaction_signature')
+                    ->update([
+                        'status' => 'prepared',
+                        'submitted_at' => null,
+                        'updated_at' => now(),
+                    ]);
+
+                throw $exception;
+            }
+
+            $attempt->update([
+                'transaction_signature' => $validation['transaction_signature'],
+            ]);
+
             $result = $executions->execute(
                 $attempt,
                 $validated['signed_transaction'],
-                $attempt->connectedWallet->address,
             );
 
             $attempt->update([
                 'status' => $result['status'],
-                'transaction_signature' => $result['signature'],
                 'provider_error_code' => $result['error_code'],
                 'provider_error_message' => $result['error_message'],
             ]);

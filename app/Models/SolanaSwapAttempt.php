@@ -12,7 +12,8 @@ class SolanaSwapAttempt extends Model
         'input_amount_lamports', 'slippage_bps', 'message_hash',
         'prepared_transaction', 'status', 'transaction_signature',
         'provider_error_code', 'provider_error_message', 'expires_at',
-        'submitted_at',
+        'submitted_at', 'confirmed_at', 'failed_at', 'failure_reason',
+        'network_fee_lamports', 'slot',
     ];
 
     protected $hidden = ['prepared_transaction'];
@@ -23,6 +24,8 @@ class SolanaSwapAttempt extends Model
             'prepared_transaction' => 'encrypted',
             'expires_at' => 'datetime',
             'submitted_at' => 'datetime',
+            'confirmed_at' => 'datetime',
+            'failed_at' => 'datetime',
         ];
     }
 

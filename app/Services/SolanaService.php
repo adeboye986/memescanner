@@ -422,6 +422,39 @@ class SolanaService
         );
     }
 
+    public function getTransactionReceipt(string $signature): ?array
+    {
+        $transaction = $this->getTransaction($signature);
+
+        if ($transaction === null || $transaction === []) {
+            return null;
+        }
+
+        $slot = $transaction['slot'] ?? null;
+        $meta = $transaction['meta'] ?? null;
+
+        if (! is_int($slot) || $slot < 0 || ! is_array($meta)) {
+            throw new RuntimeException(
+                'Solana RPC returned an invalid transaction receipt.'
+            );
+        }
+
+        $fee = $meta['fee'] ?? null;
+
+        if (! is_int($fee) || $fee < 0) {
+            throw new RuntimeException(
+                'Solana RPC returned an invalid transaction fee.'
+            );
+        }
+
+        return [
+            'succeeded' => ($meta['err'] ?? null) === null,
+            'slot' => $slot,
+            'network_fee_lamports' => $fee,
+            'error' => $meta['err'] ?? null,
+        ];
+    }
+
     public function findPumpFunBondingCurve(
         string $mint,
         int $searchLimit = 20

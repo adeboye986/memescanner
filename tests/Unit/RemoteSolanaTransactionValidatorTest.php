@@ -63,6 +63,11 @@ class RemoteSolanaTransactionValidatorTest extends TestCase
         $this->assertTrue($result['valid']);
         $this->assertTrue($result['expected_wallet_signature_present']);
 
+        $this->assertSame(
+            str_repeat('1', 88),
+            $result['transaction_signature']
+        );
+
         Http::assertSent(function (Request $request) {
             return $request->url() === 'https://validator.example.com/v1/compare-signed'
                 && $request->hasHeader('Authorization', 'Bearer test-secret')
@@ -138,7 +143,7 @@ class RemoteSolanaTransactionValidatorTest extends TestCase
 
     private function validResponse(bool $signed): array
     {
-        return [
+        $response = [
             'valid' => true,
             'transaction_version' => 0,
             'message_hash' => str_repeat('a', 64),
@@ -151,5 +156,11 @@ class RemoteSolanaTransactionValidatorTest extends TestCase
             'recent_blockhash' => 'Blockhash111',
             'address_lookup_table_references' => [],
         ];
+
+        if ($signed) {
+            $response['transaction_signature'] = str_repeat('1', 88);
+        }
+
+        return $response;
     }
 }

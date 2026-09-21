@@ -123,4 +123,110 @@ class SolanaServiceTest extends TestCase
         app(SolanaService::class)
             ->getBalanceLamports('11111111111111111111111111111111');
     }
+
+    public function test_it_reads_successful_transaction_receipt(): void
+    {
+        $rpcUrl = 'https://solana-rpc.example.test';
+        $signature = 'test-signature';
+
+        $settings = $this->mock(ApplicationSettingsService::class);
+        $settings->shouldReceive('getSecret')
+            ->once()
+            ->andReturn($rpcUrl);
+
+        Http::fake([
+            $rpcUrl => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => [
+                    'slot' => 123456789,
+                    'meta' => [
+                        'err' => null,
+                        'fee' => 5000,
+                    ],
+                    'transaction' => [],
+                ],
+                'id' => 1,
+            ]),
+        ]);
+
+        $receipt = app(SolanaService::class)
+            ->getTransactionReceipt($signature);
+
+        $this->assertSame([
+            'succeeded' => true,
+            'slot' => 123456789,
+            'network_fee_lamports' => 5000,
+            'error' => null,
+        ], $receipt);
+
+        Http::assertSent(fn ($request): bool => $request['method'] === 'getTransaction'
+            && $request['params'] === [
+                $signature,
+                [
+                    'encoding' => 'jsonParsed',
+                    'commitment' => 'confirmed',
+                    'maxSupportedTransactionVersion' => 0,
+                ],
+            ]);
+    }
+
+    public function test_it_reads_failed_transaction_receipt(): void
+    {
+        $rpcUrl = 'https://solana-rpc.example.test';
+
+        $settings = $this->mock(ApplicationSettingsService::class);
+        $settings->shouldReceive('getSecret')
+            ->once()
+            ->andReturn($rpcUrl);
+
+        $error = [
+            'InstructionError' => [2, 'Custom'],
+        ];
+
+        Http::fake([
+            $rpcUrl => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => [
+                    'slot' => 123456790,
+                    'meta' => [
+                        'err' => $error,
+                        'fee' => 7000,
+                    ],
+                    'transaction' => [],
+                ],
+                'id' => 1,
+            ]),
+        ]);
+
+        $receipt = app(SolanaService::class)
+            ->getTransactionReceipt('failed-signature');
+
+        $this->assertFalse($receipt['succeeded']);
+        $this->assertSame(123456790, $receipt['slot']);
+        $this->assertSame(7000, $receipt['network_fee_lamports']);
+        $this->assertSame($error, $receipt['error']);
+    }
+
+    public function test_missing_transaction_receipt_is_pending(): void
+    {
+        $rpcUrl = 'https://solana-rpc.example.test';
+
+        $settings = $this->mock(ApplicationSettingsService::class);
+        $settings->shouldReceive('getSecret')
+            ->once()
+            ->andReturn($rpcUrl);
+
+        Http::fake([
+            $rpcUrl => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => null,
+                'id' => 1,
+            ]),
+        ]);
+
+        $this->assertNull(
+            app(SolanaService::class)
+                ->getTransactionReceipt('pending-signature')
+        );
+    }
 }

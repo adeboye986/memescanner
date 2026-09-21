@@ -115,6 +115,18 @@ class RemoteSolanaTransactionValidator
             );
         }
 
+        if (
+            $result['expected_wallet_signature_present'] === true &&
+            (
+                ! is_string($result['transaction_signature'] ?? null) ||
+                preg_match('/^[1-9A-HJ-NP-Za-km-z]{87,88}$/', $result['transaction_signature']) !== 1
+            )
+        ) {
+            throw new RuntimeException(
+                'Solana transaction validator returned an invalid response.'
+            );
+        }
+
         return $result;
     }
 }
