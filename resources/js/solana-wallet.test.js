@@ -5,6 +5,7 @@ import {
     detectWallets,
     disconnectWallet,
     fetchSwapQuote,
+    fetchSwapHistory,
     fetchWalletBalance,
     defaultSpendFromBalance,
     formatBaseUnits,
@@ -186,6 +187,70 @@ test('balance helper returns verified solana balance response', async () => {
         maximum_lamports: 100000000,
         suggested_spend_lamports: 1000000,
     });
+});
+
+test('history helper returns validated Solana transaction history', async () => {
+    const transactions = [
+        {
+            id: 12,
+            output_mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+            input_amount_lamports: '1234567890',
+            input_amount_sol: '1.23456789',
+            status: 'confirmed',
+            transaction_signature: 'chain-signature',
+            network_fee_lamports: '5000',
+            network_fee_sol: '0.000005',
+            slot: 123456789,
+            failure_reason: null,
+        },
+        {
+            id: 11,
+            output_mint: 'Es9vMFrzaCERmJfrF4H2FYD6tGhT5d1kRZq3h5YQkG6',
+            input_amount_lamports: '1000000',
+            input_amount_sol: '0.001',
+            status: 'submitted',
+            transaction_signature: null,
+            network_fee_lamports: null,
+            network_fee_sol: null,
+            slot: null,
+            failure_reason: null,
+        },
+    ];
+
+    const result = await fetchSwapHistory(async (step) => {
+        assert.equal(step, 'history');
+
+        return { transactions };
+    });
+
+    assert.deepEqual(result, transactions);
+});
+
+test('history helper rejects malformed Solana transaction history', async () => {
+    await assert.rejects(
+        () => fetchSwapHistory(async () => ({
+            transactions: [{
+                id: 12,
+                output_mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+                input_amount_lamports: '1234567890',
+                input_amount_sol: '1.23456789',
+                status: 'confirmed',
+                transaction_signature: 'chain-signature',
+                network_fee_lamports: 'not-lamports',
+                network_fee_sol: '0.000005',
+                slot: 123456789,
+                failure_reason: null,
+            }],
+        })),
+        /invalid Solana transaction history/,
+    );
+
+    await assert.rejects(
+        () => fetchSwapHistory(async () => ({
+            transactions: 'not-an-array',
+        })),
+        /invalid Solana transaction history/,
+    );
 });
 
 test('missing USD valuation keeps the exact SOL balance available', async () => {

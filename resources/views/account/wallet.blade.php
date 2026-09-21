@@ -7,7 +7,8 @@
         data-balance-url="{{ route('wallets.solana.balance') }}"
         data-quote-url="{{ route('wallets.solana.quote') }}"
         data-order-url="{{ route('wallets.solana.order') }}"
-        data-execute-url="{{ route('wallets.solana.execute') }}">
+        data-execute-url="{{ route('wallets.solana.execute') }}"
+        data-history-url="{{ route('wallets.solana.history') }}">
     <div class="flex flex-wrap items-start justify-between gap-4">
         <div><p class="text-xs font-semibold uppercase tracking-widest text-sky-400">Solana · Non-custodial</p><h2 id="wallet-heading" class="mt-2 text-xl font-semibold text-white">Connect Wallet</h2></div>
         <span data-wallet-status class="rounded-lg border border-slate-700 px-3 py-1 text-sm text-slate-200">{{ $connectedWallet ? 'Connected / Verified' : 'Not connected' }}</span>
@@ -64,6 +65,33 @@
                 <p class="text-xs text-slate-400">Your private key stays inside Phantom or Solflare. The signed transaction is independently checked before submission.</p>
             </div>
         </form>
+        <div data-wallet-history class="mt-5 space-y-3 border-t border-slate-800 pt-5">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-wider text-sky-400">Recent activity</p>
+                    <h3 class="mt-1 font-semibold text-white">Solana Transactions</h3>
+                </div>
+
+                <button
+                    type="button"
+                    data-wallet-history-refresh
+                    class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:text-white disabled:opacity-50">
+                    Refresh
+                </button>
+            </div>
+
+            <div data-wallet-history-loading class="text-sm text-slate-400">
+                Loading recent transactions…
+            </div>
+
+            <div data-wallet-history-empty hidden class="rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-sm text-slate-400">
+                No Solana transactions yet.
+            </div>
+
+            <div data-wallet-history-list class="space-y-3"></div>
+
+            <p data-wallet-history-error hidden class="text-sm text-red-300"></p>
+        </div>
     </div>
     @if($user->hasVerifiedEmail() || $user->is_admin)
         <div class="flex flex-wrap gap-3">

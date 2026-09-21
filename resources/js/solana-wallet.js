@@ -90,6 +90,57 @@ export async function fetchWalletBalance(get) {
     };
 }
 
+export async function fetchSwapHistory(get) {
+    const result = await get('history');
+
+    if (!Array.isArray(result.transactions)) {
+        throw new Error('The server returned invalid Solana transaction history.');
+    }
+
+    for (const transaction of result.transactions) {
+        if (
+            !Number.isInteger(transaction?.id)
+            || typeof transaction.output_mint !== 'string'
+            || transaction.output_mint.trim() === ''
+            || typeof transaction.input_amount_lamports !== 'string'
+            || !/^\d+$/.test(transaction.input_amount_lamports)
+            || typeof transaction.input_amount_sol !== 'string'
+            || !/^\d+(?:\.\d{1,9})?$/.test(transaction.input_amount_sol)
+            || typeof transaction.status !== 'string'
+            || (
+                transaction.network_fee_lamports !== null
+                && (
+                    typeof transaction.network_fee_lamports !== 'string'
+                    || !/^\d+$/.test(transaction.network_fee_lamports)
+                )
+            )
+            || (
+                transaction.network_fee_sol !== null
+                && (
+                    typeof transaction.network_fee_sol !== 'string'
+                    || !/^\d+(?:\.\d{1,9})?$/.test(transaction.network_fee_sol)
+                )
+            )
+            || (
+                transaction.slot !== null
+                && !Number.isSafeInteger(transaction.slot)
+            )
+            || (
+                transaction.transaction_signature !== null
+                && typeof transaction.transaction_signature !== 'string'
+            )
+            || (
+                transaction.failure_reason !== null
+                && typeof transaction.failure_reason !== 'string'
+            )
+        ) {
+            throw new Error('The server returned invalid Solana transaction history.');
+        }
+    }
+
+    return result.transactions;
+}
+
 export function solToLamports(value) {
     const match = String(value).trim().match(/^(\d+)(?:\.(\d{1,9}))?$/);
     if (!match) throw new Error('Enter a valid SOL amount with no more than 9 decimal places.');
@@ -312,6 +363,103 @@ export function mountWalletCard(card) {
 
         return data;
     };
+
+    const loadHistory = async () => {
+        const history = card.querySelector('[data-wallet-history]');
+        const loading = card.querySelector('[data-wallet-history-loading]');
+        const empty = card.querySelector('[data-wallet-history-empty]');
+        const list = card.querySelector('[data-wallet-history-list]');
+        const error = card.querySelector('[data-wallet-history-error]');
+        const refresh = card.querySelector('[data-wallet-history-refresh]');
+
+        if (!history || !loading || !empty || !list || !error || !refresh) return;
+
+        refresh.disabled = true;
+        loading.hidden = false;
+        empty.hidden = true;
+        error.hidden = true;
+        list.replaceChildren();
+
+        try {
+            const transactions = await fetchSwapHistory(get);
+
+            loading.hidden = true;
+
+            if (!transactions.length) {
+                empty.hidden = false;
+
+                return;
+            }
+
+            transactions.forEach((transaction) => {
+                const item = document.createElement('div');
+                item.className = 'rounded-xl border border-slate-800 bg-slate-950/60 p-4';
+
+                const header = document.createElement('div');
+                header.className = 'flex flex-wrap items-center justify-between gap-3';
+
+                const amount = document.createElement('p');
+                amount.className = 'font-semibold text-white';
+                amount.textContent = `${transaction.input_amount_sol} SOL`;
+
+                const status = document.createElement('span');
+                status.className = 'rounded-lg border border-slate-700 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-slate-300';
+                status.textContent = transaction.status;
+
+                header.append(amount, status);
+                item.append(header);
+
+                const token = document.createElement('p');
+                token.className = 'mt-2 break-all font-mono text-xs text-slate-400';
+                token.textContent = `Output mint: ${transaction.output_mint}`;
+                item.append(token);
+
+                if (transaction.network_fee_sol) {
+                    const fee = document.createElement('p');
+                    fee.className = 'mt-2 text-sm text-slate-400';
+                    fee.textContent = `Actual network fee: ${transaction.network_fee_sol} SOL`;
+                    item.append(fee);
+                }
+
+                if (transaction.slot !== null && transaction.slot !== undefined) {
+                    const slot = document.createElement('p');
+                    slot.className = 'mt-2 text-sm text-slate-400';
+                    slot.textContent = `Slot: ${transaction.slot}`;
+                    item.append(slot);
+                }
+
+                if (transaction.transaction_signature) {
+                    const link = document.createElement('a');
+                    link.className = 'mt-3 inline-block text-sm font-medium text-sky-300 hover:text-sky-200';
+                    link.href = `https://solscan.io/tx/${encodeURIComponent(transaction.transaction_signature)}`;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    link.textContent = 'View on Solscan';
+                    item.append(link);
+                }
+
+                if (transaction.failure_reason) {
+                    const failure = document.createElement('p');
+                    failure.className = 'mt-2 text-sm text-red-300';
+                    failure.textContent = transaction.failure_reason;
+                    item.append(failure);
+                }
+
+                list.append(item);
+            });
+        } catch (historyError) {
+            loading.hidden = true;
+            error.hidden = false;
+            error.textContent = historyError?.message
+                || 'Could not load Solana transaction history.';
+        } finally {
+            refresh.disabled = false;
+        }
+    };
+
+    card.querySelector('[data-wallet-history-refresh]')
+        ?.addEventListener('click', loadHistory);
+
     const loadBalance = async () => {
         if (!balance || !balanceRefresh) return;
 
@@ -371,6 +519,7 @@ export function mountWalletCard(card) {
             balanceRefresh.hidden = false;
             quoteSpendEdited = false;
             await loadBalance();
+            await loadHistory();
             say('Wallet ownership verified. Confirm-first swaps are ready; every transaction still requires your wallet approval.');
         } catch (error) {
             const rejected = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
@@ -383,6 +532,7 @@ export function mountWalletCard(card) {
     };
     if (!card.querySelector('[data-wallet-details]').hidden) {
         loadBalance();
+        loadHistory();
     }
     connect.addEventListener('click', () => {
         const wallets = detectWallets(window);
@@ -524,6 +674,7 @@ export function mountWalletCard(card) {
             button.hidden = true;
             quotedPayload = null;
             await loadBalance();
+            await loadHistory();
         } catch (error) {
             const rejected = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
             say(rejected ? 'Swap cancelled in your wallet. Nothing was submitted.' : error?.message || 'Could not complete the swap.');

@@ -86,6 +86,9 @@ Route::middleware(['auth', 'customer.verified'])
         Route::post('/execute', SolanaSwapExecuteController::class)
             ->middleware('throttle:10,1')
             ->name('execute');
+
+        Route::get('/history', [SolanaSwapOrderController::class, 'history'])
+            ->name('history');
     });
 
 Route::middleware(['auth', 'customer.verified'])

@@ -7,7 +7,9 @@ use App\Http\Requests\SolanaSwapQuoteRequest;
 use App\Models\SolanaSwapAttempt;
 use App\Services\JupiterSwapOrderService;
 use App\Services\SolanaService;
+use App\Services\TokenAmountFormatter;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use RuntimeException;
 
 class SolanaSwapOrderController extends Controller
@@ -71,6 +73,53 @@ class SolanaSwapOrderController extends Controller
                 'transaction' => $order['transaction'],
                 'expires_at' => $attempt->expires_at->toIso8601String(),
             ],
+        ]);
+    }
+
+    public function history(Request $request, TokenAmountFormatter $amounts): JsonResponse
+    {
+        $attempts = SolanaSwapAttempt::query()
+            ->where('user_id', $request->user()->id)
+            ->latest('id')
+            ->limit(10)
+            ->get([
+                'id',
+                'output_mint',
+                'input_amount_lamports',
+                'status',
+                'transaction_signature',
+                'submitted_at',
+                'confirmed_at',
+                'failed_at',
+                'failure_reason',
+                'network_fee_lamports',
+                'slot',
+                'created_at',
+            ]);
+
+        return response()->json([
+            'transactions' => $attempts->map(function (SolanaSwapAttempt $attempt) use ($amounts): array {
+                return [
+                    'id' => $attempt->id,
+                    'output_mint' => $attempt->output_mint,
+                    'input_amount_lamports' => (string) $attempt->input_amount_lamports,
+                    'input_amount_sol' => $amounts->format((string) $attempt->input_amount_lamports, 9),
+                    'status' => $attempt->status,
+                    'transaction_signature' => $attempt->transaction_signature,
+                    'submitted_at' => $attempt->submitted_at?->toIso8601String(),
+                    'confirmed_at' => $attempt->confirmed_at?->toIso8601String(),
+                    'failed_at' => $attempt->failed_at?->toIso8601String(),
+                    'failure_reason' => $attempt->failure_reason,
+                    'network_fee_lamports' => $attempt->network_fee_lamports !== null
+                        ? (string) $attempt->network_fee_lamports
+                        : null,
+                    'network_fee_sol' => $attempt->network_fee_lamports !== null
+                        ? $amounts->format((string) $attempt->network_fee_lamports, 9)
+                        : null,
+                    'slot' => $attempt->slot,
+                    'created_at' => $attempt->created_at?->toIso8601String(),
+                ];
+            })->values(),
         ]);
     }
 }
