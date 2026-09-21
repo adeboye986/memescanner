@@ -51,6 +51,37 @@ return [
             'SOLANA_RPC_URL',
             'https://api.mainnet-beta.solana.com'
         ),
+        'metadata_cache_store' => env('OPERATIONS_CACHE_STORE', 'file'),
+        'token_metadata_cache_seconds' => env('SOLANA_TOKEN_METADATA_CACHE_SECONDS', 86400),
+        'transaction_validator_node' => env('SOLANA_TRANSACTION_VALIDATOR_NODE', 'node'),
+        'transaction_validator_timeout_seconds' => env('SOLANA_TRANSACTION_VALIDATOR_TIMEOUT_SECONDS', 5),
+    ],
+
+    'ethereum' => [
+        'rpc_url' => env('ETHEREUM_RPC_URL'),
+        'chain_id' => 1,
+        'metadata_cache_store' => env('ETHEREUM_METADATA_CACHE_STORE', 'file'),
+        'token_metadata_cache_seconds' => env('ETHEREUM_TOKEN_METADATA_CACHE_SECONDS', 86400),
+    ],
+
+    'zero_x' => [
+        'base_url' => env('ZERO_X_BASE_URL', 'https://api.0x.org'),
+        'api_key' => env('ZERO_X_API_KEY'),
+    ],
+
+    'coingecko' => [
+        'base_url' => env('COINGECKO_BASE_URL', 'https://api.coingecko.com/api/v3'),
+        'api_key' => env('COINGECKO_API_KEY'),
+        'max_price_age_seconds' => env('COINGECKO_MAX_PRICE_AGE_SECONDS', 120),
+    ],
+
+    'jupiter' => [
+        'base_url' => env('JUPITER_BASE_URL', 'https://api.jup.ag/swap/v1'),
+        'swap_v2_base_url' => env(
+            'JUPITER_SWAP_V2_BASE_URL',
+            'https://api.jup.ag/swap/v2'
+        ),
+        'api_key' => env('JUPITER_API_KEY'),
     ],
 
     'trading' => [
@@ -83,6 +114,16 @@ return [
         'queue_memory' => env('QUEUE_DRAIN_MEMORY', 128),
         'queue_job_timeout' => env('QUEUE_JOB_TIMEOUT', 600),
         'fast_tracker_stale_seconds' => env('FAST_TRACKER_STALE_SECONDS', 75),
+    ],
+
+    'solana_transaction_validator' => [
+        'driver' => env('SOLANA_TRANSACTION_VALIDATOR_DRIVER', 'http'),
+        'url' => env('SOLANA_TRANSACTION_VALIDATOR_URL'),
+        'api_key' => env('SOLANA_TRANSACTION_VALIDATOR_API_KEY'),
+        'timeout_seconds' => env(
+            'SOLANA_TRANSACTION_VALIDATOR_TIMEOUT_SECONDS',
+            5
+        ),
     ],
 
 ];

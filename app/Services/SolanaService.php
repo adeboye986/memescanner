@@ -422,6 +422,39 @@ class SolanaService
         );
     }
 
+    public function getTransactionReceipt(string $signature): ?array
+    {
+        $transaction = $this->getTransaction($signature);
+
+        if ($transaction === null || $transaction === []) {
+            return null;
+        }
+
+        $slot = $transaction['slot'] ?? null;
+        $meta = $transaction['meta'] ?? null;
+
+        if (! is_int($slot) || $slot < 0 || ! is_array($meta)) {
+            throw new RuntimeException(
+                'Solana RPC returned an invalid transaction receipt.'
+            );
+        }
+
+        $fee = $meta['fee'] ?? null;
+
+        if (! is_int($fee) || $fee < 0) {
+            throw new RuntimeException(
+                'Solana RPC returned an invalid transaction fee.'
+            );
+        }
+
+        return [
+            'succeeded' => ($meta['err'] ?? null) === null,
+            'slot' => $slot,
+            'network_fee_lamports' => $fee,
+            'error' => $meta['err'] ?? null,
+        ];
+    }
+
     public function findPumpFunBondingCurve(
         string $mint,
         int $searchLimit = 20
@@ -1327,6 +1360,52 @@ class SolanaService
         }
 
         return 'special_account';
+    }
+
+    public function getBalanceLamports(string $address): int
+    {
+        $result = $this->rpcRequest(
+            'getBalance',
+            [
+                $address,
+                [
+                    'commitment' => 'confirmed',
+                ],
+            ]
+        );
+
+        $lamports = $result['value'] ?? null;
+
+        if (! is_int($lamports) || $lamports < 0) {
+            throw new RuntimeException(
+                'Solana RPC returned an invalid wallet balance.'
+            );
+        }
+
+        return $lamports;
+    }
+
+    public function isBlockhashValid(string $blockhash): bool
+    {
+        $result = $this->rpcRequest(
+            'isBlockhashValid',
+            [
+                $blockhash,
+                [
+                    'commitment' => 'confirmed',
+                ],
+            ]
+        );
+
+        $valid = $result['value'] ?? null;
+
+        if (! is_bool($valid)) {
+            throw new RuntimeException(
+                'Solana RPC returned an invalid blockhash validity response.'
+            );
+        }
+
+        return $valid;
     }
 
     public function getSignaturesForAddress(
