@@ -10,6 +10,8 @@ use App\Services\CryptoPriceService;
 use App\Services\EthereumService;
 use App\Services\ZeroXSwapService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -40,7 +42,7 @@ class EthereumSwapTest extends TestCase
         $this->assertStringNotContainsString('0x1234', $attempt->getRawOriginal('transaction_payload'));
     }
 
-    public function test_user_cannot_report_another_users_transaction_and_attempt_is_single_use(): void
+    public function test_user_cannot_report_another_users_transaction_and_same_hash_is_idempotent(): void
     {
         $owner = User::factory()->create(['email_verified_at' => now()]);
         $attacker = User::factory()->create(['email_verified_at' => now()]);
@@ -55,12 +57,14 @@ class EthereumSwapTest extends TestCase
             'expires_at' => now()->addMinute(),
         ]);
         $payload = ['attempt_id' => $attempt->id, 'transaction_hash' => '0x'.str_repeat('ab', 32)];
+        $this->fakeTransaction();
 
         $this->actingAs($attacker)->postJson(route('wallets.ethereum.submitted'), $payload)->assertNotFound();
         $this->actingAs($owner)->postJson(route('wallets.ethereum.submitted'), $payload)
             ->assertOk()->assertJsonPath('swap.status', 'submitted');
         $this->actingAs($owner)->postJson(route('wallets.ethereum.submitted'), $payload)
-            ->assertUnprocessable();
+            ->assertOk()->assertJsonPath('swap.status', 'submitted');
+        Http::assertSentCount(1);
     }
 
     public function test_user_can_cancel_own_prepared_attempt_but_not_another_users_attempt(): void
@@ -122,11 +126,12 @@ class EthereumSwapTest extends TestCase
 
         $prepared = $attempt->transaction_payload;
 
-        $this->mock(EthereumService::class, function ($mock) use ($hash, $wallet, $prepared): void {
+        $this->partialMock(EthereumService::class, function ($mock) use ($hash, $wallet, $prepared): void {
             $mock->shouldReceive('getTransactionByHash')
                 ->once()
                 ->with($hash)
                 ->andReturn([
+                    'chain_id' => '1',
                     'hash' => $hash,
                     'from' => strtolower($wallet->address),
                     'to' => strtolower($prepared['to']),
@@ -179,10 +184,10 @@ class EthereumSwapTest extends TestCase
                 'attempt_id' => $attempt->id,
                 'transaction_hash' => $hash,
             ])
-            ->assertUnprocessable()
+            ->assertStatus(503)
             ->assertJsonPath(
                 'message',
-                'The broadcast Ethereum transaction could not be verified.'
+                'The broadcast Ethereum transaction could not be verified. Retry reporting the same transaction hash; do not send another transaction.'
             );
 
         $attempt->refresh();
@@ -337,11 +342,12 @@ class EthereumSwapTest extends TestCase
         $hash = '0x'.str_repeat('ab', 32);
         $prepared = $attempt->transaction_payload;
 
-        $this->mock(EthereumService::class, function ($mock) use ($hash, $wallet, $prepared): void {
+        $this->partialMock(EthereumService::class, function ($mock) use ($hash, $wallet, $prepared): void {
             $mock->shouldReceive('getTransactionByHash')
                 ->once()
                 ->with($hash)
                 ->andReturn([
+                    'chain_id' => '1',
                     'hash' => $hash,
                     'from' => strtolower($wallet->address),
                     'to' => strtolower($prepared['to']),
@@ -364,6 +370,200 @@ class EthereumSwapTest extends TestCase
         $this->assertSame('submitted', $attempt->status);
         $this->assertSame($hash, $attempt->transaction_hash);
         $this->assertNotNull($attempt->submitted_at);
+    }
+
+    #[DataProvider('transactionMismatches')]
+    public function test_submission_rejects_transaction_mismatch_without_attaching_hash(array $changes): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $attempt = $this->preparedAttempt($user);
+        $this->fakeTransaction($changes);
+
+        $this->actingAs($user)->postJson(route('wallets.ethereum.submitted'), [
+            'attempt_id' => $attempt->id, 'transaction_hash' => '0x'.str_repeat('ab', 32),
+        ])->assertUnprocessable()->assertJsonPath('message', 'The broadcast Ethereum transaction does not match the prepared swap.');
+
+        $this->assertDatabaseHas('ethereum_swap_attempts', [
+            'id' => $attempt->id, 'status' => 'prepared', 'transaction_hash' => null, 'submitted_at' => null,
+        ]);
+        Http::assertSentCount(1);
+    }
+
+    public static function transactionMismatches(): array
+    {
+        return [
+            'unrelated hash' => [['hash' => '0x'.str_repeat('cd', 32)]],
+            'sender' => [['from' => '0x'.str_repeat('3', 40)]],
+            'destination' => [['to' => '0x'.str_repeat('3', 40)]],
+            'value' => [['value' => '0x1']],
+            'calldata' => [['input' => '0x123400']],
+            'network' => [['chainId' => '0x89']],
+        ];
+    }
+
+    public function test_submission_normalizes_address_case_and_equivalent_quantities(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $attempt = $this->preparedAttempt($user);
+        $address = '0x'.str_repeat('aB', 20);
+        $attempt->connectedWallet->update(['address' => $address]);
+        $attempt->update(['transaction_payload' => array_replace($this->quote()['transaction'], [
+            'from' => $address,
+            'to' => '0x'.str_repeat('Cd', 20),
+            'value' => '0x00038D7EA4C68000',
+            'data' => '0xABcd',
+            'chainId' => '0x0001',
+        ])]);
+        $this->fakeTransaction([
+            'from' => strtolower($address), 'to' => '0x'.str_repeat('cD', 20),
+            'value' => '0x000038d7ea4c68000', 'input' => '0xabCD', 'chainId' => '0x0001',
+        ]);
+
+        $this->actingAs($user)->postJson(route('wallets.ethereum.submitted'), [
+            'attempt_id' => $attempt->id, 'transaction_hash' => '0x'.str_repeat('AB', 32),
+        ])->assertOk()->assertJsonPath('swap.transaction_hash', '0x'.str_repeat('ab', 32));
+
+        $this->assertSame('submitted', $attempt->fresh()->status);
+        Http::assertSentCount(1);
+    }
+
+    #[DataProvider('ambiguousRpcResponses')]
+    public function test_ambiguous_rpc_preserves_attempt_and_allows_same_hash_retry(string $failure): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $attempt = $this->preparedAttempt($user);
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+        Http::preventStrayRequests();
+        $calls = 0;
+        Http::fake(['https://ethereum.test' => function () use ($failure, &$calls) {
+            if (++$calls > 1) {
+                return Http::response(['result' => $this->rpcTransaction()]);
+            }
+
+            return match ($failure) {
+                'missing' => Http::response(['result' => null]),
+                'error' => Http::response(['error' => ['code' => -32000, 'message' => 'Unavailable']]),
+                'connection' => Http::failedConnection(),
+            };
+        }]);
+        $payload = ['attempt_id' => $attempt->id, 'transaction_hash' => '0x'.str_repeat('ab', 32)];
+
+        $this->actingAs($user)->postJson(route('wallets.ethereum.submitted'), $payload)
+            ->assertStatus(503)->assertJsonPath('retryable', true)
+            ->assertJsonPath('transaction_hash', $payload['transaction_hash']);
+
+        $this->assertDatabaseHas('ethereum_swap_attempts', [
+            'id' => $attempt->id, 'status' => 'prepared', 'transaction_hash' => null, 'submitted_at' => null,
+        ]);
+        $this->postJson(route('wallets.ethereum.submitted'), $payload)->assertOk();
+        $this->assertSame($payload['transaction_hash'], $attempt->fresh()->transaction_hash);
+    }
+
+    public static function ambiguousRpcResponses(): array
+    {
+        return [['missing'], ['error'], ['connection']];
+    }
+
+    public function test_accepted_hash_cannot_be_replaced_and_terminal_retry_preserves_state(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $attempt = $this->preparedAttempt($user);
+        $this->fakeTransaction();
+        $payload = ['attempt_id' => $attempt->id, 'transaction_hash' => '0x'.str_repeat('ab', 32)];
+        $this->actingAs($user)->postJson(route('wallets.ethereum.submitted'), $payload)->assertOk();
+        $submittedAt = $attempt->fresh()->submitted_at;
+        $attempt->update(['status' => 'confirmed', 'confirmed_at' => now()]);
+
+        $this->postJson(route('wallets.ethereum.submitted'), $payload)
+            ->assertOk()->assertJsonPath('swap.status', 'confirmed');
+        $this->postJson(route('wallets.ethereum.submitted'), array_replace($payload, [
+            'transaction_hash' => '0x'.str_repeat('cd', 32),
+        ]))->assertUnprocessable();
+
+        $attempt->refresh();
+        $this->assertSame($payload['transaction_hash'], $attempt->transaction_hash);
+        $this->assertSame('confirmed', $attempt->status);
+        $this->assertTrue($submittedAt->equalTo($attempt->submitted_at));
+        Http::assertSentCount(1);
+    }
+
+    public function test_expiry_during_rpc_lookup_does_not_prevent_verified_submission(): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $attempt = $this->preparedAttempt($user);
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+        Http::preventStrayRequests();
+        Http::fake(['https://ethereum.test' => function () use ($attempt) {
+            $attempt->update(['status' => 'expired', 'expires_at' => now()->subSecond()]);
+
+            return Http::response(['result' => $this->rpcTransaction()]);
+        }]);
+
+        $this->actingAs($user)->postJson(route('wallets.ethereum.submitted'), [
+            'attempt_id' => $attempt->id, 'transaction_hash' => '0x'.str_repeat('ab', 32),
+        ])->assertOk()->assertJsonPath('swap.status', 'submitted');
+
+        $this->assertSame('submitted', $attempt->fresh()->status);
+    }
+
+    #[DataProvider('submissionRaces')]
+    public function test_submission_rechecks_locked_state_after_rpc(string $status, ?string $hash, int $expectedStatus): void
+    {
+        $user = User::factory()->create(['email_verified_at' => now()]);
+        $attempt = $this->preparedAttempt($user);
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+        Http::preventStrayRequests();
+        Http::fake(['https://ethereum.test' => function () use ($attempt, $status, $hash) {
+            $attempt->update(['status' => $status, 'transaction_hash' => $hash]);
+
+            return Http::response(['result' => $this->rpcTransaction()]);
+        }]);
+
+        $this->actingAs($user)->postJson(route('wallets.ethereum.submitted'), [
+            'attempt_id' => $attempt->id, 'transaction_hash' => '0x'.str_repeat('ab', 32),
+        ])->assertStatus($expectedStatus);
+
+        $attempt->refresh();
+        $this->assertSame($status, $attempt->status);
+        $this->assertSame($hash, $attempt->transaction_hash);
+        Http::assertSentCount(1);
+    }
+
+    /** @return array<string, array{string, ?string, int}> */
+    public static function submissionRaces(): array
+    {
+        return [
+            'cancelled' => ['cancelled', null, 422],
+            'different transaction accepted' => ['submitted', '0x'.str_repeat('cd', 32), 422],
+            'same transaction accepted' => ['submitted', '0x'.str_repeat('ab', 32), 200],
+        ];
+    }
+
+    private function preparedAttempt(User $user): EthereumSwapAttempt
+    {
+        return EthereumSwapAttempt::query()->create([
+            'user_id' => $user->id, 'connected_wallet_id' => $this->wallet($user)->id,
+            'buy_token' => self::TOKEN, 'sell_amount_wei' => '1000000000000000',
+            'slippage_bps' => 100, 'transaction_payload' => $this->quote()['transaction'],
+            'status' => 'prepared', 'expires_at' => now()->addMinute(),
+        ]);
+    }
+
+    /** @param array<string, string> $changes */
+    private function fakeTransaction(array $changes = []): void
+    {
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+        Http::preventStrayRequests();
+        Http::fake(['https://ethereum.test' => Http::response(['result' => array_replace($this->rpcTransaction(), $changes)])]);
+    }
+
+    /** @return array<string, string> */
+    private function rpcTransaction(): array
+    {
+        return [
+            'hash' => '0x'.str_repeat('ab', 32), 'from' => self::WALLET,
+            'to' => self::TOKEN, 'value' => '0x38d7ea4c68000', 'input' => '0x1234', 'chainId' => '0x1',
+        ];
     }
 
     private function wallet(User $user): ConnectedWallet

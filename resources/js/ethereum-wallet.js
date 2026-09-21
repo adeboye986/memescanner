@@ -98,52 +98,128 @@ export function ethToWei(value) {
     return wei.toString();
 }
 
-export async function sendEthereumSwap(wallet, post, payload) {
-    if (!wallet || typeof wallet.request !== 'function') throw new Error('Unlock an Ethereum wallet before confirming.');
-    const accounts = await wallet.request({ method: 'eth_accounts' });
-    if (accounts?.[0]?.toLowerCase() !== payload.wallet_address) {
-        throw new Error('The active wallet account does not match the verified Ethereum wallet. Reconnect before confirming.');
+export function createEthereumSwapRecovery(userId, walletAddress, storage) {
+    const user = String(userId);
+    const address = walletAddress.toLowerCase();
+    const key = `ethereum-swap-report:v2:${user}:${address}`;
+    let pending = null;
+    let reporting = null;
+    if (storage === undefined) {
+        try { storage = globalThis.sessionStorage; } catch { storage = null; }
     }
-    if (String(await wallet.request({ method: 'eth_chainId' })).toLowerCase() !== '0x1') throw new Error('Switch to Ethereum Mainnet before confirming.');
-
-    const order = await post('order', payload);
-    const transaction = order.order?.transaction;
-    if (!Number.isInteger(order.order?.attempt_id) || !transaction
-        || transaction.chainId !== '1' || transaction.from !== payload.wallet_address
-        || !/^0x[a-f0-9]{40}$/.test(transaction.to)
-        || !/^0x[0-9a-fA-F]*$/.test(transaction.data)
-        || transaction.value !== payload.sell_amount_wei
-        || !/^\d+$/.test(transaction.gas) || !/^\d+$/.test(transaction.gasPrice)) {
-        throw new Error('The server returned an invalid Ethereum transaction.');
-    }
-    let hash;
-
+    const clear = () => {
+        pending = null;
+        try { storage?.removeItem(key); } catch { /* An acknowledged record is harmless on the next reload. */ }
+    };
+    const valid = (record) => record?.user_id === user
+        && record.wallet_address === address
+        && Number.isSafeInteger(record.attempt_id) && record.attempt_id > 0
+        && typeof record.transaction_hash === 'string'
+        && /^0x[a-fA-F0-9]{64}$/.test(record.transaction_hash);
     try {
-        hash = await wallet.request({ method: 'eth_sendTransaction', params: [{
-            from: transaction.from,
-            to: transaction.to,
-            data: transaction.data,
-            value: toQuantity(BigInt(transaction.value)),
-            gas: toQuantity(BigInt(transaction.gas)),
-            gasPrice: toQuantity(BigInt(transaction.gasPrice)),
-        }], });
-    } catch (error) {
-        const cancelled = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
+        const raw = storage?.getItem(key);
+        if (raw) {
+            const record = JSON.parse(raw);
+            if (valid(record)) pending = record;
+            else clear();
+        }
+    } catch { clear(); }
 
-        if (cancelled) {
-            try {
-                await post('cancelled', { attempt_id: order.order.attempt_id });
-            } catch {
-                // Preserve the wallet rejection as the primary user-facing result.
+    return {
+        sending: false,
+        uncertain: false,
+        pending: () => pending,
+        remember(attemptId, hash) {
+            const record = { user_id: user, wallet_address: address, attempt_id: attemptId, transaction_hash: hash };
+            if (!valid(record)) throw new Error('Invalid Ethereum broadcast recovery record.');
+            pending = record;
+            try { storage?.setItem(key, JSON.stringify(record)); } catch { /* Reporting must continue even without storage. */ }
+        },
+        async recover(post) {
+            if (reporting) return reporting;
+            if (!pending) return null;
+            const record = pending;
+            reporting = (async () => {
+                try {
+                    const result = await post('submitted', { attempt_id: record.attempt_id, transaction_hash: record.transaction_hash });
+                    if (result.swap?.transaction_hash?.toLowerCase() !== record.transaction_hash.toLowerCase()
+                        || !['submitted', 'confirmed', 'failed'].includes(result.swap?.status)) {
+                        throw new Error('The server did not acknowledge this transaction.');
+                    }
+                    clear();
+                    return result;
+                } catch (error) {
+                    if ([403, 404].includes(error?.status)) {
+                        clear();
+                        throw new Error('The saved transaction is unavailable for this account. Its recovery record was discarded.');
+                    }
+                    const unresolved = new Error(`Transaction ${record.transaction_hash} was broadcast but reporting is unresolved. Use Retry transaction report; do not send another swap. ${error?.message ?? ''}`);
+                    unresolved.transactionHash = record.transaction_hash;
+                    throw unresolved;
+                }
+            })();
+            try { return await reporting; } finally { reporting = null; }
+        },
+    };
+}
+
+export async function sendEthereumSwap(wallet, post, payload, recovery) {
+    if (recovery.pending()) throw new Error('Recover the previously broadcast transaction before starting a new swap.');
+    if (recovery.sending || recovery.uncertain) throw new Error('Wallet submission outcome is pending or unknown. Check wallet transaction history before attempting another swap.');
+    recovery.sending = true;
+    try {
+        if (!wallet || typeof wallet.request !== 'function') throw new Error('Unlock an Ethereum wallet before confirming.');
+        const accounts = await wallet.request({ method: 'eth_accounts' });
+        if (accounts?.[0]?.toLowerCase() !== payload.wallet_address) {
+            throw new Error('The active wallet account does not match the verified Ethereum wallet. Reconnect before confirming.');
+        }
+        if (String(await wallet.request({ method: 'eth_chainId' })).toLowerCase() !== '0x1') throw new Error('Switch to Ethereum Mainnet before confirming.');
+
+        const order = await post('order', payload);
+        const transaction = order.order?.transaction;
+        if (!Number.isInteger(order.order?.attempt_id) || !transaction
+            || transaction.chainId !== '1' || transaction.from !== payload.wallet_address
+            || !/^0x[a-f0-9]{40}$/.test(transaction.to)
+            || !/^0x[0-9a-fA-F]*$/.test(transaction.data)
+            || transaction.value !== payload.sell_amount_wei
+            || !/^\d+$/.test(transaction.gas) || !/^\d+$/.test(transaction.gasPrice)) {
+            throw new Error('The server returned an invalid Ethereum transaction.');
+        }
+        let hash;
+        recovery.uncertain = true;
+
+        try {
+            hash = await wallet.request({ method: 'eth_sendTransaction', params: [{
+                from: transaction.from,
+                to: transaction.to,
+                data: transaction.data,
+                value: toQuantity(BigInt(transaction.value)),
+                gas: toQuantity(BigInt(transaction.gas)),
+                gasPrice: toQuantity(BigInt(transaction.gasPrice)),
+            }], });
+        } catch (error) {
+            const cancelled = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
+
+            if (cancelled) {
+                recovery.uncertain = false;
+                try {
+                    await post('cancelled', { attempt_id: order.order.attempt_id });
+                } catch {
+                    // Preserve the wallet rejection as the primary user-facing result.
+                }
             }
+
+            throw error;
         }
 
-        throw error;
+        if (typeof hash !== 'string' || !/^0x[a-fA-F0-9]{64}$/.test(hash)) throw new Error('The wallet returned an invalid transaction hash.');
+
+        recovery.remember(order.order.attempt_id, hash);
+        recovery.uncertain = false;
+        return await recovery.recover(post);
+    } finally {
+        recovery.sending = false;
     }
-
-    if (typeof hash !== 'string' || !/^0x[a-fA-F0-9]{64}$/.test(hash)) throw new Error('The wallet returned an invalid transaction hash.');
-
-    return post('submitted', { attempt_id: order.order.attempt_id, transaction_hash: hash });
 }
 
 export function mountEthereumWalletCard(card) {
@@ -156,8 +232,12 @@ export function mountEthereumWalletCard(card) {
             headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content ?? '' },
             body: JSON.stringify(payload), signal: AbortSignal.timeout(30000),
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(Object.values(data.errors ?? {}).flat()[0] ?? data.message ?? 'Ethereum wallet request failed.');
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const error = new Error(Object.values(data.errors ?? {}).flat()[0] ?? data.message ?? 'Ethereum wallet request failed.');
+            error.status = response.status;
+            throw error;
+        }
         return data;
     };
     const get = async (step) => {
@@ -262,6 +342,33 @@ export function mountEthereumWalletCard(card) {
     let activeWallet = null;
     let activeAddress = card.querySelector('[data-eth-address]')?.title?.toLowerCase() || null;
     let quotedPayload = null;
+    const recoveries = new Map();
+    const recoveryFor = (address) => {
+        if (!recoveries.has(address)) recoveries.set(address, createEthereumSwapRecovery(card.dataset.recoveryUser, address));
+        return recoveries.get(address);
+    };
+    let recovery = activeAddress ? recoveryFor(activeAddress) : null;
+    const recoveryButton = card.querySelector('[data-eth-report-retry]');
+    const recoverBroadcast = async () => {
+        const current = recovery;
+        if (!current?.pending()) {
+            if (recoveryButton) recoveryButton.hidden = true;
+            return;
+        }
+        if (recoveryButton) { recoveryButton.hidden = false; recoveryButton.disabled = true; }
+        try {
+            const result = await current.recover(post);
+            if (current === recovery && result) say(`Previous Ethereum transaction ${result.swap.status}: ${result.swap.transaction_hash}`);
+        } catch (error) {
+            if (current === recovery) say(error.message);
+        } finally {
+            if (current === recovery && recoveryButton) {
+                recoveryButton.hidden = !current.pending();
+                recoveryButton.disabled = false;
+            }
+        }
+    };
+    recoveryButton?.addEventListener('click', recoverBroadcast);
     window.addEventListener?.('eip6963:announceProvider', (event) => announced.push(event.detail));
     window.dispatchEvent?.(new Event('eip6963:requestProvider'));
 
@@ -283,6 +390,7 @@ export function mountEthereumWalletCard(card) {
                     const verified = await verifyEthereumWallet(selected, post, say);
                     activeWallet = selected.wallet;
                     activeAddress = verified.address.toLowerCase();
+                    recovery = recoveryFor(activeAddress);
                     card.querySelector('[data-eth-status]').textContent = 'Connected / Verified';
                     card.querySelector('[data-eth-details]').hidden = false;
                     card.querySelector('[data-eth-provider]').textContent = selected.label;
@@ -292,9 +400,10 @@ export function mountEthereumWalletCard(card) {
                     card.querySelector('.copy-value').dataset.copyValue = verified.address;
                     card.querySelector('[data-eth-disconnect]').hidden = false;
                     card.querySelector('[data-eth-balance-refresh]').hidden = false;
+                    say('Ethereum wallet ownership verified. No transaction was authorized.');
+                    await recoverBroadcast();
                     await loadBalance();
                     await loadHistory();
-                    say('Ethereum wallet ownership verified. No transaction was authorized.');
                 } catch (error) {
                     say(error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '') ? 'Ethereum wallet request cancelled.' : error?.message || 'Could not connect this Ethereum wallet.');
                 }
@@ -311,6 +420,8 @@ export function mountEthereumWalletCard(card) {
             card.querySelector('[data-eth-disconnect]').hidden = true;
             activeWallet = null;
             activeAddress = null;
+            recovery = null;
+            if (recoveryButton) recoveryButton.hidden = true;
             invalidatePrice();
             say('Ethereum wallet disconnected from this account. No funds were moved.');
         } catch (error) {
@@ -374,19 +485,21 @@ export function mountEthereumWalletCard(card) {
         try {
             if (!quotedPayload) throw new Error('Request a fresh price before confirming.');
             const wallet = activeWallet ?? detectEthereumWallets(window, announced)[0]?.wallet;
-            const result = await sendEthereumSwap(wallet, post, quotedPayload);
+            const result = await sendEthereumSwap(wallet, post, quotedPayload, recovery);
             quotedPayload = null;
             button.hidden = true;
-            say(`Ethereum swap submitted: ${result.swap.transaction_hash}`);
+            say(`Ethereum swap ${result.swap.status}: ${result.swap.transaction_hash}`);
             await loadBalance();
             await loadHistory();
         } catch (error) {
-            say(error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '') ? 'Ethereum swap cancelled. Nothing was submitted.' : error?.message || 'Could not submit the Ethereum swap.');
+            if (recoveryButton) recoveryButton.hidden = !recovery?.pending();
+            say(!error?.transactionHash && (error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '')) ? 'Ethereum swap cancelled. Nothing was submitted.' : error?.message || 'Could not submit the Ethereum swap.');
         } finally {
             button.disabled = false;
         }
     });
     if (!card.querySelector('[data-eth-details]')?.hidden) {
+        recoverBroadcast();
         loadBalance();
         loadHistory();
     }

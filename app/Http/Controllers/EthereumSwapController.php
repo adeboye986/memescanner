@@ -119,128 +119,95 @@ class EthereumSwapController extends Controller
         ]);
 
         $submittedHash = strtolower($validated['transaction_hash']);
-        $broadcastVerified = false;
+        $attempt = EthereumSwapAttempt::query()
+            ->whereKey($validated['attempt_id'])
+            ->where('user_id', $request->user()->id)
+            ->firstOrFail();
 
-        for ($pass = 0; $pass < 2; $pass++) {
-            $attempt = EthereumSwapAttempt::query()
-                ->with('connectedWallet')
-                ->whereKey($validated['attempt_id'])
-                ->where('user_id', $request->user()->id)
-                ->first();
-
-            if (! $attempt) {
-                abort(404);
-            }
-
-            if (! in_array($attempt->status, ['prepared', 'expired'], true)) {
-                return response()->json([
-                    'message' => 'This Ethereum swap order is no longer available for submission.',
-                ], 422);
-            }
-
-            $requiresBroadcastVerification =
-                $attempt->status === 'expired'
-                || $attempt->expires_at->isPast();
-
-            if ($requiresBroadcastVerification && ! $broadcastVerified) {
-                try {
-                    $transaction = $ethereum->getTransactionByHash($submittedHash);
-                } catch (RuntimeException) {
-                    return response()->json([
-                        'message' => 'The broadcast Ethereum transaction could not be verified.',
-                    ], 422);
-                }
-
-                $prepared = $attempt->transaction_payload;
-                $wallet = $attempt->connectedWallet;
-
-                if (! $wallet
-                    || ! is_array($prepared)
-                    || ! isset(
-                        $prepared['from'],
-                        $prepared['to'],
-                        $prepared['value'],
-                        $prepared['data'],
-                    )
-                    || $transaction['hash'] !== $submittedHash
-                    || $transaction['from'] !== strtolower($wallet->address)
-                    || $transaction['from'] !== strtolower((string) $prepared['from'])
-                    || $transaction['to'] !== strtolower((string) $prepared['to'])
-                    || $transaction['value'] !== (string) $prepared['value']
-                    || $transaction['input'] !== strtolower((string) $prepared['data'])) {
-                    return response()->json([
-                        'message' => 'The broadcast Ethereum transaction does not match the prepared swap.',
-                    ], 422);
-                }
-
-                $broadcastVerified = true;
-            }
-
-            try {
-                $attempt = DB::transaction(function () use (
-                    $request,
-                    $validated,
-                    $submittedHash,
-                    $broadcastVerified
-                ): ?EthereumSwapAttempt {
-                    $attempt = EthereumSwapAttempt::query()
-                        ->whereKey($validated['attempt_id'])
-                        ->where('user_id', $request->user()->id)
-                        ->lockForUpdate()
-                        ->firstOrFail();
-
-                    if (! in_array($attempt->status, ['prepared', 'expired'], true)) {
-                        throw new RuntimeException(
-                            'This Ethereum swap order is no longer available for submission.'
-                        );
-                    }
-
-                    $requiresLockedVerification =
-                        $attempt->status === 'expired'
-                        || $attempt->expires_at->isPast();
-
-                    /*
-                    * The row may have expired between the initial read and this
-                    * lock. Release the lock and retry after blockchain
-                    * verification instead of making an RPC call inside the
-                    * database transaction.
-                    */
-                    if ($requiresLockedVerification && ! $broadcastVerified) {
-                        return null;
-                    }
-
-                    $attempt->update([
-                        'status' => 'submitted',
-                        'transaction_hash' => $submittedHash,
-                        'submitted_at' => now(),
-                    ]);
-
-                    return $attempt;
-                });
-            } catch (ModelNotFoundException) {
-                abort(404);
-            } catch (RuntimeException $exception) {
-                return response()->json([
-                    'message' => $exception->getMessage(),
-                ], 422);
-            }
-
-            if ($attempt instanceof EthereumSwapAttempt) {
-                return response()->json([
-                    'swap' => [
-                        'status' => $attempt->status,
-                        'transaction_hash' => $attempt->transaction_hash,
-                    ],
-                ]);
-            }
-
-            // The attempt expired between our read and DB lock.
-            // Loop once more so verification happens outside the lock.
+        try {
+            $this->assertSubmissionAvailable($attempt, $submittedHash);
+        } catch (RuntimeException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
         }
 
+        if ($attempt->transaction_hash !== null) {
+            return $this->submissionResponse($attempt);
+        }
+
+        try {
+            $transaction = $ethereum->getTransactionByHash($submittedHash);
+        } catch (RuntimeException) {
+            return response()->json([
+                'message' => 'The broadcast Ethereum transaction could not be verified. Retry reporting the same transaction hash; do not send another transaction.',
+                'retryable' => true,
+                'attempt_id' => $attempt->id,
+                'transaction_hash' => $submittedHash,
+            ], 503);
+        }
+
+        try {
+            $attempt = DB::transaction(function () use ($request, $validated, $submittedHash, $transaction, $ethereum): EthereumSwapAttempt {
+                $attempt = EthereumSwapAttempt::query()
+                    ->with('connectedWallet')
+                    ->whereKey($validated['attempt_id'])
+                    ->where('user_id', $request->user()->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $this->assertSubmissionAvailable($attempt, $submittedHash);
+
+                if ($attempt->transaction_hash !== null) {
+                    return $attempt;
+                }
+
+                $wallet = $attempt->connectedWallet;
+                if (! $wallet
+                    || $wallet->chain !== Chain::Ethereum
+                    || ! $ethereum->matchesPreparedTransaction($transaction, $attempt->transaction_payload ?? [], $submittedHash, $wallet->address)) {
+                    throw new RuntimeException('The broadcast Ethereum transaction does not match the prepared swap.');
+                }
+
+                $attempt->update([
+                    'status' => 'submitted',
+                    'transaction_hash' => $submittedHash,
+                    'submitted_at' => now(),
+                ]);
+
+                return $attempt;
+            });
+        } catch (ModelNotFoundException) {
+            abort(404);
+        } catch (RuntimeException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        return $this->submissionResponse($attempt);
+    }
+
+    private function assertSubmissionAvailable(EthereumSwapAttempt $attempt, string $hash): void
+    {
+        if ($attempt->transaction_hash !== null) {
+            if (strtolower($attempt->transaction_hash) === $hash
+                && in_array($attempt->status, ['submitted', 'confirmed', 'failed'], true)) {
+                return;
+            }
+
+            throw new RuntimeException('This Ethereum swap order already has a different transaction or is no longer available for submission.');
+        }
+
+        if (! in_array($attempt->status, ['prepared', 'expired'], true)) {
+            throw new RuntimeException('This Ethereum swap order is no longer available for submission.');
+        }
+    }
+
+    private function submissionResponse(EthereumSwapAttempt $attempt): JsonResponse
+    {
         return response()->json([
-            'message' => 'The broadcast Ethereum transaction could not be verified.',
-        ], 422);
+            'swap' => [
+                'status' => $attempt->status,
+                'transaction_hash' => $attempt->transaction_hash,
+            ],
+        ]);
     }
 
     public function cancelled(Request $request): JsonResponse

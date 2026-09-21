@@ -99,6 +99,7 @@ class EthereumServiceTest extends TestCase
                 'jsonrpc' => '2.0',
                 'id' => 1,
                 'result' => [
+                    'chainId' => '0x0001',
                     'hash' => '0x'.str_repeat('A', 64),
                     'from' => '0x'.str_repeat('1', 40),
                     'to' => '0x'.str_repeat('2', 40),
@@ -115,12 +116,55 @@ class EthereumServiceTest extends TestCase
         $this->assertSame('0x'.str_repeat('1', 40), $result['from']);
         $this->assertSame('0x'.str_repeat('2', 40), $result['to']);
         $this->assertSame('100000', $result['value']);
+        $this->assertSame('1', $result['chain_id']);
         $this->assertSame('0xabcdef', $result['input']);
 
         Http::assertSent(fn ($request) => $request->url() === 'https://ethereum.test'
             && $request['method'] === 'eth_getTransactionByHash'
             && $request['params'] === ['0x'.str_repeat('a', 64)]
         );
+    }
+
+    public function test_transaction_without_chain_id_checks_rpc_network(): void
+    {
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+        Http::preventStrayRequests();
+        Http::fake(['https://ethereum.test' => Http::sequence()
+            ->push(['result' => [
+                'hash' => '0x'.str_repeat('a', 64),
+                'from' => '0x'.str_repeat('1', 40),
+                'to' => '0x'.str_repeat('2', 40),
+                'value' => '0x000186A0', 'input' => '0xABcd',
+            ]])
+            ->push(['result' => '0x0001']),
+        ]);
+
+        $transaction = app(EthereumService::class)->getTransactionByHash('0x'.str_repeat('a', 64));
+
+        $this->assertSame('1', $transaction['chain_id']);
+        $this->assertSame('100000', $transaction['value']);
+        $this->assertSame('0xabcd', $transaction['input']);
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request): bool => $request['method'] === 'eth_chainId' && $request['params'] === []);
+    }
+
+    public function test_transaction_lookup_rejects_unverifiable_rpc_network(): void
+    {
+        config(['services.ethereum.rpc_url' => 'https://ethereum.test']);
+        Http::preventStrayRequests();
+        Http::fake(['https://ethereum.test' => Http::sequence()
+            ->push(['result' => [
+                'hash' => '0x'.str_repeat('a', 64),
+                'from' => '0x'.str_repeat('1', 40),
+                'to' => '0x'.str_repeat('2', 40),
+                'value' => '0x1', 'input' => '0x',
+            ]])
+            ->push(['error' => ['code' => -32000]]),
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Ethereum RPC network could not be verified.');
+        app(EthereumService::class)->getTransactionByHash('0x'.str_repeat('a', 64));
     }
 
     public function test_transaction_lookup_rejects_invalid_hash_without_rpc(): void

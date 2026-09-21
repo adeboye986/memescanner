@@ -111,7 +111,7 @@ class EthereumService
 
         $result = $response->json('result');
 
-        if (! $response->successful() || ! is_array($result)) {
+        if (! $response->successful() || $response->json('error') !== null || ! is_array($result)) {
             throw new RuntimeException('Ethereum transaction could not be verified.');
         }
 
@@ -129,13 +129,68 @@ class EthereumService
             throw new RuntimeException('Ethereum RPC returned an invalid transaction response.');
         }
 
+        $chainId = $result['chainId'] ?? null;
+        if ($chainId === null) {
+            try {
+                $chainResponse = Http::connectTimeout(3)->timeout(8)->acceptJson()->post($rpcUrl, [
+                    'jsonrpc' => '2.0', 'id' => 1, 'method' => 'eth_chainId', 'params' => [],
+                ]);
+            } catch (ConnectionException $exception) {
+                throw new RuntimeException('Ethereum RPC is temporarily unavailable.', previous: $exception);
+            }
+
+            if (! $chainResponse->successful() || $chainResponse->json('error') !== null) {
+                throw new RuntimeException('Ethereum RPC network could not be verified.');
+            }
+
+            $chainId = $chainResponse->json('result');
+        }
+
+        if (! is_string($chainId) || preg_match('/^0x[0-9a-fA-F]+$/', $chainId) !== 1) {
+            throw new RuntimeException('Ethereum RPC returned an invalid transaction network.');
+        }
+
         return [
+            'chain_id' => $this->hexToDecimal($chainId),
             'hash' => strtolower($result['hash']),
             'from' => strtolower($result['from']),
             'to' => strtolower($result['to']),
             'value' => $this->hexToDecimal($result['value']),
             'input' => strtolower($result['input']),
         ];
+    }
+
+    /**
+     * @param  array{hash: string, from: string, to: string, value: string, input: string, chain_id: string}  $transaction
+     * @param  array<string, mixed>  $prepared
+     */
+    public function matchesPreparedTransaction(array $transaction, array $prepared, string $hash, string $walletAddress): bool
+    {
+        foreach (['from', 'to', 'value', 'data', 'chainId'] as $field) {
+            if (! isset($prepared[$field]) || ! is_string($prepared[$field])) {
+                return false;
+            }
+        }
+
+        return strtolower($transaction['hash']) === strtolower($hash)
+            && strtolower($transaction['from']) === strtolower($walletAddress)
+            && strtolower($transaction['from']) === strtolower($prepared['from'])
+            && strtolower($transaction['to']) === strtolower($prepared['to'])
+            && $transaction['value'] === $this->normalizeQuantity($prepared['value'])
+            && strtolower($transaction['input']) === strtolower($prepared['data'])
+            && $transaction['chain_id'] === '1'
+            && $this->normalizeQuantity($prepared['chainId']) === '1';
+    }
+
+    private function normalizeQuantity(string $quantity): ?string
+    {
+        if (preg_match('/^0x[0-9a-fA-F]+$/', $quantity) === 1) {
+            return $this->hexToDecimal($quantity);
+        }
+
+        return preg_match('/^[0-9]+$/', $quantity) === 1
+            ? (ltrim($quantity, '0') ?: '0')
+            : null;
     }
 
     public function getTransactionReceipt(string $transactionHash): ?array
