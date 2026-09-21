@@ -60,6 +60,7 @@ class SolanaSwapOrderController extends Controller
             'input_amount_lamports' => $request->validated('amount'),
             'slippage_bps' => $request->validated('slippage_bps'),
             'message_hash' => $order['validation']['message_hash'],
+            'recent_blockhash' => $order['validation']['recent_blockhash'],
             'prepared_transaction' => $order['transaction'],
             'expires_at' => now()->addMinutes(2),
         ]);

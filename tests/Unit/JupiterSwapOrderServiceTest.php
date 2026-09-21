@@ -31,6 +31,7 @@ class JupiterSwapOrderServiceTest extends TestCase
             100,
         );
     }
+
     private const WALLET = '6Z7KvfSvatJqaj5kKB53TzZDxMJB8w3e2k2qz6qfYCvP';
 
     private const OUTPUT_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -73,6 +74,10 @@ class JupiterSwapOrderServiceTest extends TestCase
 
         $this->assertSame($transaction, $result['transaction']);
         $this->assertSame('request-123', $result['request_id']);
+        $this->assertSame(
+            '11111111111111111111111111111111',
+            $result['validation']['recent_blockhash']
+        );
 
         Http::assertSent(function ($request): bool {
             return $request->url()

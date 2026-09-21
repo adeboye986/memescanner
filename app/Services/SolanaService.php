@@ -1385,6 +1385,29 @@ class SolanaService
         return $lamports;
     }
 
+    public function isBlockhashValid(string $blockhash): bool
+    {
+        $result = $this->rpcRequest(
+            'isBlockhashValid',
+            [
+                $blockhash,
+                [
+                    'commitment' => 'confirmed',
+                ],
+            ]
+        );
+
+        $valid = $result['value'] ?? null;
+
+        if (! is_bool($valid)) {
+            throw new RuntimeException(
+                'Solana RPC returned an invalid blockhash validity response.'
+            );
+        }
+
+        return $valid;
+    }
+
     public function getSignaturesForAddress(
         string $address,
         int $limit = 100,

@@ -229,4 +229,88 @@ class SolanaServiceTest extends TestCase
                 ->getTransactionReceipt('pending-signature')
         );
     }
+
+    public function test_it_reports_a_valid_recent_blockhash(): void
+    {
+        $rpcUrl = 'https://solana-rpc.example.test';
+        $blockhash = '11111111111111111111111111111111';
+
+        $settings = $this->mock(ApplicationSettingsService::class);
+        $settings->shouldReceive('getSecret')
+            ->once()
+            ->andReturn($rpcUrl);
+
+        Http::fake([
+            $rpcUrl => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => [
+                    'context' => ['slot' => 123456],
+                    'value' => true,
+                ],
+                'id' => 1,
+            ]),
+        ]);
+
+        $this->assertTrue(
+            app(SolanaService::class)->isBlockhashValid($blockhash)
+        );
+
+        Http::assertSent(fn ($request): bool => $request['method'] === 'isBlockhashValid'
+            && $request['params'] === [
+                $blockhash,
+                ['commitment' => 'confirmed'],
+            ]);
+    }
+
+    public function test_it_reports_an_expired_recent_blockhash(): void
+    {
+        $rpcUrl = 'https://solana-rpc.example.test';
+
+        $settings = $this->mock(ApplicationSettingsService::class);
+        $settings->shouldReceive('getSecret')
+            ->once()
+            ->andReturn($rpcUrl);
+
+        Http::fake([
+            $rpcUrl => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => [
+                    'context' => ['slot' => 123457],
+                    'value' => false,
+                ],
+                'id' => 1,
+            ]),
+        ]);
+
+        $this->assertFalse(
+            app(SolanaService::class)
+                ->isBlockhashValid('11111111111111111111111111111111')
+        );
+    }
+
+    public function test_invalid_blockhash_validity_response_is_rejected(): void
+    {
+        $rpcUrl = 'https://solana-rpc.example.test';
+
+        $settings = $this->mock(ApplicationSettingsService::class);
+        $settings->shouldReceive('getSecret')
+            ->once()
+            ->andReturn($rpcUrl);
+
+        Http::fake([
+            $rpcUrl => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => ['value' => 'false'],
+                'id' => 1,
+            ]),
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage(
+            'Solana RPC returned an invalid blockhash validity response.'
+        );
+
+        app(SolanaService::class)
+            ->isBlockhashValid('11111111111111111111111111111111');
+    }
 }

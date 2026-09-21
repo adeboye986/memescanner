@@ -10,7 +10,8 @@ class SolanaSwapAttempt extends Model
     protected $fillable = [
         'user_id', 'connected_wallet_id', 'request_id', 'output_mint',
         'input_amount_lamports', 'slippage_bps', 'message_hash',
-        'prepared_transaction', 'status', 'transaction_signature',
+        'recent_blockhash', 'prepared_transaction', 'status',
+        'transaction_signature',
         'provider_error_code', 'provider_error_message', 'expires_at',
         'submitted_at', 'confirmed_at', 'failed_at', 'failure_reason',
         'network_fee_lamports', 'slot',

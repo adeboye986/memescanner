@@ -46,7 +46,38 @@ class ReconcileSubmittedSolanaSwaps extends Command
                     }
 
                     if ($receipt === null) {
-                        $pending++;
+                        try {
+                            $blockhashValid = $attempt->recent_blockhash === null
+                                || $solana->isBlockhashValid($attempt->recent_blockhash);
+                        } catch (Throwable $exception) {
+                            $errors++;
+
+                            $this->warn(
+                                "Could not check Solana blockhash for swap attempt {$attempt->id}: {$exception->getMessage()}"
+                            );
+
+                            continue;
+                        }
+
+                        if ($blockhashValid) {
+                            $pending++;
+
+                            continue;
+                        }
+
+                        $updated = SolanaSwapAttempt::query()
+                            ->whereKey($attempt->id)
+                            ->whereIn('status', ['submitting', 'submitted'])
+                            ->update([
+                                'status' => 'failed',
+                                'failed_at' => now(),
+                                'failure_reason' => 'Solana transaction was not found on-chain before its blockhash expired.',
+                                'updated_at' => now(),
+                            ]);
+
+                        if ($updated === 1) {
+                            $failed++;
+                        }
 
                         continue;
                     }
