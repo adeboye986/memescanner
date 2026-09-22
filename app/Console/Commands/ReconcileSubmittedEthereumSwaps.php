@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\EthereumSwapAttempt;
+use App\Services\EthereumReceiptReconciliationService;
 use App\Services\EthereumService;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -13,7 +14,7 @@ use RuntimeException;
 #[Description('Check submitted Ethereum swaps and mark mined transactions as confirmed or failed.')]
 class ReconcileSubmittedEthereumSwaps extends Command
 {
-    public function handle(EthereumService $ethereum): int
+    public function handle(EthereumService $ethereum, EthereumReceiptReconciliationService $reconciliation): int
     {
         $checked = 0;
         $confirmed = 0;
@@ -25,6 +26,7 @@ class ReconcileSubmittedEthereumSwaps extends Command
             ->orderBy('id')
             ->chunkById(100, function ($attempts) use (
                 $ethereum,
+                $reconciliation,
                 &$checked,
                 &$confirmed,
                 &$failed
@@ -36,7 +38,7 @@ class ReconcileSubmittedEthereumSwaps extends Command
                         $receipt = $ethereum->getTransactionReceipt($attempt->transaction_hash);
                     } catch (RuntimeException $exception) {
                         $this->warn(
-                            "Attempt {$attempt->id}: receipt lookup failed: {$exception->getMessage()}"
+                            "Attempt {$attempt->id}: receipt lookup temporarily unavailable."
                         );
 
                         continue;
@@ -54,46 +56,13 @@ class ReconcileSubmittedEthereumSwaps extends Command
                         continue;
                     }
 
-                    if ($receipt['succeeded']) {
-                        $updated = EthereumSwapAttempt::query()
-                            ->whereKey($attempt->id)
-                            ->where('status', 'submitted')
-                            ->update([
-                                'status' => 'confirmed',
-                                'confirmed_at' => now(),
-                                'failed_at' => null,
-                                'failure_reason' => null,
-                                'block_number' => $receipt['block_number'],
-                                'gas_used' => $receipt['gas_used'],
-                                'effective_gas_price_wei' => $receipt['effective_gas_price_wei'],
-                                'actual_network_fee_wei' => $receipt['actual_network_fee_wei'],
-                                'updated_at' => now(),
-                            ]);
-
-                        if ($updated === 1) {
-                            $confirmed++;
-                        }
-
-                        continue;
-                    }
-
-                    $updated = EthereumSwapAttempt::query()
-                        ->whereKey($attempt->id)
-                        ->where('status', 'submitted')
-                        ->update([
-                            'status' => 'failed',
-                            'failed_at' => now(),
-                            'failure_reason' => 'Ethereum transaction reverted on-chain.',
-                            'block_number' => $receipt['block_number'],
-                            'gas_used' => $receipt['gas_used'],
-                            'effective_gas_price_wei' => $receipt['effective_gas_price_wei'],
-                            'actual_network_fee_wei' => $receipt['actual_network_fee_wei'],
-                            'updated_at' => now(),
-                        ]);
-
-                    if ($updated === 1) {
+                    $status = $reconciliation->apply($attempt, $receipt);
+                    if ($status === 'confirmed') {
+                        $confirmed++;
+                    } elseif ($status === 'failed') {
                         $failed++;
                     }
+
                 }
             });
 

@@ -4,6 +4,7 @@ use App\Http\Controllers\AccountPasswordController;
 use App\Http\Controllers\AccountSettingsController;
 use App\Http\Controllers\ApproveOpportunityController;
 use App\Http\Controllers\ClosePaperTradeController;
+use App\Http\Controllers\ConfirmEthereumOpportunityController;
 use App\Http\Controllers\DashboardActionController;
 use App\Http\Controllers\EmailVerificationNotificationController;
 use App\Http\Controllers\EmailVerificationPromptController;
@@ -144,6 +145,8 @@ Route::middleware(['auth', 'can:manage-settings'])->prefix('settings')->name('se
 Route::middleware('auth')->prefix('opportunities')->name('opportunities.')->group(function (): void {
     Route::get('/', [OpportunityController::class, 'index'])->name('index');
     Route::get('/{opportunity}', [OpportunityController::class, 'show'])->name('show');
+    Route::post('/{opportunity}/ethereum/signing/{action}', [ConfirmEthereumOpportunityController::class, 'transition'])->whereIn('action', ['arm', 'release', 'rejected'])->middleware('customer.verified')->name('ethereum.signing');
+    Route::post('/{opportunity}/ethereum/confirm', ConfirmEthereumOpportunityController::class)->middleware('customer.verified')->name('ethereum.confirm');
     Route::post('/{opportunity}/ethereum/prepare', PrepareEthereumOpportunityController::class)->middleware('customer.verified')->name('ethereum.prepare');
     Route::post('/{opportunity}/approve', ApproveOpportunityController::class)->middleware('customer.verified')->name('approve');
     Route::post('/{opportunity}/ignore', IgnoreOpportunityController::class)->name('ignore');

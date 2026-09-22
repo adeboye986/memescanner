@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Chain;
+use App\Enums\EntryMode;
+use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Exceptions\EthereumPreparationException;
 use App\Http\Requests\EthereumSwapRequest;
@@ -141,6 +143,17 @@ class EthereumSwapController extends Controller
 
                 if ($attempt->transaction_hash !== null) {
                     return $attempt;
+                }
+
+                if ($attempt->trade_opportunity_id !== null && (! $opportunity
+                    || $opportunity->id !== $attempt->trade_opportunity_id
+                    || $opportunity->chain !== Chain::Ethereum
+                    || $opportunity->execution_mode !== ExecutionMode::Live
+                    || $opportunity->entry_mode !== EntryMode::Confirm
+                    || strtolower($opportunity->address) !== $attempt->buy_token
+                    || (int) data_get($opportunity->execution_data, 'ethereum_swap_attempt_id') !== $attempt->id
+                    || ! in_array($opportunity->status, [TradeOpportunityStatus::Executing, TradeOpportunityStatus::Expired], true))) {
+                    throw new RuntimeException('This opportunity is no longer available for transaction reporting.');
                 }
 
                 $wallet = $attempt->connectedWallet;

@@ -222,7 +222,9 @@ class EthereumService
             );
         }
 
-        if (! $response->successful()) {
+        if (! $response->successful() || $response->json('error') !== null
+            || $response->json('jsonrpc') !== '2.0' || $response->json('id') !== 1
+            || ! is_array($response->json()) || ! array_key_exists('result', $response->json())) {
             throw new RuntimeException('Ethereum transaction receipt could not be read.');
         }
 

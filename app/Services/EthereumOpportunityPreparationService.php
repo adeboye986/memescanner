@@ -125,6 +125,82 @@ class EthereumOpportunityPreparationService
         }
     }
 
+    /** @return array{attempt: EthereumSwapAttempt, signing_claim_token: string} */
+    public function claimForSigning(TradeOpportunity $opportunity, User $user): array
+    {
+        return DB::transaction(function () use ($opportunity, $user): array {
+            $locked = TradeOpportunity::query()->lockForUpdate()->findOrFail($opportunity->id);
+            abort_unless($locked->user_id === $user->id, 404);
+            $attempt = $locked->ethereumSwapAttempt()->lockForUpdate()->first();
+            if (! $attempt || $attempt->status !== 'prepared' || $attempt->transaction_hash !== null
+                || $attempt->signing_requested_at !== null || $attempt->signing_armed_at !== null) {
+                throw new EthereumPreparationException('Signing handoff is unavailable or unresolved. Refresh its status; do not send again.', 409);
+            }
+            $this->assertCurrent($locked, $attempt, $user->id);
+            if (! $attempt->expires_at || $attempt->expires_at->lte(now())) {
+                throw new EthereumPreparationException('The prepared transaction expired.', 409);
+            }
+            $token = bin2hex(random_bytes(32));
+            $attempt->update(['signing_requested_at' => now(), 'signing_claim_hash' => hash('sha256', $token)]);
+
+            return ['attempt' => $attempt, 'signing_claim_token' => $token];
+        });
+    }
+
+    /** Only the exact active claim can release before arm or report definitive rejection after arm. */
+    public function transitionSigning(TradeOpportunity $opportunity, User $user, string $token, string $action): EthereumSwapAttempt
+    {
+        $result = DB::transaction(function () use ($opportunity, $user, $token, $action): EthereumSwapAttempt|EthereumPreparationException {
+            $locked = TradeOpportunity::query()->lockForUpdate()->findOrFail($opportunity->id);
+            abort_unless($locked->user_id === $user->id, 404);
+            $attempt = $locked->ethereumSwapAttempt()->lockForUpdate()->first();
+            if (! $attempt || $attempt->user_id !== $user->id || $attempt->transaction_hash !== null
+                || ! in_array($attempt->status, ['prepared', 'expired'], true)
+                || ! $attempt->signing_claim_hash || ! hash_equals($attempt->signing_claim_hash, hash('sha256', $token))
+                || $locked->chain !== Chain::Ethereum || $locked->execution_mode !== ExecutionMode::Live
+                || $locked->entry_mode !== EntryMode::Confirm || strtolower($locked->address) !== $attempt->buy_token
+                || (int) data_get($locked->execution_data, 'ethereum_swap_attempt_id') !== $attempt->id
+                || ! in_array($locked->status, [TradeOpportunityStatus::Executing, TradeOpportunityStatus::Expired], true)) {
+                throw new EthereumPreparationException('The signing claim is unavailable.', 409);
+            }
+            if ($action === 'release') {
+                if ($attempt->signing_armed_at !== null) {
+                    throw new EthereumPreparationException('An armed signing request cannot be released. Its outcome is unresolved.', 409);
+                }
+                $attempt->update(['signing_requested_at' => null, 'signing_claim_hash' => null]);
+                if (! $attempt->expires_at || $attempt->expires_at->lte(now())) {
+                    $this->releaseLocked($locked, $attempt, 'prepared_expired', TradeOpportunityStatus::Expired);
+                }
+            } elseif ($action === 'arm') {
+                if ($attempt->signing_armed_at !== null) {
+                    throw new EthereumPreparationException('Signing is already armed. Do not send again.', 409);
+                }
+                $this->assertCurrent($locked, $attempt, $user->id);
+                if ($attempt->status !== 'prepared' || ! $attempt->expires_at || $attempt->expires_at->lte(now())) {
+                    $this->releaseLocked($locked, $attempt, 'prepared_expired', TradeOpportunityStatus::Expired);
+
+                    return new EthereumPreparationException('The prepared transaction expired before signing was armed.', 409);
+                }
+                $attempt->update(['signing_armed_at' => now()]);
+            } elseif ($action === 'rejected') {
+                if ($attempt->signing_armed_at === null) {
+                    throw new EthereumPreparationException('The signing request was not armed.', 409);
+                }
+                $attempt->update(['signing_claim_hash' => null]);
+                $this->releaseLocked($locked, $attempt, 'wallet_cancelled', TradeOpportunityStatus::Ignored);
+            } else {
+                throw new EthereumPreparationException('Unknown signing action.', 422);
+            }
+
+            return $attempt;
+        });
+        if ($result instanceof EthereumPreparationException) {
+            throw $result;
+        }
+
+        return $result;
+    }
+
     /** Recheck live controls and immutable identity under locks, including after HTTP. */
     private function assertCurrent(TradeOpportunity $opportunity, EthereumSwapAttempt $attempt, int $userId): void
     {
@@ -194,7 +270,7 @@ class EthereumOpportunityPreparationService
             $opportunity = TradeOpportunity::query()->lockForUpdate()->findOrFail($original->trade_opportunity_id);
             abort_unless($opportunity->user_id === $user->id, 404);
             $attempt = $opportunity->ethereumSwapAttempt()->lockForUpdate()->firstOrFail();
-            if ($attempt->status !== 'prepared' || $attempt->transaction_hash !== null) {
+            if ($attempt->status !== 'prepared' || $attempt->transaction_hash !== null || $attempt->signing_requested_at !== null || $attempt->signing_armed_at !== null) {
                 throw new EthereumPreparationException('This Ethereum swap order can no longer be cancelled.');
             }
             $reason = $attempt->expires_at->lte(now()) ? 'prepared_expired' : 'wallet_cancelled';

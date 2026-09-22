@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Chain;
 use App\Enums\EntryMode;
+use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Http\Requests\OpportunityIndexRequest;
 use App\Models\TradeOpportunity;
@@ -45,10 +46,21 @@ class OpportunityController extends Controller
         $user = request()->user();
         abort_unless($opportunity->user_id === $user->id || ($user->is_admin && $opportunity->user_id === null), 404);
         $opportunity->load(['paperPosition', 'events.user:id,name']);
+        $preference = $user->tradingPreference;
+        $ethereumLive = $opportunity->user_id === $user->id && $opportunity->chain === Chain::Ethereum
+            && $opportunity->entry_mode === EntryMode::Confirm
+            && ($opportunity->execution_mode === ExecutionMode::Live
+                || ($opportunity->status === TradeOpportunityStatus::PendingConfirmation
+                    && $preference?->execution_mode === ExecutionMode::Live && $preference?->entry_mode === EntryMode::Confirm));
+
+        if ($ethereumLive) {
+            $opportunity->load('ethereumSwapAttempt');
+        }
 
         return view('opportunities.show', [
             'opportunity' => $opportunity,
             'presentation' => $presenter->present($opportunity),
+            'ethereumLive' => $ethereumLive,
         ]);
     }
 }

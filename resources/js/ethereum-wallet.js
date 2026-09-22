@@ -185,40 +185,115 @@ export async function sendEthereumSwap(wallet, post, payload, recovery) {
             || !/^\d+$/.test(transaction.gas) || !/^\d+$/.test(transaction.gasPrice)) {
             throw new Error('The server returned an invalid Ethereum transaction.');
         }
-        let hash;
-        recovery.uncertain = true;
+        return await broadcastEthereumOrder(wallet, post, order.order, recovery);
 
-        try {
-            hash = await wallet.request({ method: 'eth_sendTransaction', params: [{
-                from: transaction.from,
-                to: transaction.to,
-                data: transaction.data,
-                value: toQuantity(BigInt(transaction.value)),
-                gas: toQuantity(BigInt(transaction.gas)),
-                gasPrice: toQuantity(BigInt(transaction.gasPrice)),
-            }], });
-        } catch (error) {
-            const cancelled = error?.code === 4001 || /reject|denied|cancel/i.test(error?.message ?? '');
-
-            if (cancelled) {
-                recovery.uncertain = false;
-                try {
-                    await post('cancelled', { attempt_id: order.order.attempt_id });
-                } catch {
-                    // Preserve the wallet rejection as the primary user-facing result.
-                }
-            }
-
-            throw error;
-        }
-
-        if (typeof hash !== 'string' || !/^0x[a-fA-F0-9]{64}$/.test(hash)) throw new Error('The wallet returned an invalid transaction hash.');
-
-        recovery.remember(order.order.attempt_id, hash);
-        recovery.uncertain = false;
-        return await recovery.recover(post);
     } finally {
         recovery.sending = false;
+    }
+}
+
+async function broadcastEthereumOrder(wallet, post, order, recovery, strictRejection = false) {
+    const transaction = order.transaction;
+    let hash;
+    recovery.uncertain = true;
+
+    try {
+        hash = await wallet.request({ method: 'eth_sendTransaction', params: [{
+            from: transaction.from,
+            to: transaction.to,
+            data: transaction.data,
+            value: toQuantity(BigInt(transaction.value)),
+            gas: toQuantity(BigInt(transaction.gas)),
+            gasPrice: toQuantity(BigInt(transaction.gasPrice)),
+            ...(strictRejection ? { chainId: toQuantity(BigInt(transaction.chainId)) } : {}),
+        }], });
+    } catch (error) {
+        const cancelled = error?.code === 4001 || (!strictRejection && /reject|denied|cancel/i.test(error?.message ?? ''));
+
+        if (cancelled) {
+            if (!strictRejection) recovery.uncertain = false;
+            try {
+                const rejection = await post(strictRejection ? 'rejected' : 'cancelled', strictRejection
+                    ? { signing_claim_token: order.signing_claim_token, rejection_code: 4001 } : { attempt_id: order.attempt_id });
+                if (strictRejection && ['cancelled', 'expired'].includes(rejection.status)) recovery.uncertain = false;
+            } catch {
+                // Preserve the wallet rejection as the primary user-facing result.
+            }
+        }
+
+        if (strictRejection) {
+            throw Object.assign(new Error(cancelled ? 'Wallet request rejected.' : 'Wallet outcome is unknown. Check wallet history; do not send again.'), { code: error?.code });
+        }
+        throw error;
+    }
+
+    if (typeof hash !== 'string' || !/^0x[a-fA-F0-9]{64}$/.test(hash)) throw new Error('The wallet returned an invalid transaction hash.');
+
+    recovery.remember(order.attempt_id, hash);
+    recovery.uncertain = false;
+    return await recovery.recover(post);
+}
+
+export async function sendEthereumOpportunity(wallet, post, binding, recovery) {
+    if (recovery.pending()) throw new Error('Recover the previously broadcast transaction before confirming.');
+    if (recovery.sending || recovery.uncertain) throw new Error('Wallet submission is pending or unknown. Check wallet history; do not send again.');
+    recovery.sending = true;
+    let claim = null;
+    let armRequested = false;
+    const budgetAvailable = (budget, started) => Number.isInteger(budget) && budget > 0 && budget <= 10000 && performance.now() - started < budget;
+    try {
+        const checkWallet = async () => {
+            if (!wallet || typeof wallet.request !== 'function') throw new Error('Select and unlock your verified Ethereum wallet.');
+            let accounts, chain;
+            try {
+                accounts = await wallet.request({ method: 'eth_accounts' });
+                chain = await wallet.request({ method: 'eth_chainId' });
+            } catch {
+                throw new Error('Wallet account and network could not be checked. Nothing was sent.');
+            }
+            if (accounts?.[0]?.toLowerCase() !== binding.wallet_address) throw new Error('The active wallet account does not match the reserved Ethereum wallet.');
+            if (String(chain).toLowerCase() !== '0x1') throw new Error('Switch to Ethereum Mainnet before confirming.');
+        };
+        await checkWallet();
+        // A failed response may still have claimed the handoff on the server.
+        recovery.uncertain = true;
+        const handoffStarted = performance.now();
+        const result = await post('confirm', {});
+        const order = result.order;
+        if (/^[a-f0-9]{64}$/.test(order?.signing_claim_token ?? '')) claim = order.signing_claim_token;
+        const transaction = order?.transaction;
+        if (!claim || order?.attempt_id !== binding.attempt_id || !transaction || transaction.chainId !== '1'
+            || transaction.from !== binding.wallet_address || transaction.value !== binding.sell_amount_wei
+            || !/^0x[a-f0-9]{40}$/.test(transaction.to) || !/^0x(?:[0-9a-fA-F]{2})*$/.test(transaction.data)
+            || !/^[1-9][0-9]*$/.test(transaction.gas) || !/^[1-9][0-9]*$/.test(transaction.gasPrice)) {
+            throw new Error('The server returned an invalid Ethereum transaction.');
+        }
+        await checkWallet();
+        if (!budgetAvailable(order.valid_for_ms, handoffStarted)) {
+            throw new Error('The prepared transaction expired. Nothing was sent. Refresh the opportunity.');
+        }
+        const armStarted = performance.now();
+        armRequested = true;
+        const armed = await post('arm', { signing_claim_token: claim });
+        await checkWallet();
+        if (armed.armed !== true || !budgetAvailable(armed.valid_for_ms, armStarted)) {
+            throw new Error('Signing authorization is unresolved or expired. Nothing was sent by this page; do not retry sending.');
+        }
+        return await broadcastEthereumOrder(wallet, post, order, recovery, true);
+    } catch (error) {
+        if (claim && !armRequested) {
+            try {
+                const released = await post('release', { signing_claim_token: claim });
+                if (released.armed === false && ['prepared', 'expired'].includes(released.status)) {
+                    recovery.uncertain = false;
+                    error.attemptUnavailable = released.status !== 'prepared';
+                }
+            } catch { /* A lost release response must not authorize another send. */ }
+        }
+        throw error;
+    } finally {
+        recovery.sending = false;
+        // Once handed off, only a known rejection or acknowledged hash clears uncertainty.
     }
 }
 
