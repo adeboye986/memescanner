@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\EthereumSwapAttempt;
 use App\Services\EthereumReceiptReconciliationService;
 use App\Services\EthereumService;
+use DomainException;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -19,6 +20,7 @@ class ReconcileSubmittedEthereumSwaps extends Command
         $checked = 0;
         $confirmed = 0;
         $failed = 0;
+        $rejected = 0;
 
         EthereumSwapAttempt::query()
             ->where('status', 'submitted')
@@ -29,7 +31,8 @@ class ReconcileSubmittedEthereumSwaps extends Command
                 $reconciliation,
                 &$checked,
                 &$confirmed,
-                &$failed
+                &$failed,
+                &$rejected
             ): void {
                 foreach ($attempts as $attempt) {
                     $checked++;
@@ -56,7 +59,14 @@ class ReconcileSubmittedEthereumSwaps extends Command
                         continue;
                     }
 
-                    $status = $reconciliation->apply($attempt, $receipt);
+                    try {
+                        $status = $reconciliation->apply($attempt, $receipt);
+                    } catch (DomainException) {
+                        $rejected++;
+                        $this->warn("Attempt {$attempt->id}: LIVE accounting evidence rejected; confirmation rolled back. Manual review required.");
+
+                        continue;
+                    }
                     if ($status === 'confirmed') {
                         $confirmed++;
                     } elseif ($status === 'failed') {
@@ -71,6 +81,10 @@ class ReconcileSubmittedEthereumSwaps extends Command
             ."{$confirmed} confirmed, {$failed} failed."
         );
 
-        return self::SUCCESS;
+        if ($rejected > 0) {
+            $this->warn("Rejected {$rejected} attempt(s) due to LIVE accounting evidence; other attempts were processed.");
+        }
+
+        return $rejected === 0 ? self::SUCCESS : self::FAILURE;
     }
 }

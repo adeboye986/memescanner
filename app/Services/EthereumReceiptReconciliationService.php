@@ -13,6 +13,8 @@ use Illuminate\Support\Facades\DB;
 
 class EthereumReceiptReconciliationService
 {
+    public function __construct(private LivePositionService $positions) {}
+
     /** RPC happens in the command, before this locking transaction.
      * @param  array{transaction_hash: string, succeeded: bool, block_number: string, gas_used: string, effective_gas_price_wei: string, actual_network_fee_wei: string}  $receipt
      */
@@ -56,6 +58,10 @@ class EthereumReceiptReconciliationService
                 TradeOpportunityEvent::query()->create(['trade_opportunity_id' => $opportunity->id, 'user_id' => $opportunity->user_id,
                     'action' => 'live_execution_'.$status, 'from_status' => 'executing', 'to_status' => $opportunity->status->value,
                     'metadata' => ['ethereum_swap_attempt_id' => $attempt->id, 'transaction_hash' => $attempt->transaction_hash]]);
+            }
+
+            if ($opportunity && $receipt['succeeded']) {
+                $this->positions->ensureConfirmedEthereum($opportunity, $attempt);
             }
 
             return $status;
