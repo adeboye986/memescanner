@@ -67,6 +67,14 @@ return [
         'opportunity_max_age_seconds' => env('ETHEREUM_OPPORTUNITY_MAX_AGE_SECONDS', 300),
         'metadata_cache_store' => env('ETHEREUM_METADATA_CACHE_STORE', 'file'),
         'token_metadata_cache_seconds' => env('ETHEREUM_TOKEN_METADATA_CACHE_SECONDS', 86400),
+        'accounting' => [
+            'finality' => env('ETHEREUM_ACCOUNTING_FINALITY', 'finalized'),
+            'confirmations' => env('ETHEREUM_ACCOUNTING_CONFIRMATIONS'),
+            'batch_size' => 25,
+            'lease_seconds' => 180,
+            'retry_seconds' => 60,
+            'retry_max_seconds' => 3600,
+        ],
     ],
 
     'zero_x' => [
