@@ -6,6 +6,7 @@ enum TradeOpportunityStatus: string
 {
     case Qualified = 'qualified';
     case PendingConfirmation = 'pending_confirmation';
+    case Executing = 'executing';
     case Executed = 'executed';
     case Ignored = 'ignored';
     case Expired = 'expired';

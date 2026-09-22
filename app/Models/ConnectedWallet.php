@@ -3,6 +3,8 @@
 namespace App\Models;
 
 use App\Chain;
+use Illuminate\Database\Eloquent\Attributes\Scope;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -28,6 +30,13 @@ class ConnectedWallet extends Model
             'last_connected_at' => 'datetime',
             'disconnected_at' => 'datetime',
         ];
+    }
+
+    #[Scope]
+    protected function verifiedEthereum(Builder $query): Builder
+    {
+        return $query->where('chain', Chain::Ethereum->value)
+            ->whereNotNull('verified_at')->whereNull('disconnected_at');
     }
 
     public function user(): BelongsTo

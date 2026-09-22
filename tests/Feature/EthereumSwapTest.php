@@ -37,6 +37,8 @@ class EthereumSwapTest extends TestCase
 
         $attempt = EthereumSwapAttempt::findOrFail($response->json('order.attempt_id'));
         $this->assertSame($wallet->id, $attempt->connected_wallet_id);
+        $this->assertNull($attempt->trade_opportunity_id);
+        $this->assertNull($attempt->wallet_address);
         $this->assertSame('prepared', $attempt->status);
         $this->assertSame($this->quote()['transaction'], $attempt->transaction_payload);
         $this->assertStringNotContainsString('0x1234', $attempt->getRawOriginal('transaction_payload'));

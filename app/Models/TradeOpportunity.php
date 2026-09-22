@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class TradeOpportunity extends Model
 {
@@ -54,6 +55,11 @@ class TradeOpportunity extends Model
             'qualified_at' => 'datetime',
             'executed_at' => 'datetime',
         ];
+    }
+
+    public function ethereumSwapAttempt(): HasOne
+    {
+        return $this->hasOne(EthereumSwapAttempt::class);
     }
 
     public function paperPosition(): BelongsTo

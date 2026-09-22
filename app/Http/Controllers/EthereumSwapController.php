@@ -255,6 +255,7 @@ class EthereumSwapController extends Controller
     {
         $attempts = EthereumSwapAttempt::query()
             ->where('user_id', $request->user()->id)
+            ->where('status', '!=', 'reserved')
             ->latest('id')
             ->limit(10)
             ->get([
@@ -302,8 +303,7 @@ class EthereumSwapController extends Controller
 
     private function wallet(Request $request): mixed
     {
-        return $request->user()->connectedWallets()->where('chain', Chain::Ethereum->value)
-            ->whereNotNull('verified_at')->whereNull('disconnected_at')->first();
+        return $request->user()->connectedWallets()->verifiedEthereum()->first();
     }
 
     private function addUnsignedIntegers(string $left, string $right): string

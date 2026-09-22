@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Chain;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
+use App\Models\EthereumSwapAttempt;
 use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Models\TradeOpportunityEvent;
@@ -20,14 +22,24 @@ class OpportunityActionService
         private TradeExecutionManager $executions,
         private PaperTradeExecutor $paperExecutor,
         private UserTradingPreferenceService $preferences,
+        private EthereumOpportunityReservationService $ethereumReservations,
     ) {}
 
-    public function approve(TradeOpportunity $opportunity, User $actor): PaperPosition
+    /** @param array{sell_amount_wei?: mixed, slippage_bps?: mixed}|null $liveInput */
+    public function approve(TradeOpportunity $opportunity, User $actor, ?array $liveInput = null): PaperPosition|EthereumSwapAttempt
     {
         $this->authorize($opportunity, $actor);
         $executionMode = $opportunity->user_id
             ? $this->preferences->forUser($actor)->execution_mode
             : ExecutionMode::from((string) $this->settings->get('trading.execution_mode'));
+
+        if ($executionMode === ExecutionMode::Live && $opportunity->chain === Chain::Ethereum) {
+            if ($liveInput === null) {
+                throw new DomainException('Live confirmation requires the authenticated web flow with an explicit spend amount and slippage.');
+            }
+
+            return $this->ethereumReservations->reserve($opportunity, $actor, $liveInput);
+        }
 
         try {
             $position = DB::transaction(function () use ($opportunity, $actor, $executionMode): PaperPosition {
