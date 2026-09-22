@@ -139,9 +139,12 @@ class DexScreenerService
         );
     }
 
-    public function bestPair(string $address, string $chainId = 'solana'): ?array
+    public function bestPair(string $address, string $chainId = 'solana', bool $strictEthereum = false): ?array
     {
         $pairs = $this->tokenPairs($address, $chainId);
+        if ($strictEthereum) {
+            $pairs = EthereumLiveMarketValidation::eligiblePairs($pairs, $address);
+        }
 
         if (empty($pairs)) {
             return null;
@@ -208,9 +211,9 @@ class DexScreenerService
         return $candidatePairs[0] ?? null;
     }
 
-    public function analyzeToken(string $address, string $chainId = 'solana'): array
+    public function analyzeToken(string $address, string $chainId = 'solana', bool $strictEthereum = false, bool $requireVolume = false): array
     {
-        $pair = $this->bestPair($address, $chainId);
+        $pair = $this->bestPair($address, $chainId, $strictEthereum);
 
         if (! $pair) {
             return [
@@ -218,6 +221,10 @@ class DexScreenerService
                 'pair' => null,
                 'requested_token_is_base' => false,
             ];
+        }
+
+        if ($strictEthereum) {
+            EthereumLiveMarketValidation::facts(['raw' => $pair], $requireVolume ? 'momentum' : 'new-token');
         }
 
         /*

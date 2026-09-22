@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class EthereumSwapAttempt extends Model
 {
     protected $fillable = [
-        'trade_opportunity_id', 'wallet_address',
+        'trade_opportunity_id', 'wallet_address', 'preparation_token', 'preparation_expires_at', 'revalidation_data',
         'user_id', 'connected_wallet_id', 'buy_token', 'sell_amount_wei',
         'slippage_bps', 'quote_id', 'transaction_payload', 'status',
         'transaction_hash', 'expires_at', 'submitted_at', 'confirmed_at',
@@ -21,7 +21,7 @@ class EthereumSwapAttempt extends Model
         'actual_network_fee_wei',
     ];
 
-    protected $hidden = ['transaction_payload'];
+    protected $hidden = ['transaction_payload', 'preparation_token', 'revalidation_data'];
 
     protected static function booted(): void
     {
@@ -61,7 +61,7 @@ class EthereumSwapAttempt extends Model
 
     protected function casts(): array
     {
-        return ['transaction_payload' => 'encrypted:array', 'expires_at' => 'datetime', 'submitted_at' => 'datetime', 'confirmed_at' => 'datetime', 'failed_at' => 'datetime'];
+        return ['preparation_expires_at' => 'datetime', 'revalidation_data' => 'array', 'transaction_payload' => 'encrypted:array', 'expires_at' => 'datetime', 'submitted_at' => 'datetime', 'confirmed_at' => 'datetime', 'failed_at' => 'datetime'];
     }
 
     public function connectedWallet(): BelongsTo

@@ -12,6 +12,7 @@ class EthereumScannerService
     public function __construct(
         private ChainManager $chains,
         private TradeOpportunityService $opportunities,
+        private EthereumQualificationEvaluator $qualification,
     ) {}
 
     /** @return array{profiles: int, qualified: int, positions: int, unavailable_checks: list<string>} */
@@ -38,9 +39,7 @@ class EthereumScannerService
             $marketCap = (float) ($market['market_cap'] ?? 0);
             $liquidity = (float) ($market['liquidity_usd'] ?? 0);
             $volume = (float) ($market['volume_5m'] ?? 0);
-            $isQualified = $scanner === 'new-token'
-                ? $marketCap >= 2_000 && $marketCap <= 20_000 && $liquidity >= 500
-                : $marketCap >= 5_000 && $marketCap <= 100_000 && $liquidity >= 1_000 && $volume >= 500;
+            $isQualified = $this->qualification->qualifies($scanner, $market);
 
             if (! $isQualified) {
                 continue;

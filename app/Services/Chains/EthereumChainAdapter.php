@@ -5,12 +5,14 @@ namespace App\Services\Chains;
 use App\Chain;
 use App\Services\DexScreenerService;
 use App\Services\GeckoTerminalService;
+use App\Services\GoPlusEthereumService;
 
 class EthereumChainAdapter implements ChainAdapter
 {
     public function __construct(
         private DexScreenerService $dexScreener,
         private GeckoTerminalService $geckoTerminal,
+        private GoPlusEthereumService $security,
     ) {}
 
     public function chain(): Chain
@@ -32,6 +34,12 @@ class EthereumChainAdapter implements ChainAdapter
         );
     }
 
+    /** @return array<string, mixed> */
+    public function liveMarketData(string $address, string $scanner): array
+    {
+        return $this->dexScreener->analyzeToken($address, 'ethereum', true, $scanner === 'momentum');
+    }
+
     public function marketDataMany(array $addresses): array
     {
         return $this->dexScreener->analyzeTokens($addresses, $this->chain()->value);
@@ -40,6 +48,12 @@ class EthereumChainAdapter implements ChainAdapter
     public function latestProfiles(int $limit = 20): array
     {
         return $this->geckoTerminal->latestEthereumTokens($limit);
+    }
+
+    /** @return array<string, mixed> */
+    public function securityData(string $address): array
+    {
+        return $this->security->evaluateToken($address);
     }
 
     public function unavailableSecurityChecks(): array

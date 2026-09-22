@@ -17,6 +17,7 @@ use App\Http\Controllers\OpportunityController;
 use App\Http\Controllers\PaperStrategySettingController;
 use App\Http\Controllers\PaperTradingDashboardController;
 use App\Http\Controllers\PasswordResetLinkController;
+use App\Http\Controllers\PrepareEthereumOpportunityController;
 use App\Http\Controllers\RegisteredUserController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\SolanaSwapExecuteController;
@@ -143,6 +144,7 @@ Route::middleware(['auth', 'can:manage-settings'])->prefix('settings')->name('se
 Route::middleware('auth')->prefix('opportunities')->name('opportunities.')->group(function (): void {
     Route::get('/', [OpportunityController::class, 'index'])->name('index');
     Route::get('/{opportunity}', [OpportunityController::class, 'show'])->name('show');
+    Route::post('/{opportunity}/ethereum/prepare', PrepareEthereumOpportunityController::class)->middleware('customer.verified')->name('ethereum.prepare');
     Route::post('/{opportunity}/approve', ApproveOpportunityController::class)->middleware('customer.verified')->name('approve');
     Route::post('/{opportunity}/ignore', IgnoreOpportunityController::class)->name('ignore');
 });

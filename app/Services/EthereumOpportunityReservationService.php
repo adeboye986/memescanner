@@ -71,6 +71,20 @@ class EthereumOpportunityReservationService
                 ];
                 $existing = $locked->ethereumSwapAttempt;
                 if ($existing) {
+                    if ($locked->status === TradeOpportunityStatus::PendingConfirmation && $existing->status === 'released'
+                        && $existing->transaction_payload === null && $existing->transaction_hash === null
+                        && $existing->quote_id === null && $existing->expires_at === null
+                        && $this->matchesBinding($existing, $binding)) {
+                        app(EthereumOpportunityFreshness::class)->assertFresh($locked);
+                        $existing->update(['status' => 'reserved', 'failure_reason' => null, 'updated_at' => now()]);
+                        $locked->update(['status' => TradeOpportunityStatus::Executing,
+                            'execution_data' => ['executor' => 'live', 'stage' => 'reserved', 'ethereum_swap_attempt_id' => $existing->id]]);
+                        TradeOpportunityEvent::query()->create(['trade_opportunity_id' => $locked->id, 'user_id' => $actor->id,
+                            'action' => 'live_execution_reserved', 'from_status' => 'pending_confirmation', 'to_status' => 'executing',
+                            'metadata' => ['ethereum_swap_attempt_id' => $existing->id, 'reapproved' => true]]);
+
+                        return $existing;
+                    }
                     if ($locked->status !== TradeOpportunityStatus::Executing || ! $this->matchesBinding($existing, $binding)) {
                         throw new DomainException('This opportunity already has a different live execution reservation.');
                     }
@@ -81,11 +95,7 @@ class EthereumOpportunityReservationService
                     throw new DomainException('This opportunity already has a live execution in progress.');
                 }
 
-                $maximumAge = $this->maximumAgeSeconds();
-                if (! $locked->qualified_at || $locked->qualified_at->isFuture()
-                    || $locked->qualified_at->lt(now()->subSeconds($maximumAge)->startOfSecond())) {
-                    throw new DomainException('This opportunity is stale. A newly qualified opportunity is required.');
-                }
+                app(EthereumOpportunityFreshness::class)->assertFresh($locked);
 
                 $locked->update(['status' => TradeOpportunityStatus::Executing, 'execution_mode' => ExecutionMode::Live]);
                 $attempt = EthereumSwapAttempt::query()->create([
@@ -141,18 +151,5 @@ class EthereumOpportunityReservationService
         }
 
         return true;
-    }
-
-    /** Qualification age only: allow 1–900 seconds (15 minutes), default 300. */
-    private function maximumAgeSeconds(): int
-    {
-        $configured = config('services.ethereum.opportunity_max_age_seconds', 300);
-        $seconds = filter_var($configured, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 900]]);
-        if ((! is_int($configured) && ! is_string($configured))
-            || preg_match('/^[1-9][0-9]*$/D', (string) $configured) !== 1 || $seconds === false) {
-            throw new DomainException('Live opportunity freshness configuration is invalid. Contact an administrator.');
-        }
-
-        return $seconds;
     }
 }

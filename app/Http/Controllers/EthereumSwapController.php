@@ -3,17 +3,24 @@
 namespace App\Http\Controllers;
 
 use App\Chain;
+use App\Enums\TradeOpportunityStatus;
+use App\Exceptions\EthereumPreparationException;
 use App\Http\Requests\EthereumSwapRequest;
 use App\Models\EthereumSwapAttempt;
+use App\Models\TradeOpportunity;
 use App\Services\CryptoPriceService;
+use App\Services\EthereumOpportunityPreparationService;
 use App\Services\EthereumQuoteLimitService;
 use App\Services\EthereumService;
+use App\Services\EthereumSwapPreparationService;
 use App\Services\TokenAmountFormatter;
 use App\Services\ZeroXSwapService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
 class EthereumSwapController extends Controller
@@ -65,48 +72,21 @@ class EthereumSwapController extends Controller
         return response()->json(['price' => $price]);
     }
 
-    public function order(EthereumSwapRequest $request, ZeroXSwapService $swaps, EthereumService $ethereum, EthereumQuoteLimitService $limits): JsonResponse
+    public function order(EthereumSwapRequest $request, EthereumSwapPreparationService $preparation): JsonResponse
     {
-        $wallet = $this->wallet($request);
-        if (! $wallet) {
-            return response()->json(['message' => 'No active verified Ethereum wallet was found.'], 422);
-        }
         try {
-            $balance = $ethereum->getBalanceWei($wallet->address);
-        } catch (RuntimeException) {
-            return response()->json(['message' => 'Unable to verify the Ethereum wallet balance right now.'], 503);
-        }
-        if ($limits->exceeds($request->validated('sell_amount_wei'), $balance)) {
-            return response()->json(['message' => 'The connected wallet has insufficient ETH for this swap.'], 422);
-        }
+            $attempt = $preparation->manual($request->user(), $request->validated());
+        } catch (EthereumPreparationException $exception) {
+            return response()->json(['message' => $exception->getMessage()], $exception->httpStatus);
+        } catch (QueryException $exception) {
+            Log::warning('Ethereum swap database operation failed.');
 
-        try {
-            $quote = $swaps->quote($wallet->address, $request->validated('buy_token'), $request->validated('sell_amount_wei'), (int) $request->validated('slippage_bps'));
-        } catch (RuntimeException) {
-            return response()->json(['message' => 'Unable to prepare the Ethereum swap right now.'], 503);
+            return response()->json(['message' => 'Ethereum preparation could not be saved. Please retry.'], 503);
         }
-        $requiredBalance = $this->addUnsignedIntegers(
-            $request->validated('sell_amount_wei'),
-            $quote['network_fee_wei'] ?? '0',
-        );
-        if ($limits->exceeds($requiredBalance, $balance)) {
-            return response()->json(['message' => 'The connected wallet has insufficient ETH for the swap and estimated network fee.'], 422);
-        }
-        $attempt = EthereumSwapAttempt::query()->create([
-            'user_id' => $request->user()->id,
-            'connected_wallet_id' => $wallet->id,
-            'buy_token' => strtolower($request->validated('buy_token')),
-            'sell_amount_wei' => $request->validated('sell_amount_wei'),
-            'slippage_bps' => $request->validated('slippage_bps'),
-            'quote_id' => $quote['quote_id'],
-            'transaction_payload' => $quote['transaction'],
-            'status' => 'prepared',
-            'expires_at' => now()->addMinute(),
-        ]);
 
         return response()->json(['order' => [
             'attempt_id' => $attempt->id,
-            'transaction' => $quote['transaction'],
+            'transaction' => $attempt->transaction_payload,
             'expires_at' => $attempt->expires_at->toIso8601String(),
         ]]);
     }
@@ -146,7 +126,10 @@ class EthereumSwapController extends Controller
         }
 
         try {
-            $attempt = DB::transaction(function () use ($request, $validated, $submittedHash, $transaction, $ethereum): EthereumSwapAttempt {
+            $attempt = DB::transaction(function () use ($request, $validated, $submittedHash, $transaction, $ethereum, $attempt): EthereumSwapAttempt {
+                $opportunity = $attempt->trade_opportunity_id
+                    ? TradeOpportunity::query()->lockForUpdate()->find($attempt->trade_opportunity_id)
+                    : null;
                 $attempt = EthereumSwapAttempt::query()
                     ->with('connectedWallet')
                     ->whereKey($validated['attempt_id'])
@@ -163,6 +146,7 @@ class EthereumSwapController extends Controller
                 $wallet = $attempt->connectedWallet;
                 if (! $wallet
                     || $wallet->chain !== Chain::Ethereum
+                    || ($attempt->trade_opportunity_id !== null && (! $opportunity || $opportunity->user_id !== $request->user()->id || $wallet->user_id !== $request->user()->id || strtolower($wallet->address) !== $attempt->wallet_address))
                     || ! $ethereum->matchesPreparedTransaction($transaction, $attempt->transaction_payload ?? [], $submittedHash, $wallet->address)) {
                     throw new RuntimeException('The broadcast Ethereum transaction does not match the prepared swap.');
                 }
@@ -172,11 +156,18 @@ class EthereumSwapController extends Controller
                     'transaction_hash' => $submittedHash,
                     'submitted_at' => now(),
                 ]);
+                if ($opportunity) {
+                    $opportunity->update(['status' => TradeOpportunityStatus::Executing, 'execution_data' => [...($opportunity->execution_data ?? []), 'stage' => 'submitted']]);
+                }
 
                 return $attempt;
             });
         } catch (ModelNotFoundException) {
             abort(404);
+        } catch (QueryException $exception) {
+            Log::warning('Ethereum swap database operation failed.');
+
+            return response()->json(['message' => 'The Ethereum swap update could not be saved. Retry reporting the same attempt; do not send another transaction.'], 503);
         } catch (RuntimeException $exception) {
             return response()->json(['message' => $exception->getMessage()], 422);
         }
@@ -210,11 +201,26 @@ class EthereumSwapController extends Controller
         ]);
     }
 
-    public function cancelled(Request $request): JsonResponse
+    public function cancelled(Request $request, EthereumOpportunityPreparationService $opportunities): JsonResponse
     {
         $validated = $request->validate([
             'attempt_id' => ['required', 'integer'],
         ]);
+
+        $original = EthereumSwapAttempt::query()->whereKey($validated['attempt_id'])->where('user_id', $request->user()->id)->firstOrFail();
+        if ($original->trade_opportunity_id !== null) {
+            try {
+                $attempt = $opportunities->cancel($original, $request->user());
+            } catch (EthereumPreparationException $exception) {
+                return response()->json(['message' => $exception->getMessage()], $exception->httpStatus);
+            } catch (QueryException $exception) {
+                Log::warning('Ethereum swap database operation failed.');
+
+                return response()->json(['message' => 'Cancellation could not be saved. Refresh the opportunity.'], 503);
+            }
+
+            return $this->submissionResponse($attempt);
+        }
 
         try {
             $attempt = DB::transaction(function () use ($request, $validated): EthereumSwapAttempt {
@@ -255,7 +261,8 @@ class EthereumSwapController extends Controller
     {
         $attempts = EthereumSwapAttempt::query()
             ->where('user_id', $request->user()->id)
-            ->where('status', '!=', 'reserved')
+            ->whereNotIn('status', ['reserved', 'preparing', 'released'])
+            ->where(fn ($query) => $query->whereNull('trade_opportunity_id')->orWhereNotNull('transaction_payload')->orWhereNotNull('transaction_hash'))
             ->latest('id')
             ->limit(10)
             ->get([
@@ -304,22 +311,5 @@ class EthereumSwapController extends Controller
     private function wallet(Request $request): mixed
     {
         return $request->user()->connectedWallets()->verifiedEthereum()->first();
-    }
-
-    private function addUnsignedIntegers(string $left, string $right): string
-    {
-        $carry = 0;
-        $sum = '';
-        $leftIndex = strlen($left) - 1;
-        $rightIndex = strlen($right) - 1;
-        while ($leftIndex >= 0 || $rightIndex >= 0 || $carry > 0) {
-            $total = ($leftIndex >= 0 ? (int) $left[$leftIndex--] : 0)
-                + ($rightIndex >= 0 ? (int) $right[$rightIndex--] : 0)
-                + $carry;
-            $sum = ($total % 10).$sum;
-            $carry = intdiv($total, 10);
-        }
-
-        return ltrim($sum, '0') ?: '0';
     }
 }
