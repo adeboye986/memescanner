@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\ConnectedWallet;
 use App\Models\EthereumAccountingEligibility;
 use App\Models\EthereumAccountingEvidence;
+use App\Models\EthereumAccountingReviewHead;
 use App\Models\EthereumSwapAttempt;
 use App\Models\LivePosition;
 use App\Models\TradeOpportunity;
@@ -12,6 +13,8 @@ use App\Models\User;
 use App\Services\ApplicationSettingsService;
 use App\Services\Chains\EthereumChainAdapter;
 use App\Services\EthereumAccountingRpc;
+use App\Services\EthereumEligibilityObservationCollector;
+use App\Services\EthereumEligibilityReviewService;
 use App\Services\EthereumInventoryAccounting;
 use App\Services\EthereumOpportunityReservationService;
 use App\Services\EthereumReceiptReconciliationService;
@@ -25,6 +28,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
@@ -582,9 +586,7 @@ class EthereumInventoryAccountingTest extends TestCase
         $position = $this->position();
         $this->provider($position);
         $this->onRequest = function () use ($position): void {
-            EthereumAccountingEligibility::query()->create(['chain' => 'ethereum', 'token_address' => $position->token_address,
-                'policy_version' => EthereumAccountingEligibility::POLICY, 'status' => 'unsupported', 'review_source' => 'operator',
-                'reviewed_at' => now(), 'reason' => 'review_revoked']);
+            $this->publishReview($position, 'rejected');
         };
         $this->assertSame('stale_observation', app(EthereumInventoryAccounting::class)->process($position->id));
         $this->assertSame('pending', $position->fresh()->accounting_status);
@@ -688,6 +690,72 @@ class EthereumInventoryAccountingTest extends TestCase
         $position->accounting_version = 0;
         $this->expectException(DomainException::class);
         $position->save();
+    }
+
+    public function test_trusted_approval_verifies_but_newest_rejection_blocks_retry(): void
+    {
+        $position = $this->position(false);
+        $approval = $this->publishReview($position, 'approved');
+        $this->provider($position);
+        $this->assertSame('verified', app(EthereumInventoryAccounting::class)->process($position->id));
+        $frozen = $position->fresh()->only(['acquired_raw_amount', 'token_decimals', 'accepted_ethereum_evidence_id', 'accounting_verified_at']);
+        $rejection = $this->publishReview($position, 'rejected');
+        $this->assertSame('discrepancy', app(EthereumInventoryAccounting::class)->process($position->id, true));
+        $this->assertEquals($frozen, $position->fresh()->only(array_keys($frozen)));
+        $this->assertEquals($approval->id, $rejection->supersedes_review_id);
+        $this->assertSame('skipped', app(EthereumInventoryAccounting::class)->process($position->id, true, true));
+    }
+
+    public function test_rejection_keeps_unverified_inventory_unsupported_without_rpc(): void
+    {
+        $position = $this->position(false);
+        $this->publishReview($position, 'approved');
+        $this->publishReview($position, 'rejected');
+        Http::preventStrayRequests();
+        $this->assertSame('unsupported', app(EthereumInventoryAccounting::class)->process($position->id));
+        $this->assertNull($position->fresh()->acquired_raw_amount);
+        $this->assertNull($position->fresh()->token_decimals);
+        Http::assertNothingSent();
+    }
+
+    public function test_legacy_unsupported_keeps_original_provenance_and_cannot_verify(): void
+    {
+        $position = $this->position(false);
+        $legacy = EthereumAccountingEligibility::query()->create(['chain' => 'ethereum', 'token_address' => $position->token_address,
+            'policy_version' => EthereumAccountingEligibility::POLICY, 'status' => 'unsupported',
+            'review_source' => 'legacy', 'reviewed_at' => now(), 'reason' => 'semantics unknown']);
+        Http::preventStrayRequests();
+        $this->assertSame('unsupported', app(EthereumInventoryAccounting::class)->process($position->id));
+        $this->assertNull($legacy->fresh()->reviewer_user_id);
+        $this->assertNull($legacy->fresh()->review_format_version);
+        $this->assertSame('semantics unknown', $legacy->fresh()->reason);
+        Http::assertNothingSent();
+    }
+
+    private function publishReview(LivePosition $position, string $decision): EthereumAccountingEligibility
+    {
+        $actor = User::factory()->create(['is_admin' => true]);
+        $this->actingAs($actor);
+        config(['services.ethereum.accounting.reviewer_ids' => [(string) $actor->id]]);
+        $head = DB::transaction(fn () => EthereumAccountingReviewHead::locked($position->token_address));
+        $observation = $decision === 'approved' ? ['chain_id' => 1, 'token_address' => $position->token_address,
+            'code_sha256' => hash('sha256', hex2bin('6000')), 'block_number' => '100',
+            'block_hash' => '0x'.str_repeat('a', 64), 'collected_at' => now()->toIso8601String()] : null;
+        if ($observation) {
+            $this->mock(EthereumEligibilityObservationCollector::class)->shouldReceive('collect')->once()->andReturn($observation);
+        }
+        $input = ['chain' => 'ethereum', 'chain_id' => 1, 'token_address' => $position->token_address,
+            'policy_version' => EthereumAccountingEligibility::POLICY, 'decision' => $decision, 'review_source' => 'operator',
+            'rationale' => 'Reviewed immutable historical accounting semantics.',
+            'expected_review_id' => $head->current_review_id === null ? null : (int) $head->current_review_id,
+            'expected_version' => (int) $head->version, 'submission_id' => (string) Str::uuid(),
+            'observation_reference' => $observation ? 'server-observation' : null,
+            'assertions' => $observation ? ['source_reference' => 'review:1', 'source_sha256' => str_repeat('b', 64),
+                'historical_applicability' => 'All historical balance modification paths inspected against runtime source.',
+                'non_proxy' => true, 'standard_transfer_accounting' => true, 'no_mutable_balance_behavior' => true] : []];
+        $input['evidence_digest'] = EthereumEligibilityReviewService::digest($actor->id, $input, $observation);
+
+        return app(EthereumEligibilityReviewService::class)->publish($input);
     }
 
     private function review(LivePosition $position, ?string $code = null): void

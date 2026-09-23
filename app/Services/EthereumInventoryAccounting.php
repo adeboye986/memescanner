@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\EthereumAccountingException;
 use App\Models\EthereumAccountingEligibility;
 use App\Models\EthereumAccountingEvidence;
+use App\Models\EthereumAccountingReviewHead;
 use App\Models\EthereumSwapAttempt;
 use App\Models\LivePosition;
 use App\Models\TradeOpportunity;
@@ -23,7 +24,7 @@ class EthereumInventoryAccounting
     public function process(int $id, bool $audit = false, bool $retryUnsupported = false): string
     {
         $claim = DB::transaction(function () use ($id, $audit, $retryUnsupported): ?array {
-            [$position, $attempt, $opportunity] = $this->lock($id);
+            [$position, $attempt, $opportunity, $reviewHead] = $this->lock($id);
             if (! $position || $position->chain->value !== 'ethereum'
                 || ! in_array($position->accounting_status, [...['pending', 'provisional'], ...($audit ? ['verified'] : []), ...($retryUnsupported ? ['unsupported'] : [])], true)
                 || ($position->accounting_lease_expires_at && $position->accounting_lease_expires_at->isFuture())
@@ -47,7 +48,7 @@ class EthereumInventoryAccounting
 
             return ['position' => $position, 'attempt' => $attempt, 'opportunity' => $opportunity,
                 'fingerprint' => $this->fingerprint($attempt, $opportunity), 'identity_error' => $identityError,
-                'eligibility' => $this->eligibility($position), 'decision' => $this->decision($position)];
+                'eligibility' => $reviewHead->currentReview(), 'review_head' => $reviewHead->snapshot(), 'decision' => $this->decision($position)];
         });
         if ($claim === null) {
             return 'skipped';
@@ -66,14 +67,14 @@ class EthereumInventoryAccounting
         }
 
         return DB::transaction(function () use ($claim, $facts, $state, $reason): string {
-            [$position, $attempt, $opportunity] = $this->lock($claim['position']->id);
+            [$position, $attempt, $opportunity, $reviewHead] = $this->lock($claim['position']->id);
             if (! $position || $position->accounting_lease_token !== $claim['decision']['lease']) {
                 return 'stale_observation';
             }
             if (! $position->accounting_lease_expires_at || $position->accounting_lease_expires_at->isPast()
                 || $this->decision($position) !== $claim['decision']
                 || $this->fingerprint($attempt, $opportunity) !== $claim['fingerprint']
-                || $this->eligibility($position)?->id !== $claim['eligibility']?->id) {
+                || $reviewHead->snapshot() !== $claim['review_head']) {
                 // Only release our lease; preserve the newer decision and its reason/evidence.
                 $this->release($position);
 
@@ -231,23 +232,19 @@ class EthereumInventoryAccounting
         return $facts;
     }
 
-    private function eligibility(LivePosition $position): ?EthereumAccountingEligibility
-    {
-        return EthereumAccountingEligibility::query()->where('chain', 'ethereum')->where('token_address', $position->token_address)->latest('id')->first();
-    }
-
-    /** Preserve the same opportunity → attempt → position lock ordering as Phase 4A. @return array */
+    /** Review head first, then preserve opportunity → attempt → position ordering. @return array */
     private function lock(int $id): array
     {
         $candidate = LivePosition::query()->find($id);
         if (! $candidate) {
-            return [null, null, null];
+            return [null, null, null, null];
         }
+        $reviewHead = EthereumAccountingReviewHead::locked($candidate->token_address);
         $opportunity = TradeOpportunity::query()->lockForUpdate()->find($candidate->trade_opportunity_id);
         $attempt = EthereumSwapAttempt::query()->lockForUpdate()->find($candidate->ethereum_swap_attempt_id);
         $position = LivePosition::query()->lockForUpdate()->find($id);
 
-        return [$position, $attempt, $opportunity];
+        return [$position, $attempt, $opportunity, $reviewHead];
     }
 
     private function fingerprint(?EthereumSwapAttempt $attempt, ?TradeOpportunity $opportunity): string

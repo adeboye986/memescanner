@@ -14,14 +14,14 @@ class EthereumAccountingEligibility extends Model
 
     protected function casts(): array
     {
-        return ['reviewed_at' => 'datetime'];
+        return ['reviewed_at' => 'datetime', 'evidence_collected_at' => 'datetime', 'reviewer_identity' => 'array', 'review_evidence' => 'array'];
     }
 
     protected static function booted(): void
     {
         static::creating(function (self $review): void {
             if ($review->chain !== 'ethereum' || preg_match('/^0x[a-f0-9]{40}$/D', $review->token_address ?? '') !== 1
-                || $review->policy_version !== self::POLICY || ! in_array($review->status, ['approved', 'unsupported'], true)
+                || $review->policy_version !== self::POLICY || ! in_array($review->status, ['approved', 'rejected', 'unsupported'], true)
                 || ! $review->reviewed_at || $review->reviewed_at->isFuture()
                 || ! is_string($review->review_source) || trim($review->review_source) === '' || strlen($review->review_source) > 255
                 || ! is_string($review->reason) || trim($review->reason) === '' || strlen($review->reason) > 255

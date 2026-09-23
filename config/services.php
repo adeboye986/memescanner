@@ -1,5 +1,7 @@
 <?php
 
+use App\Services\EthereumAccountingReviewerAllowlist;
+
 return [
 
     /*
@@ -68,6 +70,7 @@ return [
         'metadata_cache_store' => env('ETHEREUM_METADATA_CACHE_STORE', 'file'),
         'token_metadata_cache_seconds' => env('ETHEREUM_TOKEN_METADATA_CACHE_SECONDS', 86400),
         'accounting' => [
+            'reviewer_ids' => EthereumAccountingReviewerAllowlist::normalize(env('ETHEREUM_ACCOUNTING_REVIEWER_IDS')),
             'finality' => env('ETHEREUM_ACCOUNTING_FINALITY', 'finalized'),
             'confirmations' => env('ETHEREUM_ACCOUNTING_CONFIRMATIONS'),
             'batch_size' => 25,
