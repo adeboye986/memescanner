@@ -7,6 +7,7 @@ use App\Models\EthereumAccountingReviewHead;
 use App\Models\User;
 use App\Services\EthereumAccountingReviewerAllowlist;
 use App\Services\EthereumEligibilityObservationCollector;
+use App\Services\EthereumEligibilityReviewGeneration;
 use App\Services\EthereumEligibilityReviewService;
 use DomainException;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -468,6 +469,94 @@ class EthereumEligibilityReviewTest extends TestCase
             ['empty', []], ['1.0', []], ['1e3', []], ['1,true', []], ['1', ['1']], ['"1"', ['1']], [' 1, 2, 3 ', ['1', '2', '3']]];
     }
 
+    #[DataProvider('invalidWorkflowConclusions')]
+    public function test_new_service_approval_requires_every_strict_conclusion(?string $missing, mixed $value): void
+    {
+        $actor = $this->reviewer();
+        $observation = $this->observation();
+        $input = $this->input($actor, 'approved', $observation);
+        $this->mock(EthereumEligibilityObservationCollector::class)->shouldReceive('collect')->andReturn($observation);
+        if ($missing === 'map') {
+            unset($input['assertions']['workflow_conclusions']);
+        } elseif ($missing !== null) {
+            unset($input['assertions']['workflow_conclusions'][$missing]);
+        } else {
+            $input['assertions']['workflow_conclusions'] = $value;
+        }
+        $input['evidence_digest'] = EthereumEligibilityReviewService::digest($actor->id, $input, $observation);
+
+        try {
+            app(EthereumEligibilityReviewService::class)->publish($input);
+            $this->fail('Incomplete workflow conclusions were accepted.');
+        } catch (DomainException $exception) {
+            $this->assertSame('All operator review conclusions must be explicitly confirmed.', $exception->getMessage());
+            $this->assertDatabaseCount('ethereum_accounting_eligibilities', 0);
+            $this->assertDatabaseCount('ethereum_accounting_review_heads', 0);
+        }
+    }
+
+    public static function invalidWorkflowConclusions(): array
+    {
+        $valid = array_fill_keys(array_keys(EthereumEligibilityReviewService::WORKFLOW_CONCLUSIONS), true);
+        $cases = ['omitted map' => ['map', null]];
+        foreach ($valid as $key => $value) {
+            $cases['missing '.$key] = [$key, null];
+            $cases['false '.$key] = [null, [...$valid, $key => false]];
+        }
+        foreach ([0, '0', 'false', 'arbitrary', [], ['nested' => true], null] as $index => $value) {
+            $cases['invalid value '.$index] = [null, [...$valid, 'source_runtime' => $value]];
+        }
+        $cases['null map'] = [null, null];
+        $cases['extra structure'] = [null, [...$valid, 'extra' => ['nested' => true]]];
+
+        return $cases;
+    }
+
+    public function test_exact_persisted_pre_correction_approval_retries_without_new_requirements(): void
+    {
+        $actor = $this->reviewer();
+        $observation = $this->observation();
+        $input = $this->input($actor, 'approved', $observation);
+        unset($input['review_generation'], $input['assertions']['workflow_conclusions']);
+        $input['evidence_digest'] = EthereumEligibilityReviewService::digest($actor->id, $input, $observation);
+        $submission = $input;
+        unset($submission['evidence_digest']);
+        $existing = new EthereumAccountingEligibility;
+        $existing->forceFill(['chain' => 'ethereum', 'chain_id' => 1, 'token_address' => self::TOKEN,
+            'policy_version' => EthereumAccountingEligibility::POLICY, 'status' => 'approved',
+            'review_source' => $input['review_source'], 'reason' => $input['rationale'], 'reviewed_at' => now(),
+            'code_sha256' => $observation['code_sha256'], 'reviewer_user_id' => $actor->id,
+            'review_format_version' => EthereumEligibilityReviewService::FORMAT, 'submission_id' => $input['submission_id'],
+            'evidence_digest' => $input['evidence_digest'], 'review_evidence' => ['submission' => $submission, 'observation' => $observation]])->save();
+        $this->mock(EthereumEligibilityObservationCollector::class)->shouldNotReceive('collect');
+
+        $this->assertSame($existing->id, app(EthereumEligibilityReviewService::class)->publish($input)->id);
+        $this->assertDatabaseCount('ethereum_accounting_eligibilities', 1);
+        $this->assertDatabaseCount('ethereum_accounting_review_heads', 0);
+        $input['rationale'] = 'Changed content';
+        $this->expectExceptionMessage('Submission identifier was already used for different content.');
+        app(EthereumEligibilityReviewService::class)->publish($input);
+    }
+
+    public function test_recollection_during_rpc_verification_prevents_publication(): void
+    {
+        $actor = $this->reviewer();
+        $observation = $this->observation();
+        $input = $this->input($actor, 'approved', $observation);
+        $this->mock(EthereumEligibilityObservationCollector::class)->shouldReceive('collect')->once()->andReturnUsing(function () use ($actor, $input, $observation) {
+            app(EthereumEligibilityReviewGeneration::class)->replace($actor->id, self::TOKEN, $input['submission_id'], $input['review_generation']);
+
+            return $observation;
+        });
+        try {
+            app(EthereumEligibilityReviewService::class)->publish($input);
+            $this->fail('Invalidated evidence was published.');
+        } catch (DomainException $exception) {
+            $this->assertStringContainsString('Stale or expired review generation', $exception->getMessage());
+            $this->assertDatabaseCount('ethereum_accounting_eligibilities', 0);
+        }
+    }
+
     private function reviewer(): User
     {
         Http::preventStrayRequests();
@@ -494,7 +583,14 @@ class EthereumEligibilityReviewTest extends TestCase
             'observation_reference' => $observation ? 'server-observation-1' : null,
             'assertions' => $observation ? ['source_reference' => 'review-artifact:1', 'source_sha256' => str_repeat('b', 64),
                 'historical_applicability' => 'Reviewed source matches immutable runtime at block 100; no state-dependent accounting paths.',
-                'non_proxy' => true, 'standard_transfer_accounting' => true, 'no_mutable_balance_behavior' => true] : []];
+                'non_proxy' => true, 'standard_transfer_accounting' => true, 'no_mutable_balance_behavior' => true,
+                'workflow_conclusions' => array_fill_keys(array_keys(EthereumEligibilityReviewService::WORKFLOW_CONCLUSIONS), true)] : []];
+        config(['services.ethereum.metadata_cache_store' => 'array']);
+        $generations = app(EthereumEligibilityReviewGeneration::class);
+        $input['review_generation'] = $generations->begin($actor->id, $input['token_address'], $input['submission_id']);
+        if ($observation) {
+            $generations->bind($actor->id, $input['token_address'], $input['submission_id'], $input['review_generation'], $input['observation_reference']);
+        }
         $input['evidence_digest'] = EthereumEligibilityReviewService::digest($actor->id, $input, $observation);
 
         return $input;

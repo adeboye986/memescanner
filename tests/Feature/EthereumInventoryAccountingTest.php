@@ -14,6 +14,7 @@ use App\Services\ApplicationSettingsService;
 use App\Services\Chains\EthereumChainAdapter;
 use App\Services\EthereumAccountingRpc;
 use App\Services\EthereumEligibilityObservationCollector;
+use App\Services\EthereumEligibilityReviewGeneration;
 use App\Services\EthereumEligibilityReviewService;
 use App\Services\EthereumInventoryAccounting;
 use App\Services\EthereumOpportunityReservationService;
@@ -752,7 +753,14 @@ class EthereumInventoryAccountingTest extends TestCase
             'observation_reference' => $observation ? 'server-observation' : null,
             'assertions' => $observation ? ['source_reference' => 'review:1', 'source_sha256' => str_repeat('b', 64),
                 'historical_applicability' => 'All historical balance modification paths inspected against runtime source.',
-                'non_proxy' => true, 'standard_transfer_accounting' => true, 'no_mutable_balance_behavior' => true] : []];
+                'non_proxy' => true, 'standard_transfer_accounting' => true, 'no_mutable_balance_behavior' => true,
+                'workflow_conclusions' => array_fill_keys(array_keys(EthereumEligibilityReviewService::WORKFLOW_CONCLUSIONS), true)] : []];
+        config(['services.ethereum.metadata_cache_store' => 'array']);
+        $generations = app(EthereumEligibilityReviewGeneration::class);
+        $input['review_generation'] = $generations->begin($actor->id, $input['token_address'], $input['submission_id']);
+        if ($observation) {
+            $generations->bind($actor->id, $input['token_address'], $input['submission_id'], $input['review_generation'], $input['observation_reference']);
+        }
         $input['evidence_digest'] = EthereumEligibilityReviewService::digest($actor->id, $input, $observation);
 
         return app(EthereumEligibilityReviewService::class)->publish($input);

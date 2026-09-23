@@ -8,6 +8,7 @@ use App\Http\Controllers\ConfirmEthereumOpportunityController;
 use App\Http\Controllers\DashboardActionController;
 use App\Http\Controllers\EmailVerificationNotificationController;
 use App\Http\Controllers\EmailVerificationPromptController;
+use App\Http\Controllers\EthereumEligibilityReviewController;
 use App\Http\Controllers\EthereumSwapController;
 use App\Http\Controllers\EthereumWalletConnectionController;
 use App\Http\Controllers\IgnoreOpportunityController;
@@ -150,4 +151,13 @@ Route::middleware('auth')->prefix('opportunities')->name('opportunities.')->grou
     Route::post('/{opportunity}/ethereum/prepare', PrepareEthereumOpportunityController::class)->middleware('customer.verified')->name('ethereum.prepare');
     Route::post('/{opportunity}/approve', ApproveOpportunityController::class)->middleware('customer.verified')->name('approve');
     Route::post('/{opportunity}/ignore', IgnoreOpportunityController::class)->name('ignore');
+});
+
+Route::middleware(['auth', 'can:review-ethereum-accounting'])->prefix('ethereum-eligibility')->name('ethereum-eligibility.')->group(function (): void {
+    Route::get('/', [EthereumEligibilityReviewController::class, 'index'])->name('index');
+    Route::get('/{token}', [EthereumEligibilityReviewController::class, 'show'])->where('token', '0x[a-f0-9]{40}')->name('show');
+    Route::get('/{token}/confirm', [EthereumEligibilityReviewController::class, 'confirm'])->where('token', '0x[a-f0-9]{40}')->name('confirm');
+    foreach (['collect', 'preview', 'publish'] as $action) {
+        Route::post('/{token}/'.$action, [EthereumEligibilityReviewController::class, $action])->where('token', '0x[a-f0-9]{40}')->middleware('throttle:10,1')->name($action);
+    }
 });

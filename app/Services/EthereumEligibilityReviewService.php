@@ -17,7 +17,20 @@ class EthereumEligibilityReviewService
 {
     public const FORMAT = 'trusted-review-v1';
 
-    public function __construct(private EthereumEligibilityObservationCollector $collector) {}
+    public const WORKFLOW_CONCLUSIONS = [
+        'source_runtime' => 'Source/runtime correspondence reviewed',
+        'non_proxy' => 'Non-proxy conclusion',
+        'no_upgrade_routing' => 'No upgradeable implementation routing',
+        'no_transfer_fee' => 'No fee-on-transfer behavior',
+        'no_rebase' => 'No reflection or rebasing behavior',
+        'no_hidden_balances' => 'No hidden balance-changing behavior',
+        'administrative_controls' => 'Administrative controls reviewed',
+        'transfer_restrictions' => 'Transfer restrictions reviewed',
+        'historical_applicability' => 'Historical applicability reviewed',
+        'transfer_accounting' => 'Accounting semantics compatible with Transfer-log extraction',
+    ];
+
+    public function __construct(private EthereumEligibilityObservationCollector $collector, private EthereumEligibilityReviewGeneration $generations) {}
 
     /** @param array<string, mixed> $input */
     public function publish(array $input): EthereumAccountingEligibility
@@ -25,10 +38,10 @@ class EthereumEligibilityReviewService
         Gate::authorize('review-ethereum-accounting');
         /** @var User $actor */
         $actor = Auth::user();
-        $this->validate($input);
-        if ($existing = EthereumAccountingEligibility::query()->where('submission_id', $input['submission_id'])->first()) {
+        if (is_string($input['submission_id'] ?? null) && ($existing = EthereumAccountingEligibility::query()->where('submission_id', $input['submission_id'])->first())) {
             return $this->duplicate($existing, $actor, $input);
         }
+        $this->validate($input);
         // Collection is outside the database transaction. A rejection never invokes the collector.
         $observation = $input['decision'] === 'approved'
             ? $this->collector->collect($input['token_address'], $input['observation_reference']) : null;
@@ -40,7 +53,7 @@ class EthereumEligibilityReviewService
             throw new DomainException('The confirmed evidence digest does not match.');
         }
         try {
-            return DB::transaction(function () use ($actor, $input, $observation, $digest): EthereumAccountingEligibility {
+            return $this->generations->withCurrent($actor->id, $input['token_address'], $input['submission_id'], $input['review_generation'], $input['observation_reference'], fn () => DB::transaction(function () use ($actor, $input, $observation, $digest): EthereumAccountingEligibility {
                 Gate::forUser($actor->fresh())->authorize('review-ethereum-accounting');
                 $head = EthereumAccountingReviewHead::locked($input['token_address']);
                 if ($existing = EthereumAccountingEligibility::query()->where('submission_id', $input['submission_id'])->lockForUpdate()->first()) {
@@ -69,7 +82,7 @@ class EthereumEligibilityReviewService
                 $head->save();
 
                 return $review;
-            });
+            }));
         } catch (UniqueConstraintViolationException $exception) {
             $existing = EthereumAccountingEligibility::query()->where('submission_id', $input['submission_id'])->first();
             if (! $existing) {
@@ -100,7 +113,7 @@ class EthereumEligibilityReviewService
     {
         if ((string) $review->reviewer_user_id !== (string) $actor->id
             || $review->review_format_version !== self::FORMAT
-            || $review->evidence_digest !== $input['evidence_digest']
+            || $review->evidence_digest !== ($input['evidence_digest'] ?? null)
             || EthereumInventoryAccounting::canonicalEvidence($review->review_evidence['submission'] ?? null)
                 !== EthereumInventoryAccounting::canonicalEvidence(self::payload($input))) {
             throw new DomainException('Submission identifier was already used for different content.');
@@ -120,6 +133,7 @@ class EthereumEligibilityReviewService
             'expected_review_id' => ['present', 'nullable', 'integer', 'min:1'],
             'expected_version' => ['required', 'integer', 'min:0'],
             'submission_id' => ['required', 'uuid', 'lowercase'],
+            'review_generation' => ['required', 'uuid', 'lowercase'],
             'evidence_digest' => ['required', 'string', 'regex:/^[a-f0-9]{64}$/D'],
             'observation_reference' => ['present', 'nullable', 'string', 'max:128'],
             'assertions' => ['present', 'array'],
@@ -138,6 +152,15 @@ class EthereumEligibilityReviewService
             return;
         }
         $assertions = $input['assertions'];
+        if (! is_array($assertions['workflow_conclusions'] ?? null)
+            || EthereumInventoryAccounting::canonicalEvidence($assertions['workflow_conclusions'])
+                !== EthereumInventoryAccounting::canonicalEvidence(array_fill_keys(array_keys(self::WORKFLOW_CONCLUSIONS), true))) {
+            throw new DomainException('All operator review conclusions must be explicitly confirmed.');
+        }
+        if (array_key_exists('reviewer_notes', $assertions)
+            && (! is_string($assertions['reviewer_notes']) || strlen($assertions['reviewer_notes']) > 4096)) {
+            throw new DomainException('Reviewer notes exceed the permitted bounds.');
+        }
         if (! is_string($input['observation_reference']) || trim($input['observation_reference']) === ''
             || Validator::make($assertions, [
                 'source_reference' => ['required', 'string', 'max:2048'],
@@ -146,7 +169,7 @@ class EthereumEligibilityReviewService
                 'non_proxy' => ['required'], 'standard_transfer_accounting' => ['required'],
                 'no_mutable_balance_behavior' => ['required'],
             ])->fails()
-            || array_diff(array_keys($assertions), ['source_reference', 'source_sha256', 'historical_applicability', 'non_proxy', 'standard_transfer_accounting', 'no_mutable_balance_behavior']) !== []
+            || array_diff(array_keys($assertions), ['source_reference', 'source_sha256', 'historical_applicability', 'non_proxy', 'standard_transfer_accounting', 'no_mutable_balance_behavior', 'workflow_conclusions', 'reviewer_notes']) !== []
             || ($assertions['non_proxy'] ?? null) !== true
             || ($assertions['standard_transfer_accounting'] ?? null) !== true
             || ($assertions['no_mutable_balance_behavior'] ?? null) !== true) {
