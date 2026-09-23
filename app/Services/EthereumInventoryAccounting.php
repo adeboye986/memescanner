@@ -9,6 +9,7 @@ use App\Models\EthereumAccountingReviewHead;
 use App\Models\EthereumSwapAttempt;
 use App\Models\LivePosition;
 use App\Models\TradeOpportunity;
+use Closure;
 use DomainException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -21,10 +22,23 @@ class EthereumInventoryAccounting
         private EthereumAccountingFinality $finality, private LivePositionService $positions) {}
 
     /** All RPC happens between the claim and apply transactions. */
-    public function process(int $id, bool $audit = false, bool $retryUnsupported = false): string
+    public function process(int $id, bool $audit = false, bool $retryUnsupported = false, ?array $reconsideration = null, ?Closure $recordOutcome = null): string
     {
-        $claim = DB::transaction(function () use ($id, $audit, $retryUnsupported): ?array {
-            [$position, $attempt, $opportunity, $reviewHead] = $this->lock($id);
+        $finish = static function (string $result) use ($recordOutcome): string {
+            if ($recordOutcome) {
+                $recordOutcome($result);
+            }
+
+            return $result;
+        };
+        $claim = DB::transaction(function () use ($id, $audit, $retryUnsupported, $reconsideration, $finish): ?array {
+            [$position, $attempt, $opportunity, $reviewHead] = $this->lock($id, $reconsideration['review']['token'] ?? null);
+            if ($reconsideration !== null) {
+                $skip = $this->reconsiderationSkip($position, $attempt, $opportunity, $reviewHead, $reconsideration);
+                if ($skip !== null) {
+                    return ['result' => $finish($skip)];
+                }
+            }
             if (! $position || $position->chain->value !== 'ethereum'
                 || ! in_array($position->accounting_status, [...['pending', 'provisional'], ...($audit ? ['verified'] : []), ...($retryUnsupported ? ['unsupported'] : [])], true)
                 || ($position->accounting_lease_expires_at && $position->accounting_lease_expires_at->isFuture())
@@ -53,6 +67,9 @@ class EthereumInventoryAccounting
         if ($claim === null) {
             return 'skipped';
         }
+        if (isset($claim['result'])) {
+            return $claim['result'];
+        }
         $facts = [];
         try {
             if ($claim['identity_error']) {
@@ -66,10 +83,20 @@ class EthereumInventoryAccounting
             $reason = $exception->reason;
         }
 
-        return DB::transaction(function () use ($claim, $facts, $state, $reason): string {
-            [$position, $attempt, $opportunity, $reviewHead] = $this->lock($claim['position']->id);
+        return DB::transaction(function () use ($claim, $facts, $state, $reason, $finish, $reconsideration): string {
+            [$position, $attempt, $opportunity, $reviewHead] = $this->lock($claim['position']->id, $reconsideration['review']['token'] ?? null);
             if (! $position || $position->accounting_lease_token !== $claim['decision']['lease']) {
-                return 'stale_observation';
+                return $finish('stale_observation');
+            }
+            if ($reconsideration !== null && ! self::matchesReview($reviewHead, $reconsideration['review'])) {
+                $this->release($position);
+
+                return $finish('stale_review');
+            }
+            if ($reconsideration !== null && self::sourceFingerprint($position, $attempt, $opportunity) !== $reconsideration['candidate']['source']) {
+                $this->release($position);
+
+                return $finish('skipped_identity');
             }
             if (! $position->accounting_lease_expires_at || $position->accounting_lease_expires_at->isPast()
                 || $this->decision($position) !== $claim['decision']
@@ -78,7 +105,7 @@ class EthereumInventoryAccounting
                 // Only release our lease; preserve the newer decision and its reason/evidence.
                 $this->release($position);
 
-                return 'stale_observation';
+                return $finish('stale_observation');
             }
             try {
                 if (! $attempt || ! $opportunity) {
@@ -112,13 +139,13 @@ class EthereumInventoryAccounting
                 $this->retry($position);
                 $this->release($position);
 
-                return 'retryable';
+                return $finish('retryable');
             }
             if ($position->accounting_verified_at && in_array($state, ['verified', 'provisional'], true)) {
                 $position->accounting_reason_code = $state === 'provisional' ? $reason : null;
                 $this->release($position);
 
-                return 'verified';
+                return $finish('verified');
             }
             $payload = ['transaction_hash' => $position->entry_transaction_hash, 'token' => $position->token_address,
                 'wallet' => $position->wallet_address, 'chain_id' => '1', 'eligibility_review_id' => $claim['eligibility']?->id,
@@ -148,7 +175,7 @@ class EthereumInventoryAccounting
             }
             $this->release($position);
 
-            return $state;
+            return $finish($state);
         });
     }
 
@@ -233,10 +260,10 @@ class EthereumInventoryAccounting
     }
 
     /** Review head first, then preserve opportunity → attempt → position ordering. @return array */
-    private function lock(int $id): array
+    private function lock(int $id, ?string $token = null): array
     {
         $candidate = LivePosition::query()->find($id);
-        if (! $candidate) {
+        if (! $candidate || ($token !== null && ($candidate->getRawOriginal('chain') !== 'ethereum' || $candidate->token_address !== $token))) {
             return [null, null, null, null];
         }
         $reviewHead = EthereumAccountingReviewHead::locked($candidate->token_address);
@@ -245,6 +272,69 @@ class EthereumInventoryAccounting
         $position = LivePosition::query()->lockForUpdate()->find($id);
 
         return [$position, $attempt, $opportunity, $reviewHead];
+    }
+
+    public static function matchesReview(EthereumAccountingReviewHead $head, array $binding): bool
+    {
+        $review = $head->currentReview();
+
+        return $review !== null && $binding === ['chain' => $head->chain, 'token' => $head->token_address,
+            ...$head->snapshot(), 'decision' => $review->status, 'policy' => $review->policy_version];
+    }
+
+    /** Only a hash of immutable source fields enters the operator audit. */
+    public static function sourceFingerprint(LivePosition $position, ?EthereumSwapAttempt $attempt, ?TradeOpportunity $opportunity): string
+    {
+        $identity = array_intersect_key($position->getRawOriginal(), array_flip(['id', 'user_id', 'chain', 'network', 'wallet_address',
+            'connected_wallet_id', 'trade_opportunity_id', 'ethereum_swap_attempt_id', 'token_address',
+            'entry_transaction_hash', 'entry_block_number', 'entry_confirmed_at']));
+
+        return hash('sha256', self::canonicalEvidence([$identity, $attempt?->getRawOriginal(), $opportunity?->getRawOriginal()]));
+    }
+
+    /** Reconsideration never resets state or leases to force normal accounting to accept a candidate. */
+    private function reconsiderationSkip(?LivePosition $position, ?EthereumSwapAttempt $attempt, ?TradeOpportunity $opportunity,
+        ?EthereumAccountingReviewHead $head, array $context): ?string
+    {
+        if (! $position || ! $head) {
+            return 'skipped_identity';
+        }
+        if (! self::matchesReview($head, $context['review'])) {
+            return 'stale_review';
+        }
+        if ($context['review']['decision'] !== 'approved') {
+            return 'skipped_rejected';
+        }
+        if ($position->accounting_status === 'discrepancy') {
+            return 'skipped_discrepancy';
+        }
+        if ($position->accounting_verified_at || $position->accounting_status === 'verified') {
+            return 'skipped_verified';
+        }
+        if ($position->accounting_status === 'provisional') {
+            return 'skipped_provisional';
+        }
+        if ($position->accounting_lease_expires_at?->isFuture()) {
+            return 'skipped_active_lease';
+        }
+        if ($position->accounting_status !== $context['candidate']['state']
+            || (string) $position->accounting_version !== $context['candidate']['version']) {
+            return 'skipped_state_changed';
+        }
+        if ($position->network !== 'mainnet' || ! $attempt || ! $opportunity
+            || self::sourceFingerprint($position, $attempt, $opportunity) !== $context['candidate']['source']) {
+            return 'skipped_identity';
+        }
+        if ($position->accounting_next_attempt_at?->isFuture()) {
+            return 'skipped_backoff';
+        }
+        try {
+            $this->positions->ensureConfirmedEthereum($opportunity, $attempt);
+        } catch (DomainException) {
+            return 'skipped_identity';
+        }
+
+        return null;
     }
 
     private function fingerprint(?EthereumSwapAttempt $attempt, ?TradeOpportunity $opportunity): string

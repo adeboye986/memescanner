@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Exceptions\EthereumAccountingException;
 use App\Http\Requests\StoreEthereumEligibilityReviewRequest;
 use App\Models\EthereumAccountingEligibility;
+use App\Models\EthereumAccountingReconsideration;
 use App\Services\EthereumEligibilityObservationCollector;
 use App\Services\EthereumEligibilityReviewGeneration;
 use App\Services\EthereumEligibilityReviewQueue;
@@ -27,7 +28,7 @@ class EthereumEligibilityReviewController extends Controller
             'rpcConfigured' => str_starts_with((string) config('services.ethereum.rpc_url'), 'https://')]);
     }
 
-    public function show(Request $request, string $token, EthereumEligibilityReviewQueue $queue): View
+    public function show(Request $request, string $token, EthereumEligibilityReviewQueue $queue, \App\Services\EthereumAccountingReconsideration $reconsideration): View
     {
         $candidate = $queue->query()->where('tokens.token', $token)->first();
         abort_unless($candidate, 404);
@@ -40,7 +41,20 @@ class EthereumEligibilityReviewController extends Controller
             $request->session()->put('ethereum_review_form', $form);
         }
 
-        return view('ethereum-eligibility.show', ['candidate' => $candidate, 'form' => $form,
+        $reconsiderationForm = $request->session()->get('ethereum_reconsideration_form');
+        if (! is_array($reconsiderationForm) || ($reconsiderationForm['actor'] ?? null) !== $request->user()->id
+            || ($reconsiderationForm['token'] ?? null) !== $token || ($reconsiderationForm['review'] ?? null) !== $state['expected_review_id']
+            || ($reconsiderationForm['version'] ?? null) !== $state['expected_version']
+            || EthereumAccountingReconsideration::query()->where('request_uuid', $reconsiderationForm['uuid'])->where('status', '!=', 'awaiting_confirmation')->exists()) {
+            $reconsiderationForm = ['actor' => $request->user()->id, 'token' => $token, 'review' => $state['expected_review_id'],
+                'version' => $state['expected_version'], 'uuid' => (string) Str::uuid()];
+            $request->session()->put('ethereum_reconsideration_form', $reconsiderationForm);
+        }
+
+        return view('ethereum-eligibility.show', ['candidate' => $candidate, 'form' => $form, 'reconsiderationSummary' => $reconsideration->summary($token), 'reconsiderationForm' => $reconsiderationForm,
+            'reconsiderationHistory' => EthereumAccountingReconsideration::query()->where('chain', 'ethereum')->where('token_address', $token)
+                ->where('requested_by_user_id', $request->user()->id)->latest('id')->limit(10)
+                ->get(['request_uuid', 'status', 'ethereum_accounting_eligibility_id', 'created_at', 'considered_count', 'skipped_count', 'succeeded_count', 'failed_count', 'stale_count']),
             'digest' => $this->observationDigest($form), 'stale' => $this->state($form) !== $state,
             'history' => EthereumAccountingEligibility::query()->where('chain', 'ethereum')->where('token_address', $token)->latest('id')->paginate(25),
             'conclusions' => EthereumEligibilityReviewService::WORKFLOW_CONCLUSIONS]);

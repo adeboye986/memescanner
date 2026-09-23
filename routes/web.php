@@ -8,6 +8,7 @@ use App\Http\Controllers\ConfirmEthereumOpportunityController;
 use App\Http\Controllers\DashboardActionController;
 use App\Http\Controllers\EmailVerificationNotificationController;
 use App\Http\Controllers\EmailVerificationPromptController;
+use App\Http\Controllers\EthereumAccountingReconsiderationController;
 use App\Http\Controllers\EthereumEligibilityReviewController;
 use App\Http\Controllers\EthereumSwapController;
 use App\Http\Controllers\EthereumWalletConnectionController;
@@ -157,6 +158,9 @@ Route::middleware(['auth', 'can:review-ethereum-accounting'])->prefix('ethereum-
     Route::get('/', [EthereumEligibilityReviewController::class, 'index'])->name('index');
     Route::get('/{token}', [EthereumEligibilityReviewController::class, 'show'])->where('token', '0x[a-f0-9]{40}')->name('show');
     Route::get('/{token}/confirm', [EthereumEligibilityReviewController::class, 'confirm'])->where('token', '0x[a-f0-9]{40}')->name('confirm');
+    Route::post('/{token}/reconsideration', [EthereumAccountingReconsiderationController::class, 'prepare'])->where('token', '0x[a-f0-9]{40}')->middleware('throttle:10,1')->name('reconsideration.prepare');
+    Route::get('/{token}/reconsideration/{requestUuid}', [EthereumAccountingReconsiderationController::class, 'show'])->where('token', '0x[a-f0-9]{40}')->whereUuid('requestUuid')->name('reconsideration.show');
+    Route::post('/{token}/reconsideration/{requestUuid}', [EthereumAccountingReconsiderationController::class, 'execute'])->where('token', '0x[a-f0-9]{40}')->whereUuid('requestUuid')->middleware('throttle:10,1')->name('reconsideration.execute');
     foreach (['collect', 'preview', 'publish'] as $action) {
         Route::post('/{token}/'.$action, [EthereumEligibilityReviewController::class, $action])->where('token', '0x[a-f0-9]{40}')->middleware('throttle:10,1')->name($action);
     }

@@ -29,6 +29,22 @@
         <label class="block">Reviewer notes<textarea name="reviewer_notes" maxlength="4096" class="block w-full rounded bg-slate-900 p-2">{{ old('reviewer_notes') }}</textarea></label>
         <button class="rounded bg-blue-700 px-4 py-2">Preview exact decision</button>
     </form>
+    <section class="space-y-3 rounded-2xl border border-slate-700 p-5">
+        <h2 class="text-lg">Explicit accounting reconsideration</h2>
+        <p>Eligible candidates: {{ $reconsiderationSummary['eligible'] }} · Excluded verified: {{ $reconsiderationSummary['verified'] }} · Excluded discrepancy: {{ $reconsiderationSummary['discrepancy'] }} · Excluded other: {{ $reconsiderationSummary['other'] }}</p>
+        <p>Batch limit: {{ $reconsiderationSummary['limit'] }}. {{ $reconsiderationSummary['eligible'] > $reconsiderationSummary['limit'] ? 'More eligible work exists beyond one batch.' : 'All currently eligible candidates fit in one batch.' }}</p>
+        <p>Source identity is rechecked before claim. Provisional inventory keeps its normal finality/backoff processing. Publishing a review never starts reconsideration. No trades are executed.</p>
+        @if(in_array($candidate->status, ['approved', 'rejected'], true))
+            <form method="POST" action="{{ route('ethereum-eligibility.reconsideration.prepare', $candidate->token) }}">@csrf
+                <input type="hidden" name="review_id" value="{{ $reconsiderationForm['review'] }}"><input type="hidden" name="review_version" value="{{ $reconsiderationForm['version'] }}">
+                <button class="rounded bg-blue-700 px-4 py-2">Review accounting reconsideration</button>
+            </form>
+        @else<p>A current approved or rejected accounting review is required.</p>@endif
+        @if($reconsiderationHistory->isNotEmpty())
+            <h3>Your recent reconsideration requests</h3>
+            <ul>@foreach($reconsiderationHistory as $audit)<li><a class="text-blue-300" href="{{ route('ethereum-eligibility.reconsideration.show', [$candidate->token, $audit->request_uuid]) }}">{{ $audit->created_at }} · Review #{{ $audit->ethereum_accounting_eligibility_id }} · {{ $audit->status }} · {{ $audit->considered_count }} considered / {{ $audit->succeeded_count }} successful / {{ $audit->skipped_count }} skipped / {{ $audit->failed_count }} failed / {{ $audit->stale_count }} stale</a></li>@endforeach</ul>
+        @endif
+    </section>
     <section class="space-y-4"><h2 class="text-lg">Immutable review history</h2>
         @forelse($history as $review)
             <article class="rounded-2xl border border-slate-700 p-4"><h3>#{{ $review->id }} · {{ strtoupper($review->status) }} · {{ $review->review_format_version ?: 'Legacy Phase 4B review' }}</h3>

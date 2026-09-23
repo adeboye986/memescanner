@@ -74,6 +74,7 @@ return [
             'finality' => env('ETHEREUM_ACCOUNTING_FINALITY', 'finalized'),
             'confirmations' => env('ETHEREUM_ACCOUNTING_CONFIRMATIONS'),
             'batch_size' => 25,
+            'reconsideration_batch_size' => 3,
             'lease_seconds' => 180,
             'retry_seconds' => 60,
             'retry_max_seconds' => 3600,
