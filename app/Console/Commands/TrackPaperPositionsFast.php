@@ -62,9 +62,16 @@ class TrackPaperPositionsFast extends Command
 
         $this->info("Fast paper tracker started with a {$targetMilliseconds}ms target interval.");
 
+        $heartbeat = function () use ($lock, $lockSeconds, $health): void {
+            if (! $lock->refresh($lockSeconds)) {
+                throw new \RuntimeException('Fast tracker process lock was lost.');
+            }
+            $health->recordProcessHeartbeat();
+        };
         try {
             while (! $shouldStop && ($maxCycles === 0 || $cycles < $maxCycles)) {
                 $cycleStarted = hrtime(true);
+                $heartbeat();
                 $tracker->setOutput($this->getOutput());
                 try {
                     $exitCode = $tracker->trackCycle(
@@ -76,6 +83,7 @@ class TrackPaperPositionsFast extends Command
                         $settings,
                         max(1, min((int) $this->option('limit'), 200)),
                         true,
+                        $heartbeat,
                     );
                 } catch (\Throwable $exception) {
                     if (! $databaseLocks->isLockException($exception)) {
@@ -87,14 +95,14 @@ class TrackPaperPositionsFast extends Command
                 }
                 $durationMilliseconds = (hrtime(true) - $cycleStarted) / 1_000_000;
                 $metrics = $tracker->cycleMetrics();
-                $health->recordCycle($metrics, $durationMilliseconds);
+
                 $cycles++;
 
                 if ($exitCode !== self::SUCCESS) {
                     $this->warn("Tracker cycle {$cycles} exited with code {$exitCode}.");
                 }
 
-                if (method_exists($lock, 'refresh') && ! $lock->refresh($lockSeconds)) {
+                if (! $lock->refresh($lockSeconds)) {
                     $this->error('Fast tracker process lock was lost; shutting down.');
 
                     return self::FAILURE;

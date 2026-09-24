@@ -8,7 +8,6 @@ use App\Models\LivePosition;
 use App\Models\TradeOpportunity;
 use App\Models\User;
 use App\Services\ApplicationSettingsService;
-use App\Services\Chains\EthereumChainAdapter;
 use App\Services\EthereumOpportunityReservationService;
 use App\Services\EthereumReceiptReconciliationService;
 use App\Services\EthereumService;
@@ -223,8 +222,12 @@ class LivePositionFoundationTest extends TestCase
             'address' => '0x'.str_repeat('8', 40), 'symbol' => 'PAPER', 'entry_market_cap' => 100000, 'entry_price' => 1]);
         $liveBefore = LivePosition::query()->sole()->getRawOriginal();
         $this->mock(UserTelegramNotificationService::class)->shouldReceive('send')->zeroOrMoreTimes();
-        $this->mock(EthereumChainAdapter::class)->shouldReceive('marketDataMany')->once()->andReturn([
-            $position->address => ['available' => true, 'market_cap' => 85000, 'price_usd' => 0.85, 'liquidity_usd' => 10000]]);
+        Http::preventStrayRequests();
+        Http::fake(['api.dexscreener.com/tokens/v1/ethereum/*' => Http::response([[
+            'chainId' => 'ethereum', 'pairAddress' => '0x'.str_repeat('7', 40),
+            'baseToken' => ['address' => $position->address], 'quoteToken' => ['address' => '0x'.str_repeat('9', 40)],
+            'marketCap' => 85000, 'priceUsd' => 0.85, 'liquidity' => ['usd' => 10000],
+        ]])]);
         $this->artisan('tokens:paper-track')->assertSuccessful();
         $this->assertSame('closed', $position->fresh()->status);
         $this->assertLessThan(0, (float) $position->fresh()->trade_pnl_sol);

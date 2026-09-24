@@ -43,7 +43,7 @@ $paperTrackActivity = null;
 
 Schedule::command('tokens:paper-track')
     ->everyTenSeconds()
-    ->withoutOverlapping()
+    ->withoutOverlapping(max(1, (int) config('services.trading.paper_tracker_overlap_minutes', 5)))
     ->skip(fn (): bool => Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'))
         ->lock('paper-tracker.fast.process')
         ->isLocked())

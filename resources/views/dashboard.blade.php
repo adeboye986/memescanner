@@ -287,15 +287,17 @@
             </div>
 
             <div class="grid gap-3 border-t border-slate-800 pt-4 text-xs sm:grid-cols-3">
-                <div><p class="uppercase tracking-wider text-slate-600">Last Fast Cycle</p><p id="last-tracker-check" class="mt-1 text-slate-300">{{ $systemStatus['last_tracker_check']?->diffForHumans() ?? 'Never' }}</p></div>
+                <div><p class="uppercase tracking-wider text-slate-600">Last Completed Tracker Cycle</p><p id="last-tracker-check" class="mt-1 text-slate-300">{{ $systemStatus['last_tracker_check']?->diffForHumans() ?? 'Never' }}</p></div>
                 <div><p class="uppercase tracking-wider text-slate-600">Last Momentum Scan</p><p id="last-momentum-scan" class="mt-1 text-slate-300">{{ $systemStatus['last_momentum_scan']?->diffForHumans() ?? 'Never' }}</p></div>
                 <div><p class="uppercase tracking-wider text-slate-600">Last Token Scan</p><p id="last-token-scan" class="mt-1 text-slate-300">{{ $systemStatus['last_token_scan']?->diffForHumans() ?? 'Never' }}</p></div>
             </div>
+            <p class="text-xs text-slate-500">Fast-process lease: <span id="tracker-process-lease">{{ $systemStatus['process_lock_held'] ? 'held' : 'not held' }}</span> · Last process heartbeat: <span id="tracker-process-heartbeat">{{ $systemStatus['last_process_heartbeat'] ?? 'Never' }}</span>. A held lease does not establish healthy market data.</p>
+            <p class="text-xs text-slate-500">Unverified open positions across all batches: <span id="tracker-outstanding-unverified">{{ $systemStatus['outstanding_unverified_positions'] }}</span> · Last successful provider request: <span id="tracker-provider-success">{{ $systemStatus['last_successful_provider_request'] ?? 'Never' }}</span> · Last valid position observation: <span id="tracker-valid-observation">{{ $systemStatus['last_successful_market_observation']?->diffForHumans() ?? 'Never' }}</span>.</p>
             <div class="grid gap-3 text-xs sm:grid-cols-4">
                 <div><p class="uppercase tracking-wider text-slate-600">Cycle Duration</p><p id="tracker-cycle-duration" class="mt-1 text-slate-300">{{ $systemStatus['cycle_duration_ms'] !== null ? number_format($systemStatus['cycle_duration_ms'], 0).' ms' : 'N/A' }}</p></div>
-                <div><p class="uppercase tracking-wider text-slate-600">Open Positions</p><p id="tracker-open-positions" class="mt-1 text-slate-300">{{ $systemStatus['open_positions'] ?? 'N/A' }}</p></div>
-                <div><p class="uppercase tracking-wider text-slate-600">Priced</p><p id="tracker-priced-positions" class="mt-1 text-slate-300">{{ $systemStatus['priced_positions'] !== null ? $systemStatus['priced_positions'].' / '.$systemStatus['open_positions'] : 'N/A' }}</p></div>
-                <div><p class="uppercase tracking-wider text-slate-600">Provider Failures</p><p id="tracker-provider-failures" class="mt-1 text-slate-300">{{ $systemStatus['provider_failures'] ?? 'N/A' }}</p></div>
+                <div><p class="uppercase tracking-wider text-slate-600">Positions in Last Batch</p><p id="tracker-open-positions" class="mt-1 text-slate-300">{{ $systemStatus['open_positions'] ?? 'N/A' }}</p></div>
+                <div><p class="uppercase tracking-wider text-slate-600">Valid in Last Batch</p><p id="tracker-priced-positions" class="mt-1 text-slate-300">{{ $systemStatus['priced_positions'] !== null ? $systemStatus['priced_positions'].' / '.$systemStatus['open_positions'] : 'N/A' }}</p></div>
+                <div><p class="uppercase tracking-wider text-slate-600">Last Batch Provider Failures</p><p id="tracker-provider-failures" class="mt-1 text-slate-300">{{ $systemStatus['provider_failures'] ?? 'N/A' }}</p></div>
             </div>
         </section>
     </div>
@@ -306,7 +308,7 @@
                 <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Positions</p>
                 <h2 id="positions-heading" class="mt-1 text-xl font-semibold text-white">Open Trades</h2>
             </div>
-            <p class="text-sm text-slate-500">Market values reflect the latest tracker check.</p>
+            <p class="text-sm text-slate-500">Market values are PAPER observations, not executable sell quotes. Check observation status before relying on them.</p>
         </div>
 
         @forelse ($positions as $trade)
@@ -326,6 +328,14 @@
                                 <span class="rounded-full bg-violet-400/10 px-2.5 py-1 text-xs font-semibold uppercase text-violet-300">{{ $position->chain->label() }}</span>
                                 <span class="rounded-full bg-amber-400/10 px-2.5 py-1 text-xs font-semibold text-amber-300">{{ $trade['protection_state'] }}</span>
                             </div>
+                            @if ($observation = data_get($position->meta, 'market_observation'))
+                                <p class="mt-2 text-xs text-amber-300">Observation: {{ str($observation['status'])->replace('_', ' ') }}
+                                    @if ($observation['status'] === 'unverified') — automatic PAPER exit deferred: {{ implode(', ', $observation['reasons']) }} @endif
+                                    @if (!empty($observation['diagnostics'])) — {{ implode(', ', $observation['diagnostics']) }} @endif
+                                    @if ($observation['pool_switched'] ?? false) — pool changed @endif
+                                </p>
+                                <p class="mt-1 text-xs text-slate-500">Source: {{ $observation['provider'] ?? 'Unavailable' }} · {{ $observation['valuation_source'] }} · Last valid observation: {{ data_get($position->meta, 'last_valid_market_observation_at', 'Not recorded') }}</p>
+                            @endif
                             <p class="mt-1 truncate font-mono text-xs text-slate-500" title="{{ $position->address }}">{{ $position->address }}</p>
                         </div>
                     </div>

@@ -41,7 +41,7 @@ class SystemActivityServiceTest extends TestCase
         $this->assertNull($status['last_tracker_check']);
     }
 
-    public function test_recent_fast_cycle_is_active_and_becomes_stale(): void
+    public function test_recent_partially_priced_cycle_is_degraded_and_becomes_stale(): void
     {
         $health = app(PaperTrackerHealthService::class);
         $health->recordCycle([
@@ -53,12 +53,12 @@ class SystemActivityServiceTest extends TestCase
         ], 347.2);
 
         $status = app(SystemActivityService::class)->systemStatus();
-        $this->assertSame('active', $status['status']);
+        $this->assertSame('degraded', $status['status']);
         $this->assertSame(347.2, $status['cycle_duration_ms']);
         $this->assertSame(4, $status['open_positions']);
         $this->assertSame(3, $status['priced_positions']);
 
-        $this->travel(6)->seconds();
+        $this->travel(31)->seconds();
         $status = app(SystemActivityService::class)->systemStatus();
 
         $this->assertSame('stale', $status['status']);

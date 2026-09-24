@@ -52,7 +52,7 @@ class OperationalHealthService
         return [
             'scheduler' => $this->component($schedulerAt, (int) config('services.operations.scheduler_stale_seconds', 150)),
             'queue' => [...$this->component($queueAt, (int) config('services.operations.queue_stale_seconds', 750)), 'last_job_processed_at' => $this->date($queue['last_job_processed_at'] ?? null), 'processed_jobs' => $queue['processed_jobs'] ?? null],
-            'fast_tracker' => $this->component($trackerAt, (int) config('services.operations.fast_tracker_stale_seconds', 75)),
+            'fast_tracker' => ['status' => $tracker['status'] === 'active' ? 'healthy' : ($tracker['status'] === 'unknown' ? 'never_run' : $tracker['status']), 'last_run_at' => $trackerAt, 'process_lock_held' => $tracker['process_lock_held']],
             'pending_jobs' => $this->tableCount('jobs'),
             'failed_jobs' => $this->tableCount('failed_jobs'),
         ];

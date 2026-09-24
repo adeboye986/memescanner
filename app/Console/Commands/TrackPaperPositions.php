@@ -2,18 +2,23 @@
 
 namespace App\Console\Commands;
 
+use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\PaperPositionSnapshot;
 use App\Services\ApplicationSettingsService;
 use App\Services\Chains\ChainManager;
 use App\Services\DatabaseLockRetryService;
+use App\Services\PaperMarketObservation;
 use App\Services\PaperStrategyService;
+use App\Services\PaperTrackerHealthService;
 use App\Services\PaperWalletService;
 use App\Services\TelegramService;
 use App\Services\UserTelegramNotificationService;
+use Closure;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 
 class TrackPaperPositions extends Command
 {
@@ -29,7 +34,10 @@ class TrackPaperPositions extends Command
         'priced_positions' => 0,
         'provider_failures' => 0,
         'provider_requests' => 0,
+        'provider_successes' => 0,
         'rate_limited' => false,
+        'cycle_completed' => false,
+        'at_risk_positions' => 0,
     ];
 
     public function handle(
@@ -64,6 +72,7 @@ class TrackPaperPositions extends Command
         ApplicationSettingsService $settings,
         int $limit = 50,
         bool $fastProcess = false,
+        ?Closure $heartbeat = null,
     ): int {
         $limit = max(1, min($limit, 200));
         $this->cycleMetrics = [
@@ -71,7 +80,10 @@ class TrackPaperPositions extends Command
             'priced_positions' => 0,
             'provider_failures' => 0,
             'provider_requests' => 0,
+            'provider_successes' => 0,
             'rate_limited' => false,
+            'cycle_completed' => false,
+            'at_risk_positions' => 0,
         ];
 
         $cache = Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'));
@@ -93,8 +105,15 @@ class TrackPaperPositions extends Command
             return self::SUCCESS;
         }
 
+        $started = hrtime(true);
+        $pulse = function () use ($cycleLock, $heartbeat): void {
+            $heartbeat?->__invoke();
+            if (! $cycleLock->refresh(max(30, (int) config('services.trading.paper_tracker_lock_seconds', 300)))) {
+                throw new RuntimeException('Paper tracker cycle lock was lost.');
+            }
+        };
         try {
-
+            $pulse();
             $positions = $databaseLocks->run(
                 fn () => PaperPosition::query()
                     ->where('status', 'open')
@@ -107,6 +126,7 @@ class TrackPaperPositions extends Command
             );
 
             if ($positions->isEmpty()) {
+                $this->cycleMetrics['cycle_completed'] = true;
                 $this->info('No open paper positions.');
 
                 return self::SUCCESS;
@@ -114,50 +134,62 @@ class TrackPaperPositions extends Command
 
             $this->cycleMetrics['open_positions'] = $positions->count();
 
-            foreach ($positions->groupBy(fn (PaperPosition $position): string => $position->chain->value) as $chainPositions) {
-                $addresses = $chainPositions->pluck('address')->all();
-                $this->cycleMetrics['provider_requests'] += (int) ceil(count($addresses) / 30);
-
+            $observe = function (PaperPosition $position, array $data) use ($pulse, $telegram, $wallets, $strategies, $databaseLocks, $settings): void {
+                $pulse();
                 try {
-                    $marketData = $chains->for($chainPositions->first()->chain)->marketDataMany($addresses);
+                    if (! ($data['available'] ?? false)) {
+                        $this->recordUnavailable($position, $data, $databaseLocks, $pulse);
+
+                        return;
+                    }
+                    if ($this->trackOne($position, $data, $telegram, $wallets, $strategies, $databaseLocks, $settings, $pulse)) {
+                        $this->cycleMetrics['priced_positions']++;
+                    }
                 } catch (\Throwable $exception) {
-                    $this->cycleMetrics['provider_failures'] += $chainPositions->count();
-                    $this->cycleMetrics['rate_limited'] = $this->cycleMetrics['rate_limited']
-                        || str_contains($exception->getMessage(), '429');
-                    $this->warn('PAPER TRACK PROVIDER FAILURE: '.$exception->getMessage());
+                    if (! $databaseLocks->isLockException($exception)) {
+                        throw $exception;
+                    }
+                    $this->warn("PAPER TRACK DB LOCK: position {$position->id} skipped after retries");
+                }
+            };
+            foreach ($positions->groupBy(fn (PaperPosition $position): string => $position->chain->value) as $chainPositions) {
+                $pulse();
+                if ($chainPositions->first()->chain === Chain::Ethereum) {
+                    $batch = $chains->for(Chain::Ethereum)->paperMarketData($chainPositions->all(), $pulse, $observe);
+                    $this->cycleMetrics['provider_requests'] += $batch['requests'];
+                    $this->cycleMetrics['provider_successes'] += $batch['requests'] - $batch['failures'];
+                    $this->cycleMetrics['provider_failures'] += $batch['failures'];
+                    $this->cycleMetrics['rate_limited'] = $this->cycleMetrics['rate_limited'] || $batch['rate_limited'];
 
                     continue;
                 }
-
-                foreach ($chainPositions as $position) {
-                    $key = $position->chain->value === 'ethereum'
-                        ? strtolower($position->address)
-                        : $position->address;
-                    $dex = $marketData[$key] ?? null;
-
-                    if (! is_array($dex) || ! ($dex['available'] ?? false)) {
-                        $this->cycleMetrics['provider_failures']++;
-                        $this->warn("PAPER TRACK UNAVAILABLE: {$position->symbol} | no valid market data");
-
-                        continue;
-                    }
-
+                foreach ($chainPositions->chunk(30) as $chunk) {
+                    $pulse();
+                    $this->cycleMetrics['provider_requests']++;
                     try {
-                        $this->trackOne($position, $dex, $telegram, $wallets, $strategies, $databaseLocks, $settings);
-                        $this->cycleMetrics['priced_positions']++;
+                        $marketData = $chains->for($chunk->first()->chain)->marketDataMany($chunk->pluck('address')->unique()->values()->all());
+                        $this->cycleMetrics['provider_successes']++;
                     } catch (\Throwable $exception) {
-                        if (! $databaseLocks->isLockException($exception)) {
-                            throw $exception;
-                        }
-
-                        $this->warn("PAPER TRACK DB LOCK: position {$position->id} skipped after retries");
+                        $this->cycleMetrics['provider_failures']++;
+                        $this->cycleMetrics['rate_limited'] = $this->cycleMetrics['rate_limited'] || str_contains($exception->getMessage(), '429');
+                        $marketData = [];
+                        $this->warn('PAPER TRACK PROVIDER FAILURE: '.$exception->getMessage());
+                    }
+                    foreach ($chunk as $position) {
+                        $observe($position, $marketData[$position->address] ?? ['available' => false, 'reason' => 'no_valid_provider_observation']);
                     }
                 }
             }
 
+            $this->cycleMetrics['cycle_completed'] = true;
+
             return self::SUCCESS;
         } finally {
-            $cycleLock->release();
+            try {
+                app(PaperTrackerHealthService::class)->recordCycle($this->cycleMetrics, (hrtime(true) - $started) / 1_000_000);
+            } finally {
+                $cycleLock->release();
+            }
         }
     }
 
@@ -169,26 +201,21 @@ class TrackPaperPositions extends Command
         PaperStrategyService $strategies,
         DatabaseLockRetryService $databaseLocks,
         ApplicationSettingsService $settings,
-    ): void {
-        $marketCap = (float) ($dex['market_cap'] ?? 0);
-        $price = $dex['price_usd']
-            ?? $dex['price']
-            ?? null;
-        $liquidity = $dex['liquidity_usd'] ?? null;
+        Closure $pulse,
+    ): bool {
+        $observation = app(PaperMarketObservation::class)->evaluate($position, $dex);
+        if (! $observation['simulation_allowed']) {
+            $this->recordUnavailable($position, $dex, $databaseLocks, $pulse);
+
+            return false;
+        }
+        if ($observation['diagnostics'] !== []) {
+            $this->cycleMetrics['at_risk_positions']++;
+        }
+        $marketCap = $observation['market_cap'];
+        $price = $observation['price_usd'];
+        $liquidity = $observation['liquidity_usd'];
         $entryMc = (float) $position->entry_market_cap;
-        $entryPrice = (float) ($position->entry_price ?? 0);
-
-        if ($marketCap <= 0 && (float) $price > 0 && $entryPrice > 0 && $entryMc > 0) {
-            $marketCap = $entryMc * ((float) $price / $entryPrice);
-        }
-
-        if ($marketCap <= 0 || $entryMc <= 0) {
-            $this->warn(
-                "PAPER TRACK SKIP: {$position->symbol} | invalid market cap and no price fallback"
-            );
-
-            return;
-        }
         $multiple = $marketCap / $entryMc;
         $returnPercent = ($multiple - 1) * 100;
 
@@ -327,6 +354,11 @@ class TrackPaperPositions extends Command
                 'fill_market_cap' => $entryMc * $fillMultiple,
                 'observed_multiple' => $multiple,
                 'observed_market_cap' => $marketCap,
+                'market_observation' => $observation,
+                'execution_verified' => false,
+                'estimated_executable_fill' => null,
+                'fill_model' => 'observed_mark_without_slippage_or_depth',
+                'proceeds_basis' => 'original_native_asset_cost_times_observed_valuation_ratio',
                 'triggered_at' => now()->toIso8601String(),
             ];
 
@@ -370,6 +402,11 @@ class TrackPaperPositions extends Command
                 'fill_market_cap' => $entryMc * $fillMultiple,
                 'observed_multiple' => $multiple,
                 'peak_multiple' => $peakMultiple,
+                'market_observation' => $observation,
+                'execution_verified' => false,
+                'estimated_executable_fill' => null,
+                'fill_model' => 'observed_mark_without_slippage_or_depth',
+                'proceeds_basis' => 'original_native_asset_cost_times_observed_valuation_ratio',
                 'observed_market_cap' => $marketCap,
                 'triggered_at' => now()->toIso8601String(),
             ];
@@ -491,7 +528,8 @@ class TrackPaperPositions extends Command
             || $protectedExitHit !== (bool) ($position->trailing_stop_hit ?? false);
         $peakChanged = $peakMc > $oldPeak;
         $drawdownChanged = $maxDrawdown < (float) ($position->max_drawdown_percent ?? 0);
-        $shouldPersistPosition = $positionWriteDue
+        $shouldPersistPosition = data_get($position->meta, 'market_observation.status') !== $observation['status']
+            || $positionWriteDue
             || $strategyStateChanged
             || $peakChanged
             || $drawdownChanged
@@ -500,6 +538,7 @@ class TrackPaperPositions extends Command
         $observationState = (object) ['applied' => ! $shouldPersistPosition];
 
         if ($shouldPersistPosition) {
+            $pulse();
             $databaseLocks->run(fn () => DB::transaction(function () use (
                 $position,
                 $marketCap,
@@ -526,11 +565,19 @@ class TrackPaperPositions extends Command
                 $walletRealizedPnl,
                 $wallets,
                 $observationState,
+                $observation,
+                $dex,
+                $pulse,
             ): void {
                 $lockedPosition = PaperPosition::query()
                     ->whereKey($position->id)
                     ->lockForUpdate()
                     ->firstOrFail();
+                $pulse();
+                if ($lockedPosition->getRawOriginal() !== $position->getRawOriginal()
+                    || ! app(PaperMarketObservation::class)->evaluate($lockedPosition, $dex)['simulation_allowed']) {
+                    return;
+                }
 
                 if (
                     $lockedPosition->status !== 'open'
@@ -571,6 +618,10 @@ class TrackPaperPositions extends Command
                         ? $wallets->lockedForUser($lockedPosition->user, $lockedPosition->chain)
                         : $wallets->lockedDefault($lockedPosition->chain);
 
+                    $pulse();
+                    if (! app(PaperMarketObservation::class)->evaluate($lockedPosition, $dex)['simulation_allowed']) {
+                        return;
+                    }
                     $wallet->available_balance_sol =
                         (float) $wallet->available_balance_sol
                         + $walletSolReturned;
@@ -589,7 +640,9 @@ class TrackPaperPositions extends Command
                     $wallet->save();
                 }
 
+                $pulse();
                 $lockedPosition->update([
+                    'meta' => array_replace($lockedPosition->meta ?? [], ['market_observation' => $observation, 'last_valid_market_observation_at' => now()->toIso8601String()]),
                     'last_market_cap' => $marketCap,
                     'last_price' => $price,
                     'last_checked_at' => now(),
@@ -631,7 +684,7 @@ class TrackPaperPositions extends Command
         if (! $observationState->applied) {
             $this->warn("PAPER TRACK SKIP: {$position->symbol} | position changed concurrently");
 
-            return;
+            return false;
         }
 
         $currency = $wallets->currency($position->chain);
@@ -858,7 +911,7 @@ class TrackPaperPositions extends Command
                         (float) ($event['trigger_multiple'] ?? $event['fill_multiple']),
                         2
                     )."x\n".
-                    '💵 <b>Simulated Fill:</b> '.
+                    '💵 <b>Simulated mark (not an executable quote):</b> '.
                     number_format(
                         (float) $event['fill_multiple'],
                         2
@@ -934,6 +987,27 @@ class TrackPaperPositions extends Command
                 );
             }
         }
+
+        return true;
+    }
+
+    private function recordUnavailable(PaperPosition $position, array $data, DatabaseLockRetryService $databaseLocks, Closure $pulse): void
+    {
+        $observation = app(PaperMarketObservation::class)->evaluate($position, $data);
+        $this->cycleMetrics['at_risk_positions']++;
+        $databaseLocks->run(fn () => DB::transaction(function () use ($position, $observation, $pulse): void {
+            $locked = PaperPosition::query()->lockForUpdate()->find($position->id);
+            $pulse();
+            if ($locked && $locked->status === 'open' && $locked->getRawOriginal() === $position->getRawOriginal()) {
+                if (data_get($locked->meta, 'market_observation.reasons') !== $observation['reasons']
+                    || data_get($locked->meta, 'market_observation.pair_address') !== $observation['pair_address']) {
+                    PaperPositionSnapshot::create(['paper_position_id' => $locked->id, 'snapshot_type' => 'unverified',
+                        'raw_data' => ['market_observation' => $observation], 'recorded_at' => now()]);
+                }
+                $locked->update(['last_checked_at' => now(),
+                    'meta' => array_replace($locked->meta ?? [], ['market_observation' => $observation])]);
+            }
+        }), fn (int $retry, int $maximum): mixed => $this->warn("PAPER TRACK DB LOCK: retry {$retry}/{$maximum}"));
     }
 
     private function sendTelegram(TelegramService $legacyTelegram, PaperPosition $position, string $message): void

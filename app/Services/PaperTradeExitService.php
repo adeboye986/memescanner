@@ -78,6 +78,9 @@ class PaperTradeExitService
                 'label' => 'MANUAL CLOSE',
                 'sold_fraction' => $remainingFraction,
                 'fill_multiple' => $multiple,
+                'fill_model' => 'manual_mark_without_slippage_or_depth',
+                'execution_verified' => false,
+                'estimated_executable_fill' => null,
                 'observed_multiple' => $multiple,
                 'observed_market_cap' => $marketCap,
                 'price_source' => $priceSource,
@@ -218,7 +221,7 @@ class PaperTradeExitService
                 "👤 <b>Manual close requested</b>\n".
                 "🏷️ <b>Price source:</b> {$priceSource}\n".
                 '📊 <b>Close MC:</b> $'.number_format($result['market_cap'], 2)."\n".
-                '✖️ <b>Fill:</b> '.number_format($result['multiple'], 2)."x\n".
+                '✖️ <b>Simulated mark (not an executable quote):</b> '.number_format($result['multiple'], 2)."x\n".
                 '📤 <b>Sold:</b> '.number_format((float) $event['sold_fraction'] * 100, 0)."% of original position\n".
                 "🪙 <b>{$currency} Returned:</b> ".number_format((float) $event['sol_returned'], 4)." {$currency}\n".
                 '💹 <b>P/L This Exit:</b> '.sprintf('%+.4f %s', (float) $event['realized_pnl_sol'], $currency)."\n".

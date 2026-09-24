@@ -419,6 +419,8 @@ class DexScreenerService
                         'fdv' => isset($pair['fdv']) ? (float) $pair['fdv'] : null,
                         'liquidity_usd' => isset($pair['liquidity']['usd']) ? (float) $pair['liquidity']['usd'] : null,
                         'raw' => $pair,
+                        'provider' => 'dexscreener',
+                        'fetched_at' => now()->toIso8601String(),
                     ]
                     : [
                         'available' => false,
@@ -429,6 +431,22 @@ class DexScreenerService
         }
 
         return $results;
+    }
+
+    /** @param list<string> $addresses @return list<array<string, mixed>> */
+    public function paperEthereumPairs(array $addresses, int $timeout = 8): array
+    {
+        $response = Http::connectTimeout(min(3, $timeout))->timeout($timeout)->acceptJson()
+            ->get($this->baseUrl.'/tokens/v1/ethereum/'.implode(',', $addresses));
+        if (! $response->successful()) {
+            throw new RuntimeException('DexScreener PAPER API error: '.$response->status());
+        }
+        $pairs = $response->json();
+        if (! is_array($pairs) || ! array_is_list($pairs)) {
+            throw new RuntimeException('Malformed DexScreener PAPER response.');
+        }
+
+        return $pairs;
     }
 
     public function paidOrders(

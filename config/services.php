@@ -115,7 +115,25 @@ return [
         'paper_tracker_interval_ms' => env('PAPER_TRACKER_INTERVAL_MS', 1000),
         'paper_tracker_snapshot_seconds' => env('PAPER_TRACKER_SNAPSHOT_SECONDS', 10),
         'paper_tracker_lock_seconds' => env('PAPER_TRACKER_LOCK_SECONDS', 300),
-        'paper_tracker_stale_seconds' => env('PAPER_TRACKER_STALE_SECONDS', 5),
+        // FAST_TRACKER_STALE_SECONDS remains a legacy fallback; PAPER_TRACKER_STALE_SECONDS takes precedence.
+        'paper_tracker_stale_seconds' => env('PAPER_TRACKER_STALE_SECONDS', env('FAST_TRACKER_STALE_SECONDS', 30)),
+        'paper_tracker_overlap_minutes' => env('PAPER_TRACKER_OVERLAP_MINUTES', 5),
+        'paper_market' => [
+            'ethereum' => [
+                'work_budget_seconds' => env('ETHEREUM_PAPER_WORK_BUDGET_SECONDS', 20),
+                'max_observation_age_seconds' => env('ETHEREUM_PAPER_OBSERVATION_AGE_SECONDS', 60),
+                'require_liquidity' => true,
+                'minimum_liquidity_usd' => env('ETHEREUM_PAPER_MINIMUM_LIQUIDITY_USD', 0),
+                'decline_diagnostic_percent' => env('ETHEREUM_PAPER_DECLINE_DIAGNOSTIC_PERCENT', 50),
+                'valuation_discrepancy_ratio' => env('ETHEREUM_PAPER_DISCREPANCY_RATIO', 2),
+            ],
+            'solana' => [
+                'require_liquidity' => false,
+                'max_observation_age_seconds' => null,
+                'decline_diagnostic_percent' => null,
+                'valuation_discrepancy_ratio' => null,
+            ],
+        ],
         'paper_tracker_rate_limit_backoff_ms' => env('PAPER_TRACKER_RATE_LIMIT_BACKOFF_MS', 5000),
         'paper_tracker_cache_store' => env('PAPER_TRACKER_CACHE_STORE', 'file'),
         'paper_tracker_persist_seconds' => env('PAPER_TRACKER_PERSIST_SECONDS', 5),
@@ -130,7 +148,6 @@ return [
         'queue_max_time' => env('QUEUE_DRAIN_MAX_TIME', 50),
         'queue_memory' => env('QUEUE_DRAIN_MEMORY', 128),
         'queue_job_timeout' => env('QUEUE_JOB_TIMEOUT', 600),
-        'fast_tracker_stale_seconds' => env('FAST_TRACKER_STALE_SECONDS', 75),
     ],
 
     'solana_transaction_validator' => [

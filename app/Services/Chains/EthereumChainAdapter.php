@@ -4,8 +4,10 @@ namespace App\Services\Chains;
 
 use App\Chain;
 use App\Services\DexScreenerService;
+use App\Services\EthereumPaperMarketData;
 use App\Services\GeckoTerminalService;
 use App\Services\GoPlusEthereumService;
+use Closure;
 
 class EthereumChainAdapter implements ChainAdapter
 {
@@ -13,6 +15,7 @@ class EthereumChainAdapter implements ChainAdapter
         private DexScreenerService $dexScreener,
         private GeckoTerminalService $geckoTerminal,
         private GoPlusEthereumService $security,
+        private EthereumPaperMarketData $paperMarket,
     ) {}
 
     public function chain(): Chain
@@ -43,6 +46,11 @@ class EthereumChainAdapter implements ChainAdapter
     public function marketDataMany(array $addresses): array
     {
         return $this->dexScreener->analyzeTokens($addresses, $this->chain()->value);
+    }
+
+    public function paperMarketData(array $positions, ?Closure $heartbeat = null, ?Closure $observe = null): array
+    {
+        return $this->paperMarket->fetch($positions, $heartbeat, $observe);
     }
 
     public function latestProfiles(int $limit = 20): array

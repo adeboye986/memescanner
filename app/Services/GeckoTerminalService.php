@@ -84,6 +84,26 @@ class GeckoTerminalService
         return $tokens;
     }
 
+    /** PAPER-only fallback. Pool identifiers may be EVM addresses or Uniswap V4 bytes32 IDs. */
+    public function ethereumPaperPools(string $token, ?string $pool = null, int $timeout = 8): array
+    {
+        if (EthereumPaperMarketData::tokenAddress($token) === null
+            || ($pool !== null && EthereumPaperMarketData::poolId($pool) === null)) {
+            throw new RuntimeException('Invalid Ethereum PAPER market identity.');
+        }
+        $path = $pool === null ? '/tokens/'.$token.'/pools' : '/pools/'.$pool;
+        $response = Http::connectTimeout(min(3, $timeout))->timeout($timeout)->acceptJson()->get($this->baseUrl.'/networks/eth'.$path);
+        if (! $response->successful()) {
+            throw new RuntimeException('GeckoTerminal PAPER API error: '.$response->status());
+        }
+        $data = $response->json('data');
+        if (! is_array($data) || ($pool === null && ! array_is_list($data)) || ($pool !== null && array_is_list($data))) {
+            throw new RuntimeException('Malformed GeckoTerminal PAPER response.');
+        }
+
+        return $pool === null ? $data : [$data];
+    }
+
     private function extractEthereumAddress(string $id): ?string
     {
         if (preg_match('/0x[a-fA-F0-9]{40}/', $id, $matches) !== 1) {

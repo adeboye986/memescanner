@@ -11,7 +11,6 @@ use App\Models\LivePosition;
 use App\Models\TradeOpportunity;
 use App\Models\User;
 use App\Services\ApplicationSettingsService;
-use App\Services\Chains\EthereumChainAdapter;
 use App\Services\EthereumAccountingRpc;
 use App\Services\EthereumEligibilityObservationCollector;
 use App\Services\EthereumEligibilityReviewGeneration;
@@ -27,6 +26,7 @@ use App\Services\UserTradingPreferenceService;
 use DomainException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -330,8 +330,13 @@ class EthereumInventoryAccountingTest extends TestCase
         $this->assertDatabaseCount('paper_positions', 1);
         $liveBefore = $position->fresh()->getRawOriginal();
         $this->mock(UserTelegramNotificationService::class)->shouldReceive('send')->zeroOrMoreTimes();
-        $this->mock(EthereumChainAdapter::class)->shouldReceive('marketDataMany')->once()->andReturn([
-            $paper->address => ['available' => true, 'market_cap' => 85000, 'price_usd' => 0.85, 'liquidity_usd' => 10000]]);
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(['api.dexscreener.com/tokens/v1/ethereum/*' => Http::response([[
+            'chainId' => 'ethereum', 'pairAddress' => '0x'.str_repeat('7', 40),
+            'baseToken' => ['address' => $paper->address], 'quoteToken' => ['address' => '0x'.str_repeat('9', 40)],
+            'marketCap' => 85000, 'priceUsd' => 0.85, 'liquidity' => ['usd' => 10000],
+        ]])]);
         $this->artisan('tokens:paper-track')->assertSuccessful();
         $this->assertSame('closed', $paper->fresh()->status);
         $this->assertSame($liveBefore, $position->fresh()->getRawOriginal());

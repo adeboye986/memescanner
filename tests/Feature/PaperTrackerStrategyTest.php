@@ -192,7 +192,7 @@ class PaperTrackerStrategyTest extends TestCase
         $solanaWallet = $this->createWallet(Chain::Solana);
         $ethereumWallet = $this->createWallet(Chain::Ethereum);
         $solanaPosition = $this->createPosition(Chain::Solana, 'sol-token');
-        $ethereumPosition = $this->createPosition(Chain::Ethereum, '0xeth-token');
+        $ethereumPosition = $this->createPosition(Chain::Ethereum, '0x'.str_repeat('a', 40));
 
         $this->trackAt($solanaPosition, 0.80);
         $this->assertEqualsWithDelta(4.98, $solanaWallet->fresh()->available_balance_sol, 0.000001);
@@ -215,6 +215,7 @@ class PaperTrackerStrategyTest extends TestCase
         foreach ([Http::failedConnection('timeout'), Http::response([], 429), Http::response([], 500), Http::response([], 200)] as $response) {
             $http = new Factory;
             Http::swap($http);
+            Http::preventStrayRequests();
             Http::fake(['api.dexscreener.com/tokens/v1/solana/*' => $response]);
 
             $this->artisan('tokens:paper-track')->assertSuccessful();
@@ -229,10 +230,11 @@ class PaperTrackerStrategyTest extends TestCase
     public function test_missing_market_cap_uses_price_ratio_and_applies_stop_loss_once(): void
     {
         $wallet = $this->createWallet(Chain::Ethereum);
-        $position = $this->createPosition(Chain::Ethereum, '0xprice-fallback');
+        $position = $this->createPosition(Chain::Ethereum, '0x'.str_repeat('a', 40));
         $position->update(['entry_price' => 0.00001]);
         $http = new Factory;
         Http::swap($http);
+        Http::preventStrayRequests();
         Http::fake([
             'api.dexscreener.com/tokens/v1/ethereum/*' => Http::response([[
                 ...$this->pairFor($position, 1),
@@ -297,6 +299,7 @@ class PaperTrackerStrategyTest extends TestCase
         $second = $this->createPosition(Chain::Solana, 'second-token');
         $http = new Factory;
         Http::swap($http);
+        Http::preventStrayRequests();
         Http::fake([
             'api.dexscreener.com/tokens/v1/solana/*' => Http::response([
                 $this->pairFor($first, 1.01),
@@ -344,6 +347,7 @@ class PaperTrackerStrategyTest extends TestCase
         });
         $http = new Factory;
         Http::swap($http);
+        Http::preventStrayRequests();
         Http::fake([
             'api.dexscreener.com/tokens/v1/solana/*' => Http::response([$this->pairFor($position, 1.01)]),
         ]);
@@ -389,6 +393,7 @@ class PaperTrackerStrategyTest extends TestCase
         });
         $http = new Factory;
         Http::swap($http);
+        Http::preventStrayRequests();
         Http::fake([
             'api.dexscreener.com/tokens/v1/solana/*' => Http::response([$this->pairFor($position, 0.85)]),
         ]);
@@ -468,6 +473,7 @@ class PaperTrackerStrategyTest extends TestCase
         $fast = $this->createPosition(Chain::Solana, 'fast-token', $strategy);
         $http = new Factory;
         Http::swap($http);
+        Http::preventStrayRequests();
         Http::fake([
             'api.dexscreener.com/tokens/v1/solana/*' => Http::response([$this->pairFor($fast, 0.75)]),
         ]);
@@ -497,7 +503,7 @@ class PaperTrackerStrategyTest extends TestCase
     {
         return PaperPosition::query()->create([
             'chain' => $chain->value,
-            'address' => $address ?? $chain->value.'-token',
+            'address' => $address ?? ($chain === Chain::Ethereum ? '0x'.str_repeat('a', 40) : $chain->value.'-token'),
             'symbol' => strtoupper(substr($chain->value, 0, 3)),
             'entry_market_cap' => 100_000,
             'last_market_cap' => 100_000,
@@ -516,8 +522,11 @@ class PaperTrackerStrategyTest extends TestCase
     {
         $http = new Factory;
         Http::swap($http);
+        Http::preventStrayRequests();
 
         Http::fake([
+            'api.geckoterminal.com/*' => Http::response([], 404),
+            'api.dexscreener.com/tokens/v1/ethereum/*' => Http::response([]),
             'api.dexscreener.com/tokens/v1/'.$position->chain->dexScreenerId().'/*' => Http::response([
                 $this->pairFor($position, $multiple),
             ]),
@@ -532,9 +541,9 @@ class PaperTrackerStrategyTest extends TestCase
         return [
             'chainId' => $position->chain->dexScreenerId(),
             'dexId' => $position->chain === Chain::Solana ? 'raydium' : 'uniswap',
-            'pairAddress' => 'pair-'.$position->id,
+            'pairAddress' => $position->chain === Chain::Ethereum ? '0x'.str_repeat('b', 40) : 'pair-'.$position->id,
             'baseToken' => ['address' => $position->address, 'symbol' => $position->symbol],
-            'quoteToken' => ['address' => 'quote', 'symbol' => $position->chain === Chain::Solana ? 'SOL' : 'WETH'],
+            'quoteToken' => ['address' => $position->chain === Chain::Ethereum ? '0x'.str_repeat('c', 40) : 'quote', 'symbol' => $position->chain === Chain::Solana ? 'SOL' : 'WETH'],
             'priceUsd' => '1',
             'marketCap' => 100_000 * $multiple,
             'liquidity' => ['usd' => 50_000],

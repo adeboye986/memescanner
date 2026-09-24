@@ -143,12 +143,13 @@ const updateTrackerBadge = (status) => {
 
     const tones = {
         active: ['border-emerald-400/20', 'bg-emerald-400/10', 'text-emerald-300'],
+        degraded: ['border-amber-400/20', 'bg-amber-400/10', 'text-amber-300'],
         stale: ['border-amber-400/20', 'bg-amber-400/10', 'text-amber-300'],
         unknown: ['border-slate-700', 'bg-slate-800', 'text-slate-300'],
     };
 
     badge.classList.add(...(tones[status] ?? tones.unknown));
-    dot.classList.add(status === 'active' ? 'bg-emerald-400' : status === 'stale' ? 'bg-amber-400' : 'bg-slate-500');
+    dot.classList.add(status === 'active' ? 'bg-emerald-400' : ['stale', 'degraded'].includes(status) ? 'bg-amber-400' : 'bg-slate-500');
 };
 
 const updateActionButtons = (runningActions) => {
@@ -292,6 +293,11 @@ const pollActivity = async () => {
         setText('#tracker-cycle-duration', data.system_status.cycle_duration_ms === null ? 'N/A' : `${Math.round(data.system_status.cycle_duration_ms)} ms`);
         setText('#tracker-open-positions', data.system_status.open_positions ?? 'N/A');
         setText('#tracker-priced-positions', data.system_status.priced_positions === null ? 'N/A' : `${data.system_status.priced_positions} / ${data.system_status.open_positions}`);
+        setText('#tracker-outstanding-unverified', data.system_status.outstanding_unverified_positions ?? 'N/A');
+        setText('#tracker-provider-success', relativeTime(data.system_status.last_successful_provider_request));
+        setText('#tracker-valid-observation', relativeTime(data.system_status.last_successful_market_observation));
+        setText('#tracker-process-lease', data.system_status.process_lock_held ? 'held' : 'not held');
+        setText('#tracker-process-heartbeat', relativeTime(data.system_status.last_process_heartbeat));
         setText('#tracker-provider-failures', data.system_status.provider_failures ?? 'N/A');
         setText('#last-momentum-scan', relativeTime(data.system_status.last_momentum_scan));
         setText('#last-token-scan', relativeTime(data.system_status.last_token_scan));
