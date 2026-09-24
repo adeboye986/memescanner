@@ -18,6 +18,6 @@ class UserTradingPreferenceController extends Controller
             EntryMode::from($request->validated('entry_mode')),
         );
 
-        return back()->with('success', 'Your paper trading modes were updated.');
+        return back()->with('success', 'Your trading preferences were updated.');
     }
 }

@@ -126,13 +126,7 @@ class TelegramCallbackRouter
     private function changeMode(TelegramBotClient $telegram, TelegramIdentity $identity, string $chatId, int $messageId, string $group, string $value): void
     {
         if ($group === 'execution' && $value === 'live') {
-            $this->menus->notice($telegram, $chatId, $messageId, "⚠️ <b>Live mode warning</b>\n\nLive execution is not implemented and remains blocked server-side. Confirm only if you intend to change the configured mode.", [[['text' => 'Cancel', 'callback_data' => 'modes'], ['text' => 'Confirm LIVE', 'callback_data' => 'confirmmode:execution:live']]]);
-
-            return;
-        }
-
-        if ($group === 'entry' && $value === 'auto' && $this->preferences->forUser($identity->user)->execution_mode === ExecutionMode::Live) {
-            $this->menus->notice($telegram, $chatId, $messageId, "⚠️ <b>Auto + LIVE warning</b>\n\nReal transactions remain blocked, but this changes the configured entry policy.", [[['text' => 'Cancel', 'callback_data' => 'modes'], ['text' => 'Confirm AUTO', 'callback_data' => 'confirmmode:entry:auto']]]);
+            $this->menus->notice($telegram, $chatId, $messageId, "⚠️ <b>Live mode warning</b>\n\nLIVE supports CONFIRM only for Ethereum opportunities in the web dashboard. Select CONFIRM first. Your browser wallet signs each transaction; changing this preference executes no trade.", [[['text' => 'Cancel', 'callback_data' => 'modes'], ['text' => 'Confirm LIVE', 'callback_data' => 'confirmmode:execution:live']]]);
 
             return;
         }

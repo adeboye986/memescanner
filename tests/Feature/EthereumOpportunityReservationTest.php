@@ -62,6 +62,33 @@ class EthereumOpportunityReservationTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_web_live_preference_keeps_history_until_explicit_ethereum_approval(): void
+    {
+        Http::preventStrayRequests();
+        [$user, $opportunity] = $this->pending();
+        app(UserTradingPreferenceService::class)->update($user, ExecutionMode::Paper, EntryMode::Confirm);
+        $opportunity->update(['execution_mode' => ExecutionMode::Paper]);
+        $before = $opportunity->fresh()->getRawOriginal();
+
+        $this->actingAs($user)->put(route('dashboard.trading-preferences.update'), ['execution_mode' => 'live', 'entry_mode' => 'confirm'])
+            ->assertSessionHasNoErrors()->assertSessionHas('success');
+
+        $this->assertSame($before, $opportunity->fresh()->getRawOriginal());
+        $this->assertDatabaseCount('ethereum_swap_attempts', 0);
+        $this->postJson(route('opportunities.approve', $opportunity))->assertUnprocessable()
+            ->assertJsonValidationErrors(['sell_amount_wei', 'slippage_bps']);
+        $this->assertSame($before, $opportunity->fresh()->getRawOriginal());
+        $this->assertDatabaseCount('ethereum_swap_attempts', 0);
+
+        $this->post(route('opportunities.approve', $opportunity), $this->input())->assertSessionHas('success');
+
+        $this->assertDatabaseHas('ethereum_swap_attempts', ['trade_opportunity_id' => $opportunity->id, 'status' => 'reserved', 'transaction_hash' => null]);
+        $this->assertSame(ExecutionMode::Live, $opportunity->fresh()->execution_mode);
+        $this->assertDatabaseCount('paper_positions', 0);
+        $this->assertDatabaseCount('live_positions', 0);
+        Http::assertNothingSent();
+    }
+
     public function test_retry_with_stale_model_and_later_expired_qualification_returns_same_reservation(): void
     {
         [$user, $opportunity] = $this->pending();

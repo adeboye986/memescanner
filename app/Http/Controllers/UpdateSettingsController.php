@@ -48,7 +48,7 @@ class UpdateSettingsController extends Controller
         );
 
         $message = $validated['execution_mode'] === 'live'
-            ? 'Settings saved. LIVE EXECUTION IS NOT ENABLED; all live orders remain blocked.'
+            ? 'Settings saved. Generic LIVE execution and LIVE AUTO remain blocked. Use dashboard preferences for Ethereum LIVE + CONFIRM.'
             : 'Settings saved successfully.';
 
         return to_route('settings.index')->with($validated['execution_mode'] === 'live' ? 'warning' : 'success', $message);

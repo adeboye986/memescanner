@@ -24,7 +24,7 @@ class UpdateUserTradingPreferenceRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'execution_mode' => ['required', 'in:paper'],
+            'execution_mode' => ['required', $this->input('entry_mode') === 'confirm' ? 'in:paper,live' : 'in:paper'],
             'entry_mode' => ['required', 'in:signal,confirm,auto'],
         ];
     }

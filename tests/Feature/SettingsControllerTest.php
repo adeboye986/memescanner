@@ -62,7 +62,8 @@ class SettingsControllerTest extends TestCase
         $this->actingAs($admin)->get(route('settings.index'))
             ->assertSuccessful()
             ->assertSee('LIVE EXECUTION LOCKED')
-            ->assertSee('Automatic real-money trading will require explicit activation');
+            ->assertSee('LIVE AUTO remains blocked.')
+            ->assertSee('Ethereum LIVE + CONFIRM is available through dashboard preferences');
     }
 
     public function test_admin_sees_native_asset_unit_for_maximum_trade_amount(): void

@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Enums\EntryMode;
+use App\Enums\ExecutionMode;
 use App\Jobs\RunDashboardCommand;
 use App\Models\PaperPosition;
 use App\Models\TelegramIdentity;
@@ -12,9 +14,11 @@ use App\Models\UserTelegramBot;
 use App\Services\ApplicationSettingsService;
 use App\Services\TelegramLinkService;
 use App\Services\TelegramUpdateService;
+use App\Services\UserTradingPreferenceService;
 use DomainException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
 
@@ -80,14 +84,63 @@ class TelegramInteractionTest extends TestCase
         $this->assertDatabaseHas('system_activities', ['action' => 'token-scan', 'chain' => 'solana']);
     }
 
-    public function test_live_mode_requires_confirmation_and_change_is_audited(): void
+    public function test_telegram_can_intentionally_select_live_confirm_without_changing_global_settings(): void
     {
+        Http::preventStrayRequests();
+        Queue::fake();
         $identity = TelegramIdentity::factory()->create(['user_id' => $this->bot->user_id, 'user_telegram_bot_id' => $this->bot->id, 'telegram_user_id' => '123', 'telegram_chat_id' => '123']);
-        app(TelegramUpdateService::class)->handle($this->bot, $this->callbackUpdate('setmode:execution:live', 123));
-        $this->assertSame('paper', app(ApplicationSettingsService::class)->get('trading.execution_mode'));
-        app(TelegramUpdateService::class)->handle($this->bot, $this->callbackUpdate('confirmmode:execution:live', 123));
+        $updates = app(TelegramUpdateService::class);
+        $updates->handle($this->bot, $this->callbackUpdate('setmode:entry:confirm', 123));
+        $updates->handle($this->bot, $this->callbackUpdate('setmode:execution:live', 123));
         $this->assertSame('paper', $identity->user->tradingPreference()->firstOrFail()->execution_mode->value);
+
+        $updates->handle($this->bot, $this->callbackUpdate('confirmmode:execution:live', 123));
+
+        $this->assertDatabaseHas('user_trading_preferences', ['user_id' => $identity->user_id, 'execution_mode' => 'live', 'entry_mode' => 'confirm']);
         $this->assertSame('paper', app(ApplicationSettingsService::class)->get('trading.execution_mode'));
+        $this->assertDatabaseCount('paper_positions', 0);
+        Queue::assertNothingPushed();
+        Http::assertSent(fn ($request): bool => str_contains((string) ($request['text'] ?? ''), 'browser wallet'));
+    }
+
+    #[DataProvider('unsupportedModeCallbacks')]
+    public function test_telegram_cannot_create_unsupported_live_combinations(string $execution, string $entry, string $callback): void
+    {
+        Http::preventStrayRequests();
+        $identity = TelegramIdentity::factory()->create(['user_id' => $this->bot->user_id, 'user_telegram_bot_id' => $this->bot->id, 'telegram_user_id' => '123', 'telegram_chat_id' => '123']);
+        $preference = app(UserTradingPreferenceService::class)->update($identity->user, ExecutionMode::from($execution), EntryMode::from($entry));
+        $before = $preference->getRawOriginal();
+
+        app(TelegramUpdateService::class)->handle($this->bot, $this->callbackUpdate($callback, 123));
+
+        $this->assertSame($before, $preference->fresh()->getRawOriginal());
+        Http::assertSent(fn ($request): bool => str_contains((string) ($request['text'] ?? ''), 'LIVE supports CONFIRM only'));
+    }
+
+    public static function unsupportedModeCallbacks(): array
+    {
+        return [
+            ['paper', 'signal', 'setmode:execution:live'],
+            ['paper', 'signal', 'confirmmode:execution:live'],
+            ['paper', 'auto', 'setmode:execution:live'],
+            ['paper', 'auto', 'confirmmode:execution:live'],
+            ['live', 'confirm', 'setmode:entry:signal'],
+            ['live', 'confirm', 'setmode:entry:auto'],
+            ['live', 'confirm', 'confirmmode:entry:auto'],
+        ];
+    }
+
+    public function test_live_confirmation_rechecks_entry_mode_after_warning(): void
+    {
+        Http::preventStrayRequests();
+        TelegramIdentity::factory()->create(['user_id' => $this->bot->user_id, 'user_telegram_bot_id' => $this->bot->id, 'telegram_user_id' => '123', 'telegram_chat_id' => '123']);
+        $updates = app(TelegramUpdateService::class);
+        foreach (['setmode:entry:confirm', 'setmode:execution:live', 'setmode:entry:auto', 'confirmmode:execution:live'] as $callback) {
+            $updates->handle($this->bot, $this->callbackUpdate($callback, 123));
+        }
+
+        $this->assertDatabaseHas('user_trading_preferences', ['user_id' => $this->bot->user_id, 'execution_mode' => 'paper', 'entry_mode' => 'auto']);
+        Http::assertSent(fn ($request): bool => str_contains((string) ($request['text'] ?? ''), 'Select CONFIRM before switching to LIVE.'));
     }
 
     public function test_identity_linked_to_another_bot_cannot_use_callbacks(): void

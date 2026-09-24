@@ -128,7 +128,7 @@ class TelegramMenuService
             $lines[] = "<b>{$chain->label()}</b>\nAvailable: ".number_format((float) $wallet->available_balance_sol, 4)." {$currency}\nInvested: ".number_format((float) $wallet->invested_balance_sol, 4)." {$currency}\nRealized P/L: ".sprintf('%+.4f', (float) $wallet->realized_pnl_sol)." {$currency}\n";
         }
         if ($this->preferences->forUser($user)->execution_mode === ExecutionMode::Live) {
-            $lines[] = '⚠️ Live wallet execution is not enabled yet.';
+            $lines[] = 'LIVE + CONFIRM uses your browser wallet through the Ethereum opportunity page. These balances are PAPER only.';
         }
         $this->respond($telegram, $chatId, $messageId, implode("\n", $lines), [$this->back()]);
     }
@@ -143,7 +143,7 @@ class TelegramMenuService
             [['text' => 'Signal', 'callback_data' => 'setmode:entry:signal'], ['text' => 'Confirm', 'callback_data' => 'setmode:entry:confirm'], ['text' => 'Auto', 'callback_data' => 'setmode:entry:auto']],
             $this->back(),
         ];
-        $this->respond($telegram, $chatId, $messageId, "<b>Trading Modes</b>\n\nExecution: {$execution}\nEntry policy: {$entry}\n\nLive execution remains server-side blocked.", $keyboard);
+        $this->respond($telegram, $chatId, $messageId, "<b>Trading Modes</b>\n\nExecution: {$execution}\nEntry policy: {$entry}\n\nLIVE supports CONFIRM only. Select CONFIRM before switching to LIVE. Execute Ethereum opportunities in the web dashboard with your browser wallet. LIVE AUTO and LIVE SIGNAL are unavailable.", $keyboard);
     }
 
     public function strategy(TelegramBotClient $telegram, string $chatId, int $messageId, User $user): void

@@ -85,7 +85,7 @@ class OpportunityWorkflowTest extends TestCase
         $this->assertEqualsWithDelta(5, (float) PaperWallet::query()->whereNull('user_id')->sole()->available_balance_sol, 0.000001);
     }
 
-    public function test_live_confirm_approval_is_blocked_and_records_safe_failure(): void
+    public function test_legacy_solana_live_approval_without_spend_payload_is_blocked_and_records_safe_failure(): void
     {
         $opportunity = $this->pendingOpportunity();
         $this->admin->tradingPreference()->update(['execution_mode' => 'live']);

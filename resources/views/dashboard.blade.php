@@ -34,7 +34,7 @@
     @endif
 
     @if ($executionMode === 'live')
-        <div class="rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm font-semibold text-red-200">LIVE EXECUTION NOT YET ENABLED — all live orders are blocked server-side.</div>
+        <div class="rounded-xl border border-red-400/30 bg-red-400/10 px-4 py-3 text-sm font-semibold text-red-200">LIVE supports CONFIRM only for Ethereum opportunities. Review each transaction in your browser wallet; selecting LIVE does not execute a trade.</div>
     @endif
 
     @if (session('success'))
@@ -48,7 +48,7 @@
     @endif
     @if ($errors->any())
         <div class="rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200" role="alert">
-            <p class="font-semibold">The strategy could not be saved.</p>
+            <p class="font-semibold">Your changes could not be saved.</p>
             <ul class="mt-2 list-disc space-y-1 pl-5">
                 @foreach ($errors->all() as $error)
                     <li>{{ $error }}</li>
@@ -58,7 +58,7 @@
     @endif
 
     <section aria-label="Platform workflow summary" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <article class="rounded-2xl border border-sky-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Trading Mode</p><p class="mt-2 text-lg font-bold text-sky-300">{{ strtoupper($executionMode) }}</p><p class="mt-1 text-xs text-slate-500">{{ $executionMode === 'paper' ? 'Simulated funds' : 'Execution locked' }}</p></article>
+        <article class="rounded-2xl border border-sky-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Trading Mode</p><p class="mt-2 text-lg font-bold text-sky-300">{{ strtoupper($executionMode) }}</p><p class="mt-1 text-xs text-slate-500">{{ $executionMode === 'paper' ? 'Simulated funds' : 'Browser wallet confirmation' }}</p></article>
         <article class="rounded-2xl border border-violet-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Entry Mode</p><p class="mt-2 text-lg font-bold text-violet-300">{{ str($entryMode)->replace('_', ' ')->upper() }}</p><p class="mt-1 text-xs text-slate-500">Qualification policy</p></article>
         <article class="rounded-2xl border border-amber-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Opportunities · 24h</p><p class="mt-2 text-lg font-bold text-white">{{ $opportunitySummary['recent'] }}</p><p class="mt-1 text-xs text-amber-300">{{ $opportunitySummary['pending'] }} pending confirmation</p></article>
         <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Tracker</p><p class="mt-2 text-lg font-bold {{ $systemStatus['status'] === 'active' ? 'text-emerald-300' : ($systemStatus['status'] === 'stale' ? 'text-amber-300' : 'text-slate-300') }}">{{ strtoupper($systemStatus['status']) }}</p><p class="mt-1 text-xs text-slate-500">Fast position monitoring</p></article>
@@ -83,11 +83,10 @@
 
     <form id="trading-preferences" method="POST" action="{{ route('dashboard.trading-preferences.update') }}" class="flex flex-wrap items-end gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
         @csrf @method('PUT')
-        <input type="hidden" name="execution_mode" value="paper">
-        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Execution<input value="PAPER" disabled class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-300"></label>
-        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Entry Mode<select name="entry_mode" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white">@foreach(['signal' => 'Signal', 'confirm' => 'Confirm', 'auto' => 'Auto'] as $value => $label)<option value="{{ $value }}" @selected($entryMode === $value)>{{ $label }}</option>@endforeach</select></label>
+        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Execution<select name="execution_mode" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white">@foreach(['paper' => 'PAPER', 'live' => 'LIVE'] as $value => $label)<option value="{{ $value }}" @selected(old('execution_mode', $executionMode) === $value)>{{ $label }}</option>@endforeach</select></label>
+        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Entry Mode<select name="entry_mode" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white">@foreach(['signal' => 'Signal', 'confirm' => 'Confirm', 'auto' => 'Auto'] as $value => $label)<option value="{{ $value }}" @selected(old('entry_mode', $entryMode) === $value)>{{ $label }}</option>@endforeach</select></label>
         <button class="rounded-xl bg-violet-400 px-5 py-2.5 text-sm font-semibold text-slate-950">Save Modes</button>
-        <p class="text-xs text-slate-500">Live execution remains unavailable.</p>
+        <p class="text-xs text-slate-500">LIVE supports CONFIRM only for Ethereum opportunities and requires browser wallet signing. AUTO and SIGNAL are PAPER only.</p>
     </form>
 
     <section aria-labelledby="wallet-heading" class="flex flex-col gap-4">
