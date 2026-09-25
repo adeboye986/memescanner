@@ -120,6 +120,7 @@ return [
         'paper_tracker_overlap_minutes' => env('PAPER_TRACKER_OVERLAP_MINUTES', 5),
         'paper_market' => [
             'ethereum' => [
+                'geckoterminal_cooldown_seconds' => env('ETHEREUM_PAPER_GECKOTERMINAL_COOLDOWN_SECONDS', 60),
                 'work_budget_seconds' => env('ETHEREUM_PAPER_WORK_BUDGET_SECONDS', 20),
                 'max_observation_age_seconds' => env('ETHEREUM_PAPER_OBSERVATION_AGE_SECONDS', 60),
                 'require_liquidity' => true,

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\PaperPosition;
 use App\Services\DexScreenerService;
 use App\Services\EthereumPaperMarketData;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
@@ -328,6 +329,100 @@ class EthereumPaperMarketDataTest extends TestCase
         $this->assertFalse($result['rate_limited']);
         $this->assertFalse($result['observations'][1]['available']);
         Http::assertSentCount(3);
+    }
+
+    #[DataProvider('cooldownTargets')]
+    public function test_gecko_cooldown_is_shared_across_instances_and_expires(string $pool, string $targetType): void
+    {
+        $this->freezeTime();
+        config(['cache.stores.paper_cooldown_test' => ['driver' => 'array'],
+            'services.trading.paper_tracker_cache_store' => 'paper_cooldown_test',
+            'services.trading.paper_market.ethereum.geckoterminal_cooldown_seconds' => 60]);
+        Http::preventStrayRequests();
+        $payload = $pool === '' ? ['data' => [$this->pool()]] : ['data' => $this->pool()];
+        Http::fake(['api.dexscreener.com/*' => Http::sequence()->push([])->push([])->push([$this->pair()])->push([]),
+            'api.geckoterminal.com/*' => Http::sequence()->push(['private' => 'not exposed'], 429)->push($payload)]);
+
+        $limited = app(EthereumPaperMarketData::class)->fetch([$this->position($pool)]);
+        $this->assertSame(2, $limited['requests']);
+        $this->assertSame(1, $limited['failures']);
+        $this->assertSame(429, $limited['provider_errors'][0]['http_status']);
+        $this->assertTrue($limited['rate_limited']);
+        $this->assertTrue(Cache::store('paper_cooldown_test')->has('paper-market.ethereum.geckoterminal.cooldown'));
+        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.cooldown'));
+
+        $this->travel(59)->seconds();
+        $skipped = app(EthereumPaperMarketData::class)->fetch([$this->position($pool)]);
+        $this->assertSame(1, $skipped['requests']);
+        $this->assertSame(0, $skipped['failures']);
+        $this->assertSame([], $skipped['provider_errors']);
+        $this->assertFalse($skipped['rate_limited']);
+        $this->assertSame([['provider' => 'geckoterminal', 'target_type' => $targetType,
+            'category' => 'rate_limit_cooldown']], $skipped['provider_skips']);
+        $this->assertFalse($skipped['observations'][1]['available']);
+        $this->assertSame('geckoterminal_cooldown', $skipped['observations'][1]['reason']);
+
+        $primary = app(EthereumPaperMarketData::class)->fetch([$this->position($pool)]);
+        $this->assertSame('dexscreener', $primary['observations'][1]['provider']);
+        $this->assertSame(1, $primary['requests']);
+        $this->assertSame([], $primary['provider_skips']);
+        $this->travel(1)->seconds();
+        $resumed = app(EthereumPaperMarketData::class)->fetch([$this->position($pool)]);
+        $this->assertSame('geckoterminal', $resumed['observations'][1]['provider']);
+        $this->assertSame(2, $resumed['requests']);
+        $this->assertSame(0, $resumed['failures']);
+        $this->assertSame([], $resumed['provider_skips']);
+        Http::assertSentCount(6);
+    }
+
+    public static function cooldownTargets(): array
+    {
+        return [[self::POOL, 'original_pool'], ['', 'token_pools']];
+    }
+
+    public function test_cooldown_duration_is_configurable(): void
+    {
+        $this->freezeTime();
+        config(['services.trading.paper_market.ethereum.geckoterminal_cooldown_seconds' => 10]);
+        Http::preventStrayRequests();
+        Http::fake(['api.dexscreener.com/*' => Http::response([]),
+            'api.geckoterminal.com/*' => Http::sequence()->push([], 429)->push(['data' => $this->pool()])]);
+        app(EthereumPaperMarketData::class)->fetch([$this->position()]);
+        $this->travel(9)->seconds();
+        $this->assertSame(1, app(EthereumPaperMarketData::class)->fetch([$this->position()])['requests']);
+        $this->travel(1)->seconds();
+        $result = app(EthereumPaperMarketData::class)->fetch([$this->position()]);
+        $this->assertSame('geckoterminal', $result['observations'][1]['provider']);
+        Http::assertSentCount(5);
+    }
+
+    #[DataProvider('nonCooldownFailures')]
+    public function test_only_known_gecko_http_429_starts_shared_cooldown(string $failure): void
+    {
+        $this->freezeTime();
+        Http::preventStrayRequests();
+        Http::fake(['api.dexscreener.com/*' => $failure === 'dex_429' ? Http::response([], 429) : Http::response([]),
+            'api.geckoterminal.com/*' => match ($failure) {
+                'unrecognized_429' => function () {
+                    throw new \RuntimeException('Network error https://example.test/?secret=429');
+                },
+                'gecko_503' => Http::response([], 503),
+                default => Http::response(['data' => $this->pool()]),
+            }]);
+
+        $first = app(EthereumPaperMarketData::class)->fetch([$this->position()]);
+        $second = app(EthereumPaperMarketData::class)->fetch([$this->position()]);
+
+        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.cooldown'));
+        $this->assertSame([], $second['provider_skips']);
+        $this->assertSame($first['requests'], $second['requests']);
+        $this->assertSame($first['failures'], $second['failures']);
+        $this->assertGreaterThan(1, $second['requests']);
+    }
+
+    public static function nonCooldownFailures(): array
+    {
+        return [['dex_429'], ['gecko_503'], ['unrecognized_429']];
     }
 
     private function position(string $pool = self::POOL): PaperPosition
