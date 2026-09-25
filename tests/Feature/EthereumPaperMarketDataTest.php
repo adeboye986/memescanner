@@ -50,6 +50,7 @@ class EthereumPaperMarketDataTest extends TestCase
 
         $this->assertSame(self::POOL, $tracked['observations'][1]['pair_address']);
         $this->assertSame($other['pairAddress'], $scanner[self::TOKEN]['pair_address']);
+        $this->assertSame([], $tracked['provider_errors']);
         Http::assertSentCount(2);
     }
 
@@ -150,6 +151,14 @@ class EthereumPaperMarketDataTest extends TestCase
 
         $this->assertSame('geckoterminal', $result['observations'][1]['provider']);
         $this->assertSame(1, $result['failures']);
+        $this->assertSame([[
+            'provider' => 'dexscreener', 'target_type' => 'token_batch',
+            'http_status' => is_numeric($failure) ? (int) $failure : null,
+            'category' => match ($failure) {
+                'timeout' => 'connection_error', 'malformed' => 'malformed_response', default => 'http_error',
+            },
+        ]], $result['provider_errors']);
+        Http::assertSentCount(2);
     }
 
     public static function primaryFailures(): array
@@ -241,6 +250,84 @@ class EthereumPaperMarketDataTest extends TestCase
         $this->assertSame($acquired, $result['observations'][1]['fetched_at']);
         $this->assertSame($acquired, $result['observations'][2]['fetched_at']);
         Http::assertSentCount(2);
+    }
+
+    public function test_errors_attribute_each_provider_and_target_without_exposing_response_bodies(): void
+    {
+        Http::preventStrayRequests();
+        $requests = [];
+        Http::fake(function ($request) use (&$requests) {
+            $requests[] = $request->url();
+            $status = count($requests) === 1 ? 503 : (count($requests) === 2 ? 404 : 429);
+
+            return Http::response(['api_key' => 'sensitive-fixture', 'body' => 'private response'], $status);
+        });
+
+        $result = app(EthereumPaperMarketData::class)->fetch([$this->position()]);
+
+        $this->assertSame([
+            ['provider' => 'dexscreener', 'target_type' => 'token_batch', 'http_status' => 503, 'category' => 'http_error'],
+            ['provider' => 'geckoterminal', 'target_type' => 'original_pool', 'http_status' => 404, 'category' => 'http_error'],
+            ['provider' => 'geckoterminal', 'target_type' => 'token_pools', 'http_status' => 429, 'category' => 'http_error'],
+        ], $result['provider_errors']);
+        $this->assertSame([
+            'https://api.dexscreener.com/tokens/v1/ethereum/'.self::TOKEN,
+            'https://api.geckoterminal.com/api/v2/networks/eth/pools/'.self::POOL,
+            'https://api.geckoterminal.com/api/v2/networks/eth/tokens/'.self::TOKEN.'/pools',
+        ], $requests);
+        $this->assertSame(3, $result['requests']);
+        $this->assertSame(3, $result['failures']);
+        $this->assertTrue($result['rate_limited']);
+        $this->assertFalse($result['observations'][1]['available']);
+        Http::assertSentCount(3);
+    }
+
+    #[DataProvider('unsafeProviderMessages')]
+    public function test_unrecognized_exception_messages_are_never_returned_or_used_as_status(string $message): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(['api.dexscreener.com/*' => function () use ($message) {
+            throw new \RuntimeException($message, 503);
+        }, 'api.geckoterminal.com/*' => Http::response(['data' => $this->pool()])]);
+
+        $result = app(EthereumPaperMarketData::class)->fetch([$this->position()]);
+
+        $this->assertSame([['provider' => 'dexscreener', 'target_type' => 'token_batch', 'http_status' => null,
+            'category' => 'provider_request_failed']], $result['provider_errors']);
+        $this->assertSame('geckoterminal', $result['observations'][1]['provider']);
+        $this->assertSame(str_contains($message, '429'), $result['rate_limited']);
+        $this->assertSame(1, $result['failures']);
+        $this->assertSame(2, $result['requests']);
+        Http::assertSentCount(1);
+    }
+
+    public static function unsafeProviderMessages(): array
+    {
+        return [
+            ['Request to https://user:password@example.test/?api_key=secret429 failed'],
+            ['DexScreener PAPER API error: 503 response body with credentials'],
+            ['DexScreener PAPER API error: 5030'],
+            ['DexScreener PAPER API error: 999'],
+        ];
+    }
+
+    public function test_gecko_connection_and_malformed_errors_preserve_fallback_sequence(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(['api.dexscreener.com/*' => Http::response([]),
+            'api.geckoterminal.com/api/v2/networks/eth/pools/*' => Http::failedConnection('https://user:password@example.test/?api_key=secret'),
+            'api.geckoterminal.com/api/v2/networks/eth/tokens/*/pools' => Http::response(['data' => 'secret malformed body'])]);
+
+        $result = app(EthereumPaperMarketData::class)->fetch([$this->position()]);
+
+        $this->assertSame([
+            ['provider' => 'geckoterminal', 'target_type' => 'original_pool', 'http_status' => null, 'category' => 'connection_error'],
+            ['provider' => 'geckoterminal', 'target_type' => 'token_pools', 'http_status' => null, 'category' => 'malformed_response'],
+        ], $result['provider_errors']);
+        $this->assertSame(2, $result['failures']);
+        $this->assertFalse($result['rate_limited']);
+        $this->assertFalse($result['observations'][1]['available']);
+        Http::assertSentCount(3);
     }
 
     private function position(string $pool = self::POOL): PaperPosition

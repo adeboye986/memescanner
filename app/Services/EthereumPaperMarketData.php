@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Chain;
 use App\Models\PaperPosition;
 use Closure;
+use Illuminate\Http\Client\ConnectionException;
 use Throwable;
 
 /** PAPER observations only: scanner qualification and LIVE validation retain their own contracts. */
@@ -23,10 +24,10 @@ class EthereumPaperMarketData
         return is_string($value) && preg_match('/^0x[a-f0-9]{40}$/iD', $value) ? strtolower($value) : null;
     }
 
-    /** @param list<PaperPosition> $positions @return array{observations: array, requests: int, failures: int, rate_limited: bool} */
+    /** @param list<PaperPosition> $positions @return array{observations: array, requests: int, failures: int, rate_limited: bool, provider_errors: list<array{provider: string, target_type: string, http_status: ?int, category: string}>} */
     public function fetch(array $positions, ?Closure $heartbeat = null, ?Closure $observe = null): array
     {
-        $result = ['observations' => [], 'requests' => 0, 'failures' => 0, 'rate_limited' => false];
+        $result = ['observations' => [], 'requests' => 0, 'failures' => 0, 'rate_limited' => false, 'provider_errors' => []];
         $budget = max(1, (int) config('services.trading.paper_market.ethereum.work_budget_seconds', 20));
         $started = hrtime(true);
         $deadline = now()->addSeconds($budget);
@@ -68,6 +69,7 @@ class EthereumPaperMarketData
                 $pairs = $this->dex->paperEthereumPairs($chunk, $seconds);
                 $fetched = now()->toIso8601String();
             } catch (Throwable $exception) {
+                $result['provider_errors'][] = $this->providerError('dexscreener', 'token_batch', $exception);
                 $result['failures']++;
                 $result['rate_limited'] = $result['rate_limited'] || str_contains($exception->getMessage(), '429');
 
@@ -116,6 +118,7 @@ class EthereumPaperMarketData
                                 }
                             }
                         } catch (Throwable $exception) {
+                            $result['provider_errors'][] = $this->providerError('geckoterminal', $target === 'token_pools' ? 'token_pools' : 'original_pool', $exception);
                             $result['failures']++;
                             $geckoRateLimited = str_contains($exception->getMessage(), '429');
                             $result['rate_limited'] = $result['rate_limited'] || $geckoRateLimited;
@@ -135,6 +138,28 @@ class EthereumPaperMarketData
         }
 
         return $result;
+    }
+
+    /** @return array{provider: string, target_type: string, http_status: ?int, category: string} */
+    private function providerError(string $provider, string $targetType, Throwable $exception): array
+    {
+        $name = $provider === 'dexscreener' ? 'DexScreener' : 'GeckoTerminal';
+        $message = $exception->getMessage();
+        /** Only recognize the exact status-only messages emitted by our provider wrappers. */
+        $status = preg_match('/\A'.$name.' PAPER API error: ([1-5][0-9]{2})\z/', $message, $matches) === 1
+            ? (int) $matches[1] : null;
+
+        return [
+            'provider' => $provider,
+            'target_type' => $targetType,
+            'http_status' => $status,
+            'category' => match (true) {
+                $status !== null => 'http_error',
+                $exception instanceof ConnectionException => 'connection_error',
+                $message === 'Malformed '.$name.' PAPER response.' => 'malformed_response',
+                default => 'provider_request_failed',
+            },
+        ];
     }
 
     private function minimumLiquidity(): float
