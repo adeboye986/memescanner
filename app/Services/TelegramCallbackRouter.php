@@ -70,7 +70,7 @@ class TelegramCallbackRouter
             }
 
             if (preg_match('/^close_confirm:(\d+)$/', $action, $matches) === 1) {
-                $result = $this->exits->closeManually($this->openPosition((int) $matches[1], $identity->user));
+                $result = $this->exits->closeManually($this->openPosition((int) $matches[1], $identity->user), $identity->user);
                 $source = match ($result['price_source']) {
                     'last_known_market' => ' using its last known market value because fresh data was unavailable',
                     'entry_fallback' => ' using its entry value because no newer market value was available',

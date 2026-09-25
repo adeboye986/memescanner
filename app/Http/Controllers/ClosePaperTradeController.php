@@ -25,7 +25,7 @@ class ClosePaperTradeController extends Controller
         }
 
         try {
-            $result = $exitService->closeManually($position);
+            $result = $exitService->closeManually($position, $request->user());
         } catch (RuntimeException $exception) {
             return back()->with('error', $exception->getMessage());
         }

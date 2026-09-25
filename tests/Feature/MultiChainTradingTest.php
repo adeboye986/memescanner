@@ -115,7 +115,7 @@ class MultiChainTradingTest extends TestCase
         ]);
         $position = PaperPosition::query()->create([
             'chain' => 'ethereum',
-            'address' => '0xabc',
+            'address' => '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
             'symbol' => 'ETHMEME',
             'entry_market_cap' => 10_000,
             'entry_at' => now(),
@@ -130,9 +130,9 @@ class MultiChainTradingTest extends TestCase
             'api.dexscreener.com/tokens/v1/ethereum/*' => Http::response([[
                 'chainId' => 'ethereum',
                 'dexId' => 'uniswap',
-                'pairAddress' => '0xpair',
-                'baseToken' => ['address' => '0xAbC', 'symbol' => 'ETHMEME'],
-                'quoteToken' => ['address' => '0xquote', 'symbol' => 'WETH'],
+                'pairAddress' => '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'baseToken' => ['address' => '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'symbol' => 'ETHMEME'],
+                'quoteToken' => ['address' => '0xcccccccccccccccccccccccccccccccccccccccc', 'symbol' => 'WETH'],
                 'priceUsd' => '1',
                 'marketCap' => 10_000,
                 'liquidity' => ['usd' => 5_000],
@@ -142,9 +142,9 @@ class MultiChainTradingTest extends TestCase
             'api.dexscreener.com/token-pairs/v1/ethereum/*' => Http::response([[
                 'chainId' => 'ethereum',
                 'dexId' => 'uniswap',
-                'pairAddress' => '0xpair',
-                'baseToken' => ['address' => '0xAbC', 'symbol' => 'ETHMEME'],
-                'quoteToken' => ['address' => '0xquote', 'symbol' => 'WETH'],
+                'pairAddress' => '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'baseToken' => ['address' => '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'symbol' => 'ETHMEME'],
+                'quoteToken' => ['address' => '0xcccccccccccccccccccccccccccccccccccccccc', 'symbol' => 'WETH'],
                 'priceUsd' => '1',
                 'marketCap' => 10_000,
                 'liquidity' => ['usd' => 5_000],
@@ -160,7 +160,7 @@ class MultiChainTradingTest extends TestCase
         app(PaperTradeExitService::class)->closeManually($position->fresh());
 
         $this->assertSame('closed', $position->fresh()->status);
-        Http::assertSent(fn ($request): bool => str_contains($request->url(), '/token-pairs/v1/ethereum/0xabc'));
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), '/tokens/v1/ethereum/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'));
     }
 
     public function test_legacy_shared_wallet_balances_reconcile_by_chain_idempotently(): void

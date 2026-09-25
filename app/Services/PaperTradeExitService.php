@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
+use App\Models\User;
 use App\Services\Chains\ChainManager;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -13,6 +15,8 @@ class PaperTradeExitService
 {
     public function __construct(
         private ChainManager $chains,
+        private EthereumPaperMarketData $ethereumPaperMarket,
+        private PaperMarketObservation $marketObservations,
         private TelegramService $telegram,
         private PaperWalletService $wallets,
         private UserTelegramNotificationService $userTelegram,
@@ -21,28 +25,28 @@ class PaperTradeExitService
     /**
      * @return array{position: PaperPosition, wallet: PaperWallet, event: array<string, mixed>, market_cap: float, multiple: float, price_source: string, fresh_market_error: ?string, notification_error: ?string}
      */
-    public function closeManually(PaperPosition $position): array
+    public function closeManually(PaperPosition $position, ?User $actor = null): array
     {
         $entryMarketCap = (float) $position->entry_market_cap;
 
         if ($entryMarketCap <= 0) {
             throw new RuntimeException(
-                'No valid fresh, last-known, or entry market-cap data is available. Position was NOT closed.'
+                'The position has no valid entry market cap. Position was NOT closed.'
             );
         }
 
-        $valuation = $this->resolveManualCloseValuation($position);
-        $marketCap = $valuation['market_cap'];
-        $price = $valuation['price'];
-        $priceSource = $valuation['price_source'];
-        $freshMarketError = $valuation['fresh_market_error'];
-        $multiple = $marketCap / $entryMarketCap;
+        $marketData = $this->fetchManualCloseObservation($position);
+        $this->validatedObservation($position, $marketData);
 
-        $result = DB::transaction(function () use ($position, $marketCap, $price, $multiple, $priceSource, $freshMarketError): array {
+        $result = DB::transaction(function () use ($position, $marketData, $actor): array {
             $lockedPosition = PaperPosition::query()
                 ->whereKey($position->getKey())
                 ->lockForUpdate()
                 ->firstOrFail();
+
+            if ($actor !== null && ! ($lockedPosition->user_id === $actor->id || ($actor->is_admin && $lockedPosition->user_id === null))) {
+                throw new RuntimeException('You are no longer authorized to close this paper position.');
+            }
 
             if ($lockedPosition->status !== 'open') {
                 throw new RuntimeException('Position is no longer open.');
@@ -59,6 +63,17 @@ class PaperTradeExitService
             if ($remainingFraction <= 0.000001) {
                 throw new RuntimeException('Position has no remaining amount to close.');
             }
+
+            $this->validatedObservation($lockedPosition, $marketData);
+
+            $wallet = $lockedPosition->user_id
+                ? $this->wallets->lockedForUser($lockedPosition->user, $lockedPosition->chain)
+                : $this->wallets->lockedDefault($lockedPosition->chain);
+
+            $observation = $this->validatedObservation($lockedPosition, $marketData);
+            $marketCap = (float) $observation['market_cap'];
+            $price = $observation['price_usd'];
+            $multiple = (float) $observation['observed_multiple'];
 
             $initialInvestment = (float) $lockedPosition->initial_investment_sol;
             $costBasis = (float) ($lockedPosition->remaining_investment_sol ?? 0);
@@ -78,13 +93,15 @@ class PaperTradeExitService
                 'label' => 'MANUAL CLOSE',
                 'sold_fraction' => $remainingFraction,
                 'fill_multiple' => $multiple,
-                'fill_model' => 'manual_mark_without_slippage_or_depth',
+                'fill_model' => $observation['fill_model'],
                 'execution_verified' => false,
                 'estimated_executable_fill' => null,
                 'observed_multiple' => $multiple,
                 'observed_market_cap' => $marketCap,
-                'price_source' => $priceSource,
-                'fresh_market_error' => $freshMarketError,
+                'market_observation' => $observation,
+                'proceeds_basis' => 'original_native_asset_cost_times_observed_valuation_ratio',
+                'price_source' => 'fresh_market',
+                'fresh_market_error' => null,
                 'cost_basis_sol' => round($costBasis, 8),
                 'sol_returned' => round($solReturned, 8),
                 'realized_pnl_sol' => round($realizedPnl, 8),
@@ -94,10 +111,6 @@ class PaperTradeExitService
 
             $exitEvents = $lockedPosition->exit_events ?? [];
             $exitEvents[] = $event;
-
-            $wallet = $lockedPosition->user_id
-                ? $this->wallets->lockedForUser($lockedPosition->user, $lockedPosition->chain)
-                : $this->wallets->lockedDefault($lockedPosition->chain);
 
             $wallet->available_balance_sol = (float) $wallet->available_balance_sol + $solReturned;
             $wallet->invested_balance_sol = max(0.0, (float) $wallet->invested_balance_sol - $costBasis);
@@ -111,6 +124,11 @@ class PaperTradeExitService
             );
 
             $lockedPosition->update([
+                'meta' => array_replace($lockedPosition->meta ?? [], [
+                    'market_observation' => $observation,
+                    'last_valid_market_observation' => $observation,
+                    'last_valid_market_observation_at' => now()->toIso8601String(),
+                ]),
                 'last_market_cap' => $marketCap,
                 'last_price' => $price,
                 'last_checked_at' => now(),
@@ -134,8 +152,8 @@ class PaperTradeExitService
                 'event' => $event,
                 'market_cap' => $marketCap,
                 'multiple' => $multiple,
-                'price_source' => $priceSource,
-                'fresh_market_error' => $freshMarketError,
+                'price_source' => 'fresh_market',
+                'fresh_market_error' => null,
             ];
         });
 
@@ -144,58 +162,54 @@ class PaperTradeExitService
         return $result;
     }
 
-    /**
-     * @return array{market_cap: float, price: mixed, price_source: string, fresh_market_error: ?string}
-     */
-    private function resolveManualCloseValuation(PaperPosition $position): array
+    /** @return array<string, mixed> */
+    private function fetchManualCloseObservation(PaperPosition $position): array
     {
-        $freshMarketError = null;
-
         try {
-            $marketData = $this->chains->for($position->chain)->marketData($position->address);
-
-            if (! ($marketData['available'] ?? false)) {
-                $freshMarketError = 'Current market data is unavailable.';
-            } elseif (! ($marketData['requested_token_is_base'] ?? false)) {
-                $freshMarketError = 'The current market pair does not identify the requested token as its base token.';
-            } elseif ((float) ($marketData['market_cap'] ?? 0) <= 0) {
-                $freshMarketError = 'Current market data returned an invalid market cap.';
-            } else {
-                return [
-                    'market_cap' => (float) $marketData['market_cap'],
-                    'price' => $marketData['price_usd'] ?? $marketData['price'] ?? null,
-                    'price_source' => 'fresh_market',
-                    'fresh_market_error' => null,
+            if ($position->chain === Chain::Ethereum) {
+                $batch = $this->ethereumPaperMarket->fetch([$position]);
+                $marketData = $batch['observations'][$position->getKey()] ?? [
+                    'available' => false,
+                    'reason' => 'provider_observation_missing',
                 ];
+
+                if (! ($marketData['available'] ?? false) && ($batch['rate_limited'] ?? false)) {
+                    $marketData['reason'] = 'provider_rate_limited';
+                }
+
+                return $marketData;
             }
-        } catch (Throwable $exception) {
-            $freshMarketError = 'Could not fetch current market data: '.$exception->getMessage();
-        }
 
-        $lastMarketCap = (float) ($position->last_market_cap ?? 0);
-
-        if ($lastMarketCap > 0) {
             return [
-                'market_cap' => $lastMarketCap,
-                'price' => $position->last_price,
-                'price_source' => 'last_known_market',
-                'fresh_market_error' => $freshMarketError,
+                ...$this->chains->for($position->chain)->marketData($position->address),
+                'provider' => 'dexscreener',
+                'fetched_at' => now()->toIso8601String(),
+            ];
+        } catch (Throwable) {
+            return [
+                'available' => false,
+                'reason' => 'provider_request_failed',
             ];
         }
+    }
 
-        $entryMarketCap = (float) ($position->entry_market_cap ?? 0);
+    /** @return array<string, mixed> */
+    private function validatedObservation(PaperPosition $position, array $marketData): array
+    {
+        $observation = $this->marketObservations->evaluate($position, $marketData);
 
-        if ($entryMarketCap > 0) {
-            return [
-                'market_cap' => $entryMarketCap,
-                'price' => $position->entry_price,
-                'price_source' => 'entry_fallback',
-                'fresh_market_error' => $freshMarketError,
-            ];
+        if ($observation['simulation_allowed']) {
+            return $observation;
         }
+
+        $reasons = array_values(array_unique(array_filter(
+            $observation['reasons'],
+            fn (mixed $reason): bool => is_string($reason) && $reason !== '',
+        )));
 
         throw new RuntimeException(
-            'No valid fresh, last-known, or entry market-cap data is available. Position was NOT closed.'
+            'Guarded PAPER close rejected because the current provider observation is not eligible for simulation: '.
+            implode(', ', $reasons !== [] ? $reasons : ['invalid_observation']).'. Position was NOT closed.'
         );
     }
 
