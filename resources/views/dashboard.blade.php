@@ -334,7 +334,11 @@
                                     @if (!empty($observation['diagnostics'])) — {{ implode(', ', $observation['diagnostics']) }} @endif
                                     @if ($observation['pool_switched'] ?? false) — pool changed @endif
                                 </p>
-                                <p class="mt-1 text-xs text-slate-500">Source: {{ $observation['provider'] ?? 'Unavailable' }} · {{ $observation['valuation_source'] }} · Last valid observation: {{ data_get($position->meta, 'last_valid_market_observation_at', 'Not recorded') }}</p>
+                                <p class="mt-1 text-xs text-slate-500">Source: {{ $observation['provider'] ?? 'Unavailable' }} · {{ $observation['valuation_source'] }} · Historical last-valid observation at: {{ data_get($position->meta, 'last_valid_market_observation_at', 'Not recorded') }}</p>
+                            @endif
+                            @if ($historicalObservation = data_get($position->meta, 'last_valid_market_observation'))
+                                @php $historicalMarketCap = data_get($historicalObservation, 'market_cap'); @endphp
+                                <p class="mt-1 text-xs text-slate-500">Historical validated observation (not current): {{ data_get($position->meta, 'last_valid_market_observation_at', 'Not recorded') }} · {{ $historicalObservation['provider'] ?? 'Unavailable' }} · Market cap: {{ $historicalMarketCap === null ? 'Unavailable' : 'USD '.number_format((float) $historicalMarketCap, 2) }}.</p>
                             @endif
                             <p class="mt-1 truncate font-mono text-xs text-slate-500" title="{{ $position->address }}">{{ $position->address }}</p>
                         </div>

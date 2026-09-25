@@ -642,7 +642,7 @@ class TrackPaperPositions extends Command
 
                 $pulse();
                 $lockedPosition->update([
-                    'meta' => array_replace($lockedPosition->meta ?? [], ['market_observation' => $observation, 'last_valid_market_observation_at' => now()->toIso8601String()]),
+                    'meta' => array_replace($lockedPosition->meta ?? [], ['market_observation' => $observation, 'last_valid_market_observation' => $observation, 'last_valid_market_observation_at' => now()->toIso8601String()]),
                     'last_market_cap' => $marketCap,
                     'last_price' => $price,
                     'last_checked_at' => now(),

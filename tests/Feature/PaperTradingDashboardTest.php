@@ -66,6 +66,43 @@ class PaperTradingDashboardTest extends TestCase
             ->assertViewHas('positions', fn ($positions): bool => $positions->first()['model']->is($openPosition));
     }
 
+    public function test_dashboard_labels_saved_valid_observation_as_historical_with_timestamp(): void
+    {
+        $timestamp = '2026-09-24T12:00:00+00:00';
+        $user = User::factory()->create(['is_admin' => false]);
+        $this->actingAs($user);
+        $this->createPosition(['user_id' => $user->id, 'chain' => 'ethereum', 'meta' => [
+            'market_observation' => ['status' => 'unverified', 'reasons' => ['geckoterminal_cooldown'], 'valuation_source' => 'unavailable'],
+            'last_valid_market_observation' => ['provider' => 'dexscreener', 'market_cap' => 123456],
+            'last_valid_market_observation_at' => $timestamp,
+        ]]);
+
+        $this->get(route('dashboard'))->assertSuccessful()
+            ->assertSeeText('automatic PAPER exit deferred: geckoterminal_cooldown')
+            ->assertSeeText('Historical validated observation (not current): '.$timestamp)
+            ->assertSeeText('dexscreener')
+            ->assertSeeText('Market cap: USD 123,456.00');
+    }
+
+    public function test_dashboard_distinguishes_missing_historical_market_cap_from_numeric_zero(): void
+    {
+        $timestamp = '2026-09-24T12:00:00+00:00';
+        $user = User::factory()->create(['is_admin' => false]);
+        $this->actingAs($user);
+        foreach ([['symbol' => 'MISSING', 'observation' => ['provider' => 'geckoterminal']],
+            ['symbol' => 'ZERO', 'observation' => ['provider' => 'geckoterminal', 'market_cap' => 0]]] as $case) {
+            $this->createPosition(['user_id' => $user->id, 'symbol' => $case['symbol'], 'chain' => 'ethereum', 'meta' => [
+                'last_valid_market_observation' => $case['observation'],
+                'last_valid_market_observation_at' => $timestamp,
+            ]]);
+        }
+
+        $this->get(route('dashboard'))->assertSuccessful()
+            ->assertSeeText('Historical validated observation (not current): '.$timestamp)
+            ->assertSeeText('Market cap: Unavailable')
+            ->assertSeeText('Market cap: USD 0.00');
+    }
+
     public function test_dashboard_prioritizes_current_manual_activity_and_lists_recent_failures(): void
     {
         PaperWallet::query()->create(['name' => 'default']);

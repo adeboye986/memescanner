@@ -477,6 +477,85 @@ class PaperTrackerReliabilityTest extends TestCase
         $this->assertSame('stale', app(PaperTrackerHealthService::class)->status()['status']);
     }
 
+    public function test_last_valid_observation_survives_unavailable_and_cooldown_checks_then_updates_on_recovery(): void
+    {
+        $this->freezeTime();
+        [$position, $wallet] = $this->position();
+        $walletBefore = $wallet->fresh()->getRawOriginal();
+        $this->mock(TelegramService::class)->shouldReceive('send')->zeroOrMoreTimes();
+        Http::preventStrayRequests();
+        Http::fake(['api.dexscreener.com/*' => Http::sequence()->push([$this->pair(1.1)])->push([])->push([])->push([$this->pair(0.8)]),
+            'api.geckoterminal.com/*' => Http::response([], 429)]);
+
+        $this->artisan('tokens:paper-track')->assertSuccessful();
+        $valid = $position->fresh()->meta['market_observation'];
+        $validAt = now()->toIso8601String();
+        $this->assertTrue($valid['simulation_allowed']);
+        $this->assertSame($valid, $position->fresh()->meta['last_valid_market_observation']);
+        $this->assertSame($validAt, $position->fresh()->meta['last_valid_market_observation_at']);
+
+        foreach (['no_valid_provider_observation', 'geckoterminal_cooldown'] as $reason) {
+            $this->travel(6)->seconds();
+            $this->artisan('tokens:paper-track')->assertSuccessful();
+            $fresh = $position->fresh();
+            $this->assertSame('unverified', $fresh->meta['market_observation']['status']);
+            $this->assertContains($reason, $fresh->meta['market_observation']['reasons']);
+            $this->assertFalse($fresh->meta['market_observation']['simulation_allowed']);
+            $this->assertSame($valid, $fresh->meta['last_valid_market_observation']);
+            $this->assertSame($validAt, $fresh->meta['last_valid_market_observation_at']);
+            $this->assertSame(110000.0, $fresh->last_market_cap);
+            $this->assertEqualsWithDelta(1.1, $fresh->last_price, 0.000001);
+            $this->assertSame('open', $fresh->status);
+            $this->assertSame([], $fresh->exit_events);
+            $this->assertSame($walletBefore, $wallet->fresh()->getRawOriginal());
+            $this->assertSame('degraded', app(PaperTrackerHealthService::class)->status()['status']);
+        }
+
+        $this->travel(6)->seconds();
+        $this->artisan('tokens:paper-track')->assertSuccessful();
+        $fresh = $position->fresh();
+        $this->assertSame('closed', $fresh->status);
+        $this->assertSame($fresh->meta['market_observation'], $fresh->meta['last_valid_market_observation']);
+        $this->assertSame(now()->toIso8601String(), $fresh->meta['last_valid_market_observation_at']);
+        $this->assertNotSame($valid, $fresh->meta['last_valid_market_observation']);
+        $this->assertCount(1, $fresh->exit_events);
+        $this->assertEqualsWithDelta(0.8, $fresh->exit_events[0]['fill_multiple'], 0.000001);
+        $this->assertEqualsWithDelta(4.98, $wallet->fresh()->available_balance_sol, 0.000001);
+        Http::assertSentCount(5);
+    }
+
+    public function test_historical_stop_breach_cannot_authorize_exit_without_a_current_observation(): void
+    {
+        $this->freezeTime();
+        [$position, $wallet] = $this->position();
+        $historical = app(PaperMarketObservation::class)->evaluate($position, [
+            'available' => true, 'requested_token_is_base' => true, 'market_cap' => 50000,
+            'price_usd' => 0.5, 'liquidity_usd' => 10000, 'fetched_at' => now()->toIso8601String(),
+        ]);
+        $this->assertTrue($historical['simulation_allowed']);
+        $this->assertTrue($historical['stop_loss_threshold_breached']);
+        $validAt = now()->toIso8601String();
+        $position->update(['last_market_cap' => 50000, 'last_price' => 0.5,
+            'meta' => ['market_observation' => $historical, 'last_valid_market_observation' => $historical,
+                'last_valid_market_observation_at' => $validAt]]);
+        $historical = $position->fresh()->meta['last_valid_market_observation'];
+        $walletBefore = $wallet->fresh()->getRawOriginal();
+        $this->travel(120)->seconds();
+        Http::preventStrayRequests();
+        Http::fake(['api.dexscreener.com/*' => Http::response([]), 'api.geckoterminal.com/*' => Http::response([], 404)]);
+
+        $this->artisan('tokens:paper-track')->assertSuccessful();
+
+        $fresh = $position->fresh();
+        $this->assertSame('open', $fresh->status);
+        $this->assertSame([], $fresh->exit_events);
+        $this->assertSame($walletBefore, $wallet->fresh()->getRawOriginal());
+        $this->assertFalse($fresh->meta['market_observation']['simulation_allowed']);
+        $this->assertSame($historical, $fresh->meta['last_valid_market_observation']);
+        $this->assertSame($validAt, $fresh->meta['last_valid_market_observation_at']);
+        Http::assertSentCount(2);
+    }
+
     private function position(): array
     {
         $wallet = PaperWallet::query()->create(['name' => 'default', 'chain' => 'ethereum', 'currency' => 'ETH',
