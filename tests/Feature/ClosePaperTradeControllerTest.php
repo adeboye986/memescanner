@@ -104,6 +104,25 @@ class ClosePaperTradeControllerTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_manual_geckoterminal_429_fails_closed_without_accounting_changes_or_lingering_reservation(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.dexscreener.com/*' => Http::response([]),
+            'api.geckoterminal.com/*' => Http::response([], 429),
+        ]);
+        $wallet = $this->createWallet('ethereum');
+        $position = $this->createEthereumPosition();
+
+        $this->post(route('paper-trades.close', $position))
+            ->assertSessionHas('error', fn (string $message): bool => str_contains($message, 'provider_rate_limited'));
+
+        $this->assertOpenWithoutAccountingChanges($position, $wallet);
+        $this->assertTrue(Cache::store('array')->has('paper-market.ethereum.geckoterminal.cooldown'));
+        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.manual-reservation'));
+        Http::assertSentCount(2);
+    }
+
     public function test_stale_fetched_observation_cannot_authorize_close(): void
     {
         $this->freezeTime();

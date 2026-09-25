@@ -6,8 +6,11 @@ use App\Models\PaperPosition;
 use App\Services\DexScreenerService;
 use App\Services\EthereumPaperMarketData;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 class EthereumPaperMarketDataTest extends TestCase
@@ -296,7 +299,7 @@ class EthereumPaperMarketDataTest extends TestCase
         $this->assertSame([['provider' => 'dexscreener', 'target_type' => 'token_batch', 'http_status' => null,
             'category' => 'provider_request_failed']], $result['provider_errors']);
         $this->assertSame('geckoterminal', $result['observations'][1]['provider']);
-        $this->assertSame(str_contains($message, '429'), $result['rate_limited']);
+        $this->assertFalse($result['rate_limited']);
         $this->assertSame(1, $result['failures']);
         $this->assertSame(2, $result['requests']);
         Http::assertSentCount(1);
@@ -397,7 +400,7 @@ class EthereumPaperMarketDataTest extends TestCase
     }
 
     #[DataProvider('nonCooldownFailures')]
-    public function test_only_known_gecko_http_429_starts_shared_cooldown(string $failure): void
+    public function test_only_parsed_http_429_is_classified_as_rate_limited(string $failure, bool $expectedRateLimited): void
     {
         $this->freezeTime();
         Http::preventStrayRequests();
@@ -414,75 +417,119 @@ class EthereumPaperMarketDataTest extends TestCase
         $second = app(EthereumPaperMarketData::class)->fetch([$this->position()]);
 
         $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.cooldown'));
+        $this->assertSame($expectedRateLimited, $first['rate_limited']);
+        $this->assertSame($expectedRateLimited, $second['rate_limited']);
         $this->assertSame([], $second['provider_skips']);
         $this->assertSame($first['requests'], $second['requests']);
         $this->assertSame($first['failures'], $second['failures']);
         $this->assertGreaterThan(1, $second['requests']);
     }
 
-    public function test_manual_reservation_defers_tracker_gecko_requests_until_it_expires(): void
+    public function test_pending_manual_reservation_prevents_the_a771477_cooldown_rearm_sequence(): void
     {
         $this->freezeTime();
         config([
             'services.trading.paper_tracker_cache_store' => 'array',
+            'services.trading.paper_market.ethereum.geckoterminal_cooldown_seconds' => 60,
             'services.trading.paper_market.ethereum.geckoterminal_manual_reservation_seconds' => 10,
         ]);
+        Cache::store('array')->put('paper-market.ethereum.geckoterminal.cooldown', true, 60);
         Http::preventStrayRequests();
         Http::fake([
-            'api.dexscreener.com/*' => Http::sequence()->push([])->push([])->push([])->push([]),
-            'api.geckoterminal.com/*' => Http::response(['data' => $this->pool()]),
+            'api.dexscreener.com/*' => Http::response([]),
+            'api.geckoterminal.com/*' => Http::response([], 429),
         ]);
         $service = app(EthereumPaperMarketData::class);
 
         $manual = $service->fetchForManualClose([$this->position()]);
-        $deferred = $service->fetch([$this->position()]);
+        $this->travel(60)->seconds();
+        $tracker = $service->fetch([$this->position()]);
 
-        $this->assertSame('geckoterminal', $manual['observations'][1]['provider']);
-        $this->assertSame(2, $manual['requests']);
-        $this->assertSame(1, $deferred['requests']);
-        $this->assertSame('geckoterminal_manual_close_reserved', $deferred['observations'][1]['reason']);
-        $this->assertSame([[
-            'provider' => 'geckoterminal',
-            'target_type' => 'original_pool',
-            'category' => 'manual_close_reserved',
-        ]], $deferred['provider_skips']);
+        $this->assertSame('geckoterminal_cooldown', $manual['observations'][1]['reason']);
+        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.cooldown'));
+        $this->assertSame('geckoterminal_manual_close_reserved', $tracker['observations'][1]['reason']);
+        $this->assertSame(1, $tracker['requests']);
+        $this->assertFalse($tracker['rate_limited']);
         $this->assertTrue(Cache::store('array')->has('paper-market.ethereum.geckoterminal.manual-reservation'));
-
-        $this->travel(9)->seconds();
-        $stillDeferred = $service->fetch([$this->position()]);
-        $this->assertSame(1, $stillDeferred['requests']);
-        $this->assertSame('geckoterminal_manual_close_reserved', $stillDeferred['observations'][1]['reason']);
-
-        $this->travel(1)->seconds();
-        $resumed = $service->fetch([$this->position()]);
-        $this->assertSame('geckoterminal', $resumed['observations'][1]['provider']);
-        $this->assertSame(2, $resumed['requests']);
-        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.manual-reservation'));
-        Http::assertSentCount(6);
+        Http::assertSentCount(2);
     }
 
-    public function test_manual_reservation_does_not_bypass_active_gecko_cooldown(): void
+    public function test_manual_retry_receives_the_first_gecko_opportunity_after_cooldown(): void
     {
         $this->freezeTime();
         config([
             'services.trading.paper_tracker_cache_store' => 'array',
+            'services.trading.paper_market.ethereum.geckoterminal_cooldown_seconds' => 60,
+            'services.trading.paper_market.ethereum.geckoterminal_manual_reservation_seconds' => 10,
+        ]);
+        Cache::store('array')->put('paper-market.ethereum.geckoterminal.cooldown', true, 60);
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.dexscreener.com/*' => Http::response([]),
+            'api.geckoterminal.com/*' => Http::response(['data' => $this->pool()]),
+        ]);
+        $service = app(EthereumPaperMarketData::class);
+
+        $blocked = $service->fetchForManualClose([$this->position()]);
+        $this->travel(60)->seconds();
+        $tracker = $service->fetch([$this->position()]);
+        $manual = $service->fetchForManualClose([$this->position()]);
+
+        $this->assertSame('geckoterminal_cooldown', $blocked['observations'][1]['reason']);
+        $this->assertSame('geckoterminal_manual_close_reserved', $tracker['observations'][1]['reason']);
+        $this->assertSame('geckoterminal', $manual['observations'][1]['provider']);
+        $this->assertSame(2, $manual['requests']);
+        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.manual-reservation'));
+        Http::assertSentCount(4);
+    }
+
+    public function test_dexscreener_manual_success_releases_reservation_immediately(): void
+    {
+        config(['services.trading.paper_tracker_cache_store' => 'array']);
+        Http::preventStrayRequests();
+        Http::fake(['api.dexscreener.com/*' => Http::response([$this->pair()])]);
+
+        $result = app(EthereumPaperMarketData::class)->fetchForManualClose([$this->position()]);
+
+        $this->assertSame('dexscreener', $result['observations'][1]['provider']);
+        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.manual-reservation'));
+        Http::assertSentCount(1);
+    }
+
+    public function test_geckoterminal_manual_success_releases_reservation_immediately(): void
+    {
+        config(['services.trading.paper_tracker_cache_store' => 'array']);
+        Http::preventStrayRequests();
+        Http::fake([
+            'api.dexscreener.com/*' => Http::response([]),
+            'api.geckoterminal.com/*' => Http::response(['data' => $this->pool()]),
+        ]);
+
+        $result = app(EthereumPaperMarketData::class)->fetchForManualClose([$this->position()]);
+
+        $this->assertSame('geckoterminal', $result['observations'][1]['provider']);
+        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.manual-reservation'));
+        Http::assertSentCount(2);
+    }
+
+    public function test_pending_manual_reservation_expires_if_operator_never_retries(): void
+    {
+        $this->freezeTime();
+        config([
+            'services.trading.paper_tracker_cache_store' => 'array',
+            'services.trading.paper_market.ethereum.geckoterminal_cooldown_seconds' => 60,
             'services.trading.paper_market.ethereum.geckoterminal_manual_reservation_seconds' => 10,
         ]);
         Cache::store('array')->put('paper-market.ethereum.geckoterminal.cooldown', true, 60);
         Http::preventStrayRequests();
         Http::fake(['api.dexscreener.com/*' => Http::response([])]);
 
-        $result = app(EthereumPaperMarketData::class)->fetchForManualClose([$this->position()]);
+        app(EthereumPaperMarketData::class)->fetchForManualClose([$this->position()]);
 
-        $this->assertSame(1, $result['requests']);
-        $this->assertSame(0, $result['failures']);
-        $this->assertSame('geckoterminal_cooldown', $result['observations'][1]['reason']);
-        $this->assertSame([[
-            'provider' => 'geckoterminal',
-            'target_type' => 'original_pool',
-            'category' => 'rate_limit_cooldown',
-        ]], $result['provider_skips']);
+        $this->travel(69)->seconds();
         $this->assertTrue(Cache::store('array')->has('paper-market.ethereum.geckoterminal.manual-reservation'));
+        $this->travel(1)->seconds();
+        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.manual-reservation'));
         Http::assertSentCount(1);
     }
 
@@ -522,6 +569,97 @@ class EthereumPaperMarketDataTest extends TestCase
         }
     }
 
+    public function test_multi_position_tracker_keeps_valid_observations_before_a_later_429(): void
+    {
+        config(['services.trading.paper_tracker_cache_store' => 'array']);
+        $otherPool = '0x'.str_repeat('d', 40);
+        $first = $this->position();
+        $second = $this->position($otherPool);
+        $second->id = 2;
+        Http::preventStrayRequests();
+        Http::fake(function ($request) {
+            if (str_contains($request->url(), 'dexscreener')) {
+                return Http::response([]);
+            }
+
+            return str_contains($request->url(), self::POOL)
+                ? Http::response(['data' => $this->pool()])
+                : Http::response([], 429);
+        });
+
+        $result = app(EthereumPaperMarketData::class)->fetch([$first, $second]);
+
+        $this->assertSame('geckoterminal', $result['observations'][1]['provider']);
+        $this->assertFalse($result['observations'][2]['available']);
+        $this->assertTrue($result['rate_limited']);
+        $this->assertSame(3, $result['requests']);
+        $this->assertSame(1, $result['failures']);
+        $this->assertSame(429, $result['provider_errors'][0]['http_status']);
+        $this->assertTrue(Cache::store('array')->has('paper-market.ethereum.geckoterminal.cooldown'));
+        $this->assertFalse(Cache::store('array')->has('paper-market.ethereum.geckoterminal.manual-reservation'));
+        Http::assertSentCount(3);
+    }
+
+    public function test_file_cache_shares_reservations_and_request_locks_between_php_processes(): void
+    {
+        if (! class_exists(Process::class) || ! is_executable(PHP_BINARY)) {
+            $this->markTestSkipped('A runnable PHP binary and Symfony Process are required.');
+        }
+
+        $store = 'paper_coordination_process';
+        $directory = sys_get_temp_dir().'/memescanner-paper-cache-'.Str::uuid();
+        File::ensureDirectoryExists($directory);
+        config(["cache.stores.{$store}" => [
+            'driver' => 'file',
+            'path' => $directory,
+            'lock_path' => $directory,
+        ]]);
+
+        $script = <<<'PHP'
+require $argv[1].'/vendor/autoload.php';
+$app = require $argv[1].'/bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+config(["cache.stores.{$argv[2]}" => [
+    'driver' => 'file',
+    'path' => $argv[3],
+    'lock_path' => $argv[3],
+]]);
+$cache = Illuminate\Support\Facades\Cache::store($argv[2]);
+$cache->put('paper-market.ethereum.geckoterminal.manual-reservation', 'child-owner', 30);
+$lock = $cache->lock('paper-market.ethereum.geckoterminal.request', 5);
+if (! $lock->get()) {
+    exit(2);
+}
+echo "ready
+";
+usleep(500000);
+$lock->release();
+PHP;
+        $process = new Process([PHP_BINARY, '-r', $script, base_path(), $store, $directory], base_path());
+        $process->setTimeout(5);
+
+        try {
+            $process->start();
+            $ready = $process->waitUntil(fn (string $type, string $output): bool => str_contains($output, 'ready'));
+
+            $this->assertTrue($ready, $process->getErrorOutput());
+            $this->assertSame(
+                'child-owner',
+                Cache::store($store)->get('paper-market.ethereum.geckoterminal.manual-reservation'),
+            );
+            $this->assertTrue(Cache::store($store)->lock('paper-market.ethereum.geckoterminal.request')->isLocked());
+
+            $this->assertSame(0, $process->wait());
+            $this->assertFalse(Cache::store($store)->lock('paper-market.ethereum.geckoterminal.request')->isLocked());
+        } finally {
+            if ($process->isRunning()) {
+                $process->stop(0);
+            }
+
+            File::deleteDirectory($directory);
+        }
+    }
+
     public function test_tracker_uses_gecko_normally_without_a_manual_reservation(): void
     {
         config(['services.trading.paper_tracker_cache_store' => 'array']);
@@ -541,7 +679,7 @@ class EthereumPaperMarketDataTest extends TestCase
 
     public static function nonCooldownFailures(): array
     {
-        return [['dex_429'], ['gecko_503'], ['unrecognized_429']];
+        return [['dex_429', true], ['gecko_503', false], ['unrecognized_429', false]];
     }
 
     private function position(string $pool = self::POOL): PaperPosition

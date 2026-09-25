@@ -6,8 +6,10 @@ use App\Chain;
 use App\Models\PaperPosition;
 use Closure;
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Throwable;
 
 /** PAPER observations only: scanner qualification and LIVE validation retain their own contracts. */
@@ -16,6 +18,8 @@ class EthereumPaperMarketData
     private const GECKO_COOLDOWN_KEY = 'paper-market.ethereum.geckoterminal.cooldown';
 
     private const GECKO_MANUAL_RESERVATION_KEY = 'paper-market.ethereum.geckoterminal.manual-reservation';
+
+    private const GECKO_MANUAL_RESERVATION_LOCK_KEY = 'paper-market.ethereum.geckoterminal.manual-reservation-lock';
 
     private const GECKO_REQUEST_LOCK_KEY = 'paper-market.ethereum.geckoterminal.request';
 
@@ -39,13 +43,28 @@ class EthereumPaperMarketData
     public function fetchForManualClose(array $positions): array
     {
         $cache = Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'));
-        $cache->put(
-            self::GECKO_MANUAL_RESERVATION_KEY,
-            true,
-            max(1, (int) config('services.trading.paper_market.ethereum.geckoterminal_manual_reservation_seconds', 30)),
-        );
+        $owner = (string) Str::uuid();
+        $this->putManualReservation($cache, $owner, $this->manualReservationGraceSeconds());
 
-        return $this->fetch($positions, manualRequest: true);
+        try {
+            $result = $this->fetch($positions, manualRequest: true);
+        } catch (Throwable $exception) {
+            $this->releaseManualReservation($cache, $owner);
+
+            throw $exception;
+        }
+
+        if ($this->providerWasSkipped($result, 'rate_limit_cooldown')) {
+            $this->refreshManualReservationIfOwned(
+                $cache,
+                $owner,
+                $this->geckoCooldownSeconds() + $this->manualReservationGraceSeconds(),
+            );
+        } elseif (! $this->providerWasSkipped($result, 'request_contended')) {
+            $this->releaseManualReservation($cache, $owner);
+        }
+
+        return $result;
     }
 
     /** @param list<PaperPosition> $positions @return array{observations: array, requests: int, failures: int, rate_limited: bool, provider_errors: list<array{provider: string, target_type: string, http_status: ?int, category: string}>, provider_skips: list<array{provider: string, target_type: string, category: string}>} */
@@ -94,9 +113,10 @@ class EthereumPaperMarketData
                 $pairs = $this->dex->paperEthereumPairs($chunk, $seconds);
                 $fetched = now()->toIso8601String();
             } catch (Throwable $exception) {
-                $result['provider_errors'][] = $this->providerError('dexscreener', 'token_batch', $exception);
+                $error = $this->providerError('dexscreener', 'token_batch', $exception);
+                $result['provider_errors'][] = $error;
                 $result['failures']++;
-                $result['rate_limited'] = $result['rate_limited'] || str_contains($exception->getMessage(), '429');
+                $result['rate_limited'] = $result['rate_limited'] || $error['http_status'] === 429;
 
                 continue;
             }
@@ -216,10 +236,10 @@ class EthereumPaperMarketData
                                 $error = $this->providerError('geckoterminal', $targetType, $exception);
                                 $result['provider_errors'][] = $error;
                                 if ($error['http_status'] === 429) {
-                                    $cache->put(self::GECKO_COOLDOWN_KEY, true, max(1, (int) config('services.trading.paper_market.ethereum.geckoterminal_cooldown_seconds', 60)));
+                                    $cache->put(self::GECKO_COOLDOWN_KEY, true, $this->geckoCooldownSeconds());
                                 }
                                 $result['failures']++;
-                                $geckoRateLimited = str_contains($exception->getMessage(), '429');
+                                $geckoRateLimited = $error['http_status'] === 429;
                                 $result['rate_limited'] = $result['rate_limited'] || $geckoRateLimited;
                             }
                         } finally {
@@ -240,6 +260,52 @@ class EthereumPaperMarketData
         }
 
         return $result;
+    }
+
+    private function geckoCooldownSeconds(): int
+    {
+        return max(1, (int) config('services.trading.paper_market.ethereum.geckoterminal_cooldown_seconds', 60));
+    }
+
+    private function manualReservationGraceSeconds(): int
+    {
+        return max(1, (int) config('services.trading.paper_market.ethereum.geckoterminal_manual_reservation_seconds', 30));
+    }
+
+    private function putManualReservation(Repository $cache, string $owner, int $seconds): void
+    {
+        $cache->lock(self::GECKO_MANUAL_RESERVATION_LOCK_KEY, 5)->block(2, function () use ($cache, $owner, $seconds): void {
+            $cache->put(self::GECKO_MANUAL_RESERVATION_KEY, $owner, $seconds);
+        });
+    }
+
+    private function refreshManualReservationIfOwned(Repository $cache, string $owner, int $seconds): void
+    {
+        $cache->lock(self::GECKO_MANUAL_RESERVATION_LOCK_KEY, 5)->block(2, function () use ($cache, $owner, $seconds): void {
+            if ($cache->get(self::GECKO_MANUAL_RESERVATION_KEY) === $owner) {
+                $cache->put(self::GECKO_MANUAL_RESERVATION_KEY, $owner, $seconds);
+            }
+        });
+    }
+
+    private function releaseManualReservation(Repository $cache, string $owner): void
+    {
+        $cache->lock(self::GECKO_MANUAL_RESERVATION_LOCK_KEY, 5)->block(2, function () use ($cache, $owner): void {
+            if ($cache->get(self::GECKO_MANUAL_RESERVATION_KEY) === $owner) {
+                $cache->forget(self::GECKO_MANUAL_RESERVATION_KEY);
+            }
+        });
+    }
+
+    private function providerWasSkipped(array $result, string $category): bool
+    {
+        foreach ($result['provider_skips'] as $skip) {
+            if (($skip['provider'] ?? null) === 'geckoterminal' && ($skip['category'] ?? null) === $category) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** @return array{provider: string, target_type: string, http_status: ?int, category: string} */
