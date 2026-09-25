@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Chain;
 use App\Models\PaperPosition;
 use Closure;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Cache;
 use Throwable;
@@ -13,6 +14,10 @@ use Throwable;
 class EthereumPaperMarketData
 {
     private const GECKO_COOLDOWN_KEY = 'paper-market.ethereum.geckoterminal.cooldown';
+
+    private const GECKO_MANUAL_RESERVATION_KEY = 'paper-market.ethereum.geckoterminal.manual-reservation';
+
+    private const GECKO_REQUEST_LOCK_KEY = 'paper-market.ethereum.geckoterminal.request';
 
     public function __construct(private DexScreenerService $dex, private GeckoTerminalService $gecko) {}
 
@@ -27,8 +32,24 @@ class EthereumPaperMarketData
         return is_string($value) && preg_match('/^0x[a-f0-9]{40}$/iD', $value) ? strtolower($value) : null;
     }
 
+    /**
+     * @param  list<PaperPosition>  $positions
+     * @return array{observations: array, requests: int, failures: int, rate_limited: bool, provider_errors: array, provider_skips: array}
+     */
+    public function fetchForManualClose(array $positions): array
+    {
+        $cache = Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'));
+        $cache->put(
+            self::GECKO_MANUAL_RESERVATION_KEY,
+            true,
+            max(1, (int) config('services.trading.paper_market.ethereum.geckoterminal_manual_reservation_seconds', 30)),
+        );
+
+        return $this->fetch($positions, manualRequest: true);
+    }
+
     /** @param list<PaperPosition> $positions @return array{observations: array, requests: int, failures: int, rate_limited: bool, provider_errors: list<array{provider: string, target_type: string, http_status: ?int, category: string}>, provider_skips: list<array{provider: string, target_type: string, category: string}>} */
-    public function fetch(array $positions, ?Closure $heartbeat = null, ?Closure $observe = null): array
+    public function fetch(array $positions, ?Closure $heartbeat = null, ?Closure $observe = null, bool $manualRequest = false): array
     {
         $result = ['observations' => [], 'requests' => 0, 'failures' => 0, 'rate_limited' => false, 'provider_errors' => [], 'provider_skips' => []];
         $cache = Cache::store((string) config('services.trading.paper_tracker_cache_store', 'file'));
@@ -103,45 +124,109 @@ class EthereumPaperMarketData
             $original = self::poolId(data_get($position->meta, 'pair_address'));
             $seen = $candidates[$position->id];
             $selected = null;
-            $cooldownSkipped = false;
+            $skipReason = null;
             if ($address !== null && ! $geckoRateLimited) {
                 foreach (array_filter([$original, 'token_pools']) as $target) {
                     $heartbeat?->__invoke();
                     $key = $address.':'.$target;
+                    $targetType = $target === 'token_pools' ? 'token_pools' : 'original_pool';
                     if (! array_key_exists($key, $fallbacks)) {
                         if (($seconds = $timeout()) < 1) {
                             break;
                         }
-                        if ($cache->has(self::GECKO_COOLDOWN_KEY)) {
-                            $result['provider_skips'][] = ['provider' => 'geckoterminal',
-                                'target_type' => $target === 'token_pools' ? 'token_pools' : 'original_pool',
-                                'category' => 'rate_limit_cooldown'];
-                            $cooldownSkipped = true;
+                        if (! $manualRequest && $cache->has(self::GECKO_MANUAL_RESERVATION_KEY)) {
+                            $result['provider_skips'][] = [
+                                'provider' => 'geckoterminal',
+                                'target_type' => $targetType,
+                                'category' => 'manual_close_reserved',
+                            ];
+                            $skipReason = 'geckoterminal_manual_close_reserved';
 
                             break;
                         }
-                        $result['requests']++;
-                        $fallbacks[$key] = [];
-                        try {
-                            $pools = $this->gecko->ethereumPaperPools($address, $target === 'token_pools' ? null : $target, $seconds);
-                            foreach ($pools as $pool) {
-                                $normalized = $this->geckoPool($pool, $address);
-                                if ($normalized !== null && ($target === 'token_pools' || $normalized['pair_address'] === $target)) {
-                                    $fallbacks[$key][] = $normalized;
+
+                        $requestLock = $cache->lock(
+                            self::GECKO_REQUEST_LOCK_KEY,
+                            max(10, (int) config('services.trading.paper_market.ethereum.geckoterminal_request_lock_seconds', 12)),
+                        );
+                        $lockAcquired = (bool) $requestLock->get();
+                        if (! $lockAcquired && $manualRequest) {
+                            $waitSeconds = min(
+                                $seconds,
+                                max(0, (int) config('services.trading.paper_market.ethereum.geckoterminal_manual_lock_wait_seconds', 8)),
+                            );
+                            if ($waitSeconds > 0) {
+                                try {
+                                    $lockAcquired = (bool) $requestLock->block($waitSeconds);
+                                } catch (LockTimeoutException) {
+                                    $lockAcquired = false;
                                 }
                             }
-                        } catch (Throwable $exception) {
-                            $error = $this->providerError('geckoterminal', $target === 'token_pools' ? 'token_pools' : 'original_pool', $exception);
-                            $result['provider_errors'][] = $error;
-                            if ($error['http_status'] === 429) {
-                                $cache->put(self::GECKO_COOLDOWN_KEY, true, max(1, (int) config('services.trading.paper_market.ethereum.geckoterminal_cooldown_seconds', 60)));
+                        }
+
+                        if (! $lockAcquired) {
+                            $result['provider_skips'][] = [
+                                'provider' => 'geckoterminal',
+                                'target_type' => $targetType,
+                                'category' => 'request_contended',
+                            ];
+                            $skipReason = 'geckoterminal_request_contended';
+
+                            break;
+                        }
+
+                        try {
+                            if (! $manualRequest && $cache->has(self::GECKO_MANUAL_RESERVATION_KEY)) {
+                                $result['provider_skips'][] = [
+                                    'provider' => 'geckoterminal',
+                                    'target_type' => $targetType,
+                                    'category' => 'manual_close_reserved',
+                                ];
+                                $skipReason = 'geckoterminal_manual_close_reserved';
+
+                                break;
                             }
-                            $result['failures']++;
-                            $geckoRateLimited = str_contains($exception->getMessage(), '429');
-                            $result['rate_limited'] = $result['rate_limited'] || $geckoRateLimited;
+                            if ($cache->has(self::GECKO_COOLDOWN_KEY)) {
+                                $result['provider_skips'][] = [
+                                    'provider' => 'geckoterminal',
+                                    'target_type' => $targetType,
+                                    'category' => 'rate_limit_cooldown',
+                                ];
+                                $skipReason = 'geckoterminal_cooldown';
+
+                                break;
+                            }
+                            if (($seconds = $timeout()) < 1) {
+                                $skipReason = 'provider_work_budget_exhausted';
+
+                                break;
+                            }
+
+                            $result['requests']++;
+                            $fallbacks[$key] = [];
+                            try {
+                                $pools = $this->gecko->ethereumPaperPools($address, $target === 'token_pools' ? null : $target, $seconds);
+                                foreach ($pools as $pool) {
+                                    $normalized = $this->geckoPool($pool, $address);
+                                    if ($normalized !== null && ($target === 'token_pools' || $normalized['pair_address'] === $target)) {
+                                        $fallbacks[$key][] = $normalized;
+                                    }
+                                }
+                            } catch (Throwable $exception) {
+                                $error = $this->providerError('geckoterminal', $targetType, $exception);
+                                $result['provider_errors'][] = $error;
+                                if ($error['http_status'] === 429) {
+                                    $cache->put(self::GECKO_COOLDOWN_KEY, true, max(1, (int) config('services.trading.paper_market.ethereum.geckoterminal_cooldown_seconds', 60)));
+                                }
+                                $result['failures']++;
+                                $geckoRateLimited = str_contains($exception->getMessage(), '429');
+                                $result['rate_limited'] = $result['rate_limited'] || $geckoRateLimited;
+                            }
+                        } finally {
+                            $requestLock->release();
                         }
                     }
-                    $seen = [...$seen, ...$fallbacks[$key]];
+                    $seen = [...$seen, ...($fallbacks[$key] ?? [])];
                     $selected = $this->select($seen, $original, $position);
                     if ($selected !== null || $geckoRateLimited) {
                         break;
@@ -151,7 +236,7 @@ class EthereumPaperMarketData
             /** Retain a rejected mark for diagnostics without claiming simulation eligibility. */
             $diagnostic = $selected ?? (collect($seen)->first(fn (array $pair): bool => $pair['pair_address'] === $original) ?? ($seen[0] ?? null));
             $deliver($position, $diagnostic, $seen, $address === null ? 'invalid_token_identity'
-                : ($cooldownSkipped ? 'geckoterminal_cooldown' : ($timeout() < 1 ? 'provider_work_budget_exhausted' : 'no_valid_provider_observation')));
+                : ($skipReason ?? ($timeout() < 1 ? 'provider_work_budget_exhausted' : 'no_valid_provider_observation')));
         }
 
         return $result;

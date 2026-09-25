@@ -121,6 +121,9 @@ return [
         'paper_market' => [
             'ethereum' => [
                 'geckoterminal_cooldown_seconds' => env('ETHEREUM_PAPER_GECKOTERMINAL_COOLDOWN_SECONDS', 60),
+                'geckoterminal_manual_reservation_seconds' => env('ETHEREUM_PAPER_GECKOTERMINAL_MANUAL_RESERVATION_SECONDS', 30),
+                'geckoterminal_request_lock_seconds' => env('ETHEREUM_PAPER_GECKOTERMINAL_REQUEST_LOCK_SECONDS', 12),
+                'geckoterminal_manual_lock_wait_seconds' => env('ETHEREUM_PAPER_GECKOTERMINAL_MANUAL_LOCK_WAIT_SECONDS', 8),
                 'work_budget_seconds' => env('ETHEREUM_PAPER_WORK_BUDGET_SECONDS', 20),
                 'max_observation_age_seconds' => env('ETHEREUM_PAPER_OBSERVATION_AGE_SECONDS', 60),
                 'require_liquidity' => true,

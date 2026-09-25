@@ -38,7 +38,8 @@ class ClosePaperTradeControllerTest extends TestCase
     {
         Http::preventStrayRequests();
         Http::fake([
-            'api.dexscreener.com/*' => Http::response([$this->ethereumPair()]),
+            'api.dexscreener.com/*' => Http::response([]),
+            'api.geckoterminal.com/*' => Http::response(['data' => $this->geckoPool()]),
         ]);
         $this->mock(TelegramService::class)->shouldReceive('send')->once();
         $wallet = $this->createWallet('ethereum');
@@ -64,7 +65,7 @@ class ClosePaperTradeControllerTest extends TestCase
         $this->assertNull($event['estimated_executable_fill']);
         $this->assertSame('observed_mark_without_slippage_or_depth', $event['fill_model']);
         $this->assertSame('provider_market_cap', $event['market_observation']['valuation_source']);
-        $this->assertSame('dexscreener', $event['market_observation']['provider']);
+        $this->assertSame('geckoterminal', $event['market_observation']['provider']);
         $this->assertSame(self::POOL, $event['market_observation']['pair_address']);
         $this->assertEqualsWithDelta(50_000.0, (float) $event['market_observation']['liquidity_usd'], 0.000001);
         $this->assertTrue($event['market_observation']['simulation_allowed']);
@@ -72,7 +73,7 @@ class ClosePaperTradeControllerTest extends TestCase
         $this->assertSame(5.1, $wallet->available_balance_sol);
         $this->assertSame(0.0, $wallet->invested_balance_sol);
         $this->assertSame(0.1, $wallet->realized_pnl_sol);
-        Http::assertSentCount(1);
+        Http::assertSentCount(2);
     }
 
     public function test_unavailable_providers_leave_position_and_wallet_unchanged(): void
@@ -110,7 +111,7 @@ class ClosePaperTradeControllerTest extends TestCase
         $wallet = $this->createWallet('ethereum');
         $position = $this->createEthereumPosition();
         $this->mock(EthereumPaperMarketData::class)
-            ->shouldReceive('fetch')
+            ->shouldReceive('fetchForManualClose')
             ->once()
             ->andReturn($this->marketBatch($position, [
                 ...$this->freshMarketData(),

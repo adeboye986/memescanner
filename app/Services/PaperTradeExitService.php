@@ -167,7 +167,7 @@ class PaperTradeExitService
     {
         try {
             if ($position->chain === Chain::Ethereum) {
-                $batch = $this->ethereumPaperMarket->fetch([$position]);
+                $batch = $this->ethereumPaperMarket->fetchForManualClose([$position]);
                 $marketData = $batch['observations'][$position->getKey()] ?? [
                     'available' => false,
                     'reason' => 'provider_observation_missing',
