@@ -1,0 +1,76 @@
+name: Trading Engine
+
+on:
+  pull_request:
+    paths:
+      - "trading-engine/**"
+      - ".github/workflows/trading-engine.yml"
+  push:
+    branches:
+      - "feature/live-wallet-connection"
+    paths:
+      - "trading-engine/**"
+      - ".github/workflows/trading-engine.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-engine-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_DB: trading_engine_test
+          POSTGRES_USER: trading_engine
+          POSTGRES_PASSWORD: test_only_password
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U trading_engine -d trading_engine_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:8.2.1-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+
+    defaults:
+      run:
+        working-directory: trading-engine
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://trading_engine:test_only_password@127.0.0.1:5433/trading_engine_test
+      REDIS_URL: redis://127.0.0.1:6380
+      REDIS_PREFIX: meme-scanner:engine:ci
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.21.0
+
+      - name: Enable pinned pnpm
+        run: corepack enable && corepack prepare pnpm@12.6.0 --activate
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test

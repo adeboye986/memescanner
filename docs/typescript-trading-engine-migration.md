@@ -17,20 +17,24 @@ It is not yet a complete multi-chain live trading engine:
 - Ethereum has both a manual swap path and a safer opportunity-linked confirm-first path. The latter creates `LivePosition` only after a confirmed receipt and then performs inventory accounting. It still has no live sell/close state machine, ongoing valuation, stop-loss/protection execution, or customer-facing live portfolio/history.
 - PAPER supports stop loss and two protection floors, but exits the full position. There are no partial take-profit exits and no independently configurable trailing-stop algorithm. The historical `trailing_stop_hit` label is reused for protected-floor exits.
 - Token discovery and qualification exist for Solana and Ethereum. BNB Chain and Base do not appear in `app/Chain.php`, adapters, routes, migrations, or tests.
-- Copy trading is absent. Subscription/billing code is also absent, although subscriptions are an appropriate long-term Laravel responsibility.
-- `app/Services/TokenScannerService.php` is empty. Actual scanning lives in `ScanNewTokens`, `ScanMomentumTokens`, `FollowUpTokens`, and `EthereumScannerService`.
+- Mobile wallet interoperability, unattended LIVE authorization, copy trading, and subscriptions are absent. `app/Services/TokenScannerService.php` is empty; actual scanning lives in commands and chain-specific services.
 
-The project context states that current users and PAPER positions are test data and that no LIVE transaction has completed in production. That materially lowers data-migration risk: the preferred cutover is a fresh, redesigned trading schema plus deterministic test fixtures, unless the team explicitly chooses to retain selected PAPER data for comparison. Existing behavior still needs characterization so useful safeguards are not discarded.
+The following architecture decisions are settled:
 
-The recommended destination is a **strangler migration**, not a rewrite cutover:
+1. Laravel remains the control plane on HostGator and continues using its existing SQLite database. No whole-application PostgreSQL migration is required.
+2. The TypeScript engine lives at `trading-engine/` in this repository, owns a separate PostgreSQL database, and is independently buildable/deployable from Laravel.
+3. The engine initially runs only on the developer's MacBook for bounded development and tests. The production Laravel site must not depend on the laptop being online.
+4. Hostinger Business Web Hosting is a candidate deployment target for the TypeScript HTTP API. The account already has an unrelated Solana/Ethereum validator, `validator.tandafrica.com`, running as a Node.js 22.x application and reports one of five Node.js application slots in use. That proves Node.js web application availability for this account, not PostgreSQL, Redis, background-worker, or scheduler capability. The validator is outside this migration and must remain untouched.
+5. Laravel and the engine communicate only through authenticated, versioned APIs and replay-protected events/webhooks. They do not read or write each other's database.
+6. The engine is the sole writer of engine-owned market observations, opportunities, PAPER ledgers, orders, fills, transaction attempts, LIVE positions, and trading audit events.
+7. SIGNAL, CONFIRM, and AUTO are first-class entry modes across PAPER and LIVE. PAPER AUTO is delivered before LIVE AUTO. A stored LIVE/AUTO preference never enables unattended execution by itself.
+8. Desktop and mobile wallets are supported. Mobile flows cannot depend on desktop extensions, and wallet connection authentication remains separate from transaction authorization.
+9. Existing PAPER data is not migrated. The engine starts with fresh test wallets, balances, and positions; Laravel's SQLite data and tests remain untouched as references.
+10. No server-side private-key custody or delegated execution is implemented in the initial phases. Existing confirm-first intent binding, signing claims, rejection handling, and receipt reconciliation remain the safety baseline.
 
-1. Keep Laravel as the control plane: identity, sessions, onboarding, future subscriptions, settings/admin UX, wallet-connection UX, notifications, and browser-facing BFF endpoints.
-2. Make one TypeScript service the sole writer for market observations, opportunities, strategy decisions, PAPER ledgers, orders, transaction attempts, receipts, positions, and trading audit events.
-3. Begin with read-only shadow scanning, then move PAPER, then move the existing manual LIVE paths, and only then enable opportunity-driven LIVE chain by chain.
-4. Preserve browser/non-custodial signing. The engine may construct and verify an exact transaction intent, but it must not receive seed phrases or private keys.
-5. Use PostgreSQL constraints, append-only ledgers, explicit idempotency keys, transactional outbox/inbox tables, and receipt-driven finality. Redis/BullMQ coordinates work but is never the financial source of truth.
+The recommended migration remains incremental: establish a local-only engine foundation, port scanning in read-only shadow mode, implement fresh PAPER portfolios including PAPER AUTO, migrate confirm-first LIVE on test networks, then select and audit a bounded authorization model before implementing unattended LIVE AUTO. Hostinger Business may later host the API in a new application slot, with external PostgreSQL and Redis, but continuous scanning, automatic monitoring, reconciliation, notifications, or unattended execution remain unavailable until independently deployable worker and scheduler processes are proven reliable on Hostinger or another affordable non-VPS service. No VPS purchase is authorized.
 
-The largest migration risk is not TypeScript itself. It is accidentally creating two writers or treating a quote, prepared transaction, browser broadcast, or queue acknowledgement as a fill. The cutover must maintain a single writer per aggregate and retain the repository's existing rule that only authoritative chain evidence can confirm LIVE execution.
+The largest migration risk is accidentally creating two writers or treating a quote, prepared transaction, wallet return, browser broadcast, or queue acknowledgement as a fill. The cutover must maintain one authoritative writer per aggregate and retain the repository's existing rule that only authoritative chain evidence can confirm LIVE execution.
 
 ## 2. Existing functionality inventory
 
@@ -62,6 +66,8 @@ The largest migration risk is not TypeScript itself. It is accidentally creating
 | Ethereum acquired-inventory accounting | Implemented but operationally gated | `EthereumInventoryAccounting` and related eligibility/evidence/review services require reviewed token bytecode eligibility, finality, receipt/transfer evidence, and support reconsideration. |
 | Wallet connection proof | Implemented | Solana and Ethereum connection services use expiring one-use challenges. Proof binds domain, user, chain, wallet, nonce, and timestamps and explicitly is not transaction authorization. |
 | Browser wallet signing | Implemented | `resources/js/solana-wallet.js`, `ethereum-wallet.js`, and `ethereum-opportunity.js` keep transaction signing/broadcast in the wallet/browser. |
+| Mobile wallet standards | Absent/not generalized | No WalletConnect/Reown, EIP-6963, Solana Mobile Wallet Adapter, or generalized mobile return/recovery integration was found. Current flows are browser JavaScript and wallet-specific behavior. |
+| Unattended LIVE authorization | Absent | No delegated smart-account/session permission, on-chain strategy vault, Solana delegate/program authority, or approved server signer exists. Browser wallet confirmation cannot provide LIVE AUTO. |
 | Telegram control/notifications | Implemented | Telegram bot linking, webhook routing, menus, callback/command handlers, queue job, and per-user notification routing exist. LIVE approval is intentionally web-only because Telegram approval does not supply the required execution input. |
 | Multi-user isolation | Implemented in major current flows | User ownership is present across preferences, opportunities, PAPER positions/wallets, wallets, attempts, and tests such as `MultiUserTradingIsolationTest`. |
 | Multi-chain architecture | Partial | Solana and Ethereum are explicit enum cases with a small adapter layer. Many services, commands, schemas, and UI paths still branch directly by chain or retain SOL-named columns. |
@@ -99,6 +105,8 @@ The Ethereum path delegates to `EthereumScannerService`, using `GeckoTerminalSer
 - AUTO: execute through `TradeExecutionManager`.
 
 `UserTradingPreferenceService` constrains LIVE to CONFIRM. Generic LIVE AUTO is also prevented by `LiveTradeExecutor`. PAPER AUTO uses `PaperTradeExecutor` and `PaperTradeEntryService`.
+
+That is the current implementation, not the final product boundary. The target model retains SIGNAL, CONFIRM, and AUTO for both PAPER and LIVE, with separate capability gates. PAPER AUTO is implemented and soaked before LIVE AUTO; LIVE AUTO remains disabled until a separately approved unattended-authorization design exists.
 
 The boolean `trading_enabled` is persisted and enforced, but no customer-facing route/controller dedicated to toggling it was found. That control should be made explicit before the engine can rely on it as a user kill switch.
 
@@ -214,8 +222,9 @@ The three ownership classifications are:
 | Admin configuration UI and audits | Own/write configuration intent | Validate/activate trading config version | Secrets belong in a secret manager/environment, not ordinary settings records. |
 | User trading preferences and strategy editing | Own user-facing intent | Own immutable execution snapshot and effective policy | Each command records preference/config versions used. |
 | User kill switch request | Own UI/API authorization | Own enforced trading halt state | Engine acknowledgement must be observable; a Laravel flag alone is insufficient. |
-| Wallet connection UX and proof | Own initially | Consume immutable wallet account ID; may later own chain-proof verification | Connection proof never authorizes a transaction. |
-| Browser transaction signing | Serve client/UI | Construct intent and verify exact signed/broadcast transaction | Neither server stores wallet private keys. |
+| Wallet connection UX and proof | Own initially across desktop/mobile | Consume immutable wallet account ID; may later own chain-proof verification | Connection proof never authorizes a transaction. |
+| Interactive wallet signing | Serve desktop/mobile transport, return, and recovery UI | Construct intent and verify exact signed/broadcast transaction | Extensions, QR sessions, MWA, or deep links remain per-transaction authorization; neither server stores private keys. |
+| Unattended LIVE authorization | Expose consent/revocation UX after approval | Own scoped authorization evaluation/execution | Not implemented initially; requires a separate chain-specific ADR and capability gate. |
 | Market discovery and enrichment | Display/query only | Own/write | Providers are called by engine workers after scanner cutover. |
 | Token security assessment | Display/query only | Own/write | LIVE fails closed when required checks are missing/stale. |
 | Opportunity qualification/state | Display and authorized user commands | Own/write | Laravel must not update opportunity status tables directly. |
@@ -232,7 +241,7 @@ The three ownership classifications are:
 Recommended browser request path:
 
 ```text
-Browser/wallet -> Laravel session + CSRF -> Laravel BFF
+Desktop or mobile wallet -> Laravel session + CSRF -> Laravel BFF
 Laravel BFF -> short-lived signed internal command -> TypeScript API
 TypeScript API -> idempotent command + database transaction
 TypeScript API -> prepared signing payload -> Laravel BFF -> browser wallet
@@ -251,31 +260,47 @@ Recommended baseline as of the audit date:
 
 | Layer | Choice | Reason |
 |---|---|---|
-| Runtime | Node.js 24 LTS, pinned to an exact patched image | Node 24 is the current LTS line; production should remain on an LTS runtime. See the official [Node.js release schedule](https://nodejs.org/en/about/previous-releases). |
-| Language | TypeScript 6.x, strict ESM | Stable, broadly compatible compiler API/tooling during the TypeScript 7 transition. Re-evaluate TypeScript 7 after all lint/test/schema tools support its native compiler/API. See the official [TypeScript 7 transition notes](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/). |
-| HTTP API | Fastify with TypeBox/JSON Schema request and response contracts | Fastify natively supports schema validation/serialization and TypeScript type providers. Schemas are trusted source code, never accepted from users. See [Fastify validation](https://fastify.dev/docs/latest/Reference/Validation-and-Serialization/). |
-| Database | PostgreSQL; Kysely plus `pg` | PostgreSQL supplies transactions, row locks, constraints, advisory locks, JSONB, and reliable numeric types. Kysely stays close to explicit SQL, supports strict typing and transactions, and does not hide lock-sensitive behavior. See [Kysely getting started](https://kysely.dev/docs/getting-started). |
-| Queue/schedules | Redis + BullMQ | Supports delayed/repeatable jobs, concurrency, recovery, and horizontal workers. Its worst case is at-least-once, so database idempotency remains mandatory. See [BullMQ semantics](https://docs.bullmq.io/) and [idempotent jobs](https://docs.bullmq.io/patterns/idempotent-jobs). |
-| Runtime schemas | TypeBox/JSON Schema for transport; explicit domain constructors for invariants | One schema can drive Fastify validation, OpenAPI, and generated Laravel/client types. Transport validation is not a substitute for domain validation. |
-| Logging | Pino structured JSON with secret redaction | Fastify integration, low overhead, stable correlation fields, machine-queryable logs. |
-| Telemetry | OpenTelemetry traces and metrics; export via OTLP | Propagates scan/order/receipt correlation across Laravel, engine, Redis, PostgreSQL, RPC, and provider calls. JavaScript traces and metrics are stable according to [OpenTelemetry JS](https://opentelemetry.io/docs/languages/js/). |
-| Tests | Vitest, Testcontainers PostgreSQL/Redis, HTTP/provider contract fixtures, property-based tests where valuable | Unit tests alone cannot validate row locks, constraints, outbox claims, or duplicate delivery. |
-| Packaging | `pnpm` workspace with a committed lockfile | Separates deployable apps and shared contracts without creating unrelated repositories initially. |
-| Deployment | Separate API, worker, and scheduler/dispatcher process roles from one immutable image | Allows independent scaling and least-privilege DB credentials while shipping one versioned artifact. |
+| Runtime | Node.js 24 LTS, pinned to an exact patched version/image | Node 24 is the current LTS line and supports local macOS development plus a later Linux deployment. See the official [Node.js release schedule](https://nodejs.org/en/about/previous-releases). |
+| Language | TypeScript 6.x, strict ESM | Stable tooling during the TypeScript 7 transition. Re-evaluate TypeScript 7 after the selected lint/schema/test stack supports it. See the official [TypeScript 7 transition notes](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/). |
+| HTTP API | Fastify with TypeBox/JSON Schema request and response contracts | Fastify supports schema validation/serialization and TypeScript type providers. Schemas are trusted application code, never user-provided. See [Fastify validation](https://fastify.dev/docs/latest/Reference/Validation-and-Serialization/). |
+| Engine database | Dedicated PostgreSQL; Kysely plus `pg` | The engine needs transactions, row locks, constraints, advisory locks, JSONB, and fixed-precision numeric types. Kysely stays close to explicit SQL and lock-sensitive behavior. Laravel remains on SQLite. See [Kysely getting started](https://kysely.dev/docs/getting-started). |
+| Queue/schedules | Redis-backed BullMQ; external Redis in production | Supports delayed/repeatable jobs and workers. Worst-case delivery is at-least-once, so PostgreSQL idempotency remains mandatory. Redis runs locally in Docker for development and may be an external managed service in production. Do not assume HostGator or Hostinger Business provides installable/local Redis. See [BullMQ semantics](https://docs.bullmq.io/) and [idempotent jobs](https://docs.bullmq.io/patterns/idempotent-jobs). |
+| Runtime schemas | TypeBox/JSON Schema for transport; explicit domain constructors for invariants | One schema can drive Fastify validation, OpenAPI, and Laravel/client contract tests. Transport validation is not domain validation. |
+| Logging | Pino structured JSON with secret redaction | Low-overhead machine-queryable logs with stable correlation fields. |
+| Telemetry | OpenTelemetry traces and metrics; local console/collector first, OTLP later | Preserves the same instrumentation when the engine moves from the MacBook to always-on hosting. See [OpenTelemetry JS](https://opentelemetry.io/docs/languages/js/). |
+| Tests | Vitest, Testcontainers PostgreSQL/Redis, provider fixtures, HTTP/event contract tests, property-based tests where useful | Real PostgreSQL/Redis integration tests are required for locks, constraints, outbox claims, and duplicate delivery. |
+| Packaging | Self-contained `pnpm` workspace rooted at `trading-engine/` with its own lockfile | Keeps one Git repository while allowing the engine to build, test, and deploy without changing Laravel's Composer or Vite lifecycle. |
+| Deployment | Local Docker Compose initially; separate API, worker, and scheduler entry points/artifacts for hosting | Hostinger Business is a candidate for the API. Workers and the scheduler may require a different affordable managed service if persistent independent processes are unsupported. No VPS is assumed or authorized. |
 
-Do not use Redis balances, in-memory position state, JavaScript floating-point values, or BullMQ job completion as financial truth.
+Do not use Redis balances, in-memory position state, JavaScript floating-point values, BullMQ completion, or Laravel's SQLite rows as engine financial truth.
 
-### 4.2 Suggested repository layout
+### 4.2 Monorepo and deployability
 
-Place the engine beside Laravel in the same repository initially so contracts and characterization fixtures can change atomically:
+The settled repository location is `trading-engine/` inside the existing Meme Scanner repository. Preserve the existing Laravel directory structure and root Composer/Vite setup. The engine owns its own `package.json`, `pnpm-lock.yaml`, TypeScript configuration, environment template, Dockerfile, Compose file, migrations, tests, and build output.
+
+Independent deployment means:
+
+- Laravel can be built and deployed to HostGator without installing engine dependencies.
+- The engine can be built from `trading-engine/` without running Composer or changing Laravel's SQLite database.
+- CI uses path-filtered Laravel and engine jobs; a change touching shared API schemas runs both contract suites.
+- Runtime configuration contains URLs and credentials only. No environment-specific branch or HostGator assumption appears in domain code.
+- The engine supplies separate `api`, `worker`, and `scheduler` entry points and start commands. Each role is independently deployable, can use the same versioned code artifact, and communicates through external PostgreSQL/Redis rather than local process memory.
+- A Hostinger API deployment must use a new Node.js application slot and its own domain, build settings, environment variables, and deployment lifecycle. It must not modify, redeploy, restart, or reuse `validator.tandafrica.com`.
+
+### 4.3 Suggested repository layout
 
 ```text
 trading-engine/
   package.json
   pnpm-lock.yaml
+  pnpm-workspace.yaml
   tsconfig.json
+  tsconfig.build.json
   eslint.config.js
   vitest.config.ts
+  Dockerfile
+  compose.yaml
+  .env.example
   apps/
     api/
       src/main.ts
@@ -340,9 +365,9 @@ trading-engine/
     fixtures/
 ```
 
-Domain code must not import Fastify, BullMQ, a provider SDK, or concrete database classes. Chain and provider implementations satisfy application ports. This keeps qualification/risk/strategy state machines testable with deterministic clocks and recorded fixtures.
+Domain code must not import Fastify, BullMQ, a provider SDK, or concrete database classes. Chain and provider implementations satisfy application ports so the core stays blockchain-independent and testable with deterministic clocks and recorded fixtures.
 
-### 4.3 Core domain aggregates
+### 4.4 Core domain aggregates
 
 Use explicit aggregates and state machines rather than one generic JSON status record:
 
@@ -350,8 +375,8 @@ Use explicit aggregates and state machines rather than one generic JSON status r
 - `ScanRun` and `MarketObservation`: provider calls, observed-at/received-at, freshness, raw-payload digest, normalized facts.
 - `SecurityAssessment`: provider, network, policy version, findings, freshness, fail-open/fail-closed applicability.
 - `Opportunity`: qualification snapshot, user/strategy/policy version, state transitions.
-- `ExecutionIntent`: PAPER or LIVE, actor, amount, limits, confirmation mode, idempotency key.
-- `Order` and `ExecutionAttempt`: quote, reservation, signing, broadcast, receipt, terminal failure.
+- `ExecutionIntent`: PAPER or LIVE, SIGNAL/CONFIRM/AUTO, actor, amount, limits, authorization type, idempotency key.
+- `Order` and `ExecutionAttempt`: quote, reservation, signing/authorization, broadcast, receipt, terminal failure.
 - `Fill`: simulated or chain-proven quantity, price, fee, provenance.
 - `Position`: inventory lots and lifecycle derived from fills, not merely a status flag.
 - `LedgerAccount`, `LedgerTransaction`, and `LedgerEntry`: append-only double-entry balances.
@@ -360,79 +385,111 @@ Use explicit aggregates and state machines rather than one generic JSON status r
 
 PAPER and LIVE share the same opportunity, strategy, risk, order, fill, and position vocabulary. They use different execution adapters and clearly discriminated evidence. A `SimulatedFill` can never satisfy a LIVE accounting transition.
 
+### 4.5 Initial hosting model and portability
+
+The MacBook is a development/test host, not a production worker. Laravel on HostGator continues operating independently until an always-on engine deployment is affordable and ready. Do not expose the laptop as a permanent public dependency or point production callbacks at a temporary tunnel.
+
+Hostinger Business Web Hosting is now the preferred candidate to evaluate for the public TypeScript API because the account already runs the Solana/Ethereum validator as a Node.js 22.x web application and has unused application slots. Hostinger's current documentation lists Fastify and Node.js 22.x/24.x support for Business Web Hosting and documents connections to external databases. Those facts do not establish that the plan can run an independent persistent BullMQ worker or scheduler, provide local PostgreSQL/Redis, or meet trading-engine uptime and restart requirements. See [Hostinger's Node.js deployment guide](https://www.hostinger.com/support/how-to-deploy-a-nodejs-website-in-hostinger/) and [Node.js version guide](https://www.hostinger.com/support/how-to-select-the-node-js-version-for-your-application/).
+
+The candidate production topology is deliberately split:
+
+| Role | Candidate placement | Requirement before production use |
+|---|---|---|
+| `api` | New Hostinger Node.js web application slot | Verify monorepo subdirectory build, selected Node version, Fastify start command, TLS/custom domain, environment secrets, outbound connectivity, logs, restart behavior, resource limits, and health checks. |
+| PostgreSQL | External managed PostgreSQL | Verify TLS, connection limits/pooling, backups, restore testing, region/latency, storage growth, and credentials independent from Hostinger. Do not install or colocate it on Hostinger Business. |
+| Redis | External managed Redis | Verify TLS, eviction policy, persistence expectations, latency, connection limits, and recovery behavior. Redis remains coordination infrastructure, never financial truth. |
+| `worker` | Separate always-on process on a verified affordable service; Hostinger only if explicitly proven | Verify that it remains running independently of HTTP traffic/deploys, supports graceful shutdown/restart, and can reach external PostgreSQL/Redis and providers. |
+| `scheduler` | Separate singleton/fenced process on a verified affordable service; Hostinger only if explicitly proven | Verify persistent scheduling, clock behavior, deployment/restart semantics, and single-active-instance fencing. |
+
+Do not consume, reconfigure, or test against the existing Solana/Ethereum validator application or its domain. A hosting proof uses a new disposable application slot and synthetic Phase 1 endpoints only. It must be reversible and must not introduce production Laravel dependence while the topology is incomplete.
+
+| Capability | Reliable during bounded local sessions | Requires always-on hosting for product operation |
+|---|---|---|
+| Type checking, linting, unit/contract/property tests | Yes | No |
+| PostgreSQL/Redis integration, crash/retry, outbox/inbox, migration tests | Yes, with local containers | No |
+| Recorded provider fixtures and deterministic scan qualification | Yes | No |
+| Live provider/RPC smoke tests and one-shot shadow scans | Yes, while the Mac is awake and connected | Continuous scanning, provider budgeting, and timely signals do |
+| Fresh PAPER wallets, manual PAPER trades, bounded PAPER AUTO simulations | Yes | Continuous position monitoring, SL/TP, and unattended PAPER AUTO do |
+| Desktop wallet and mobile wallet connect/sign/reject/return flows | Yes, using localhost/LAN plus a temporary HTTPS development URL where mobile wallets require it | Stable production redirect/universal-link domains do |
+| Devnet/testnet confirm-first LIVE preparation and reconciliation | Yes, explicitly initiated and supervised | Mainnet operation, durable reconciliation, and recovery while the user is offline do |
+| Telegram/event delivery tests | Yes with fixtures or a development webhook | Timely production alerts and durable retries do |
+| LIVE AUTO | No | Yes, plus an approved delegated authorization design, audits, monitoring, and incident response |
+
+Future hosting must support TLS ingress for the API, outbound HTTPS/WebSocket access, encrypted secrets, logs, and independently supervised API/worker/scheduler roles. PostgreSQL and Redis may be external managed services and must be configurable entirely by URLs/credentials. The roles may be split across Hostinger and another affordable managed platform without redesigning the domain. No plan depends on purchasing a VPS.
+
 ## 5. Database ownership and integration
 
-### 5.1 Recommended topology
+### 5.1 Settled topology
 
-Use one PostgreSQL cluster initially, with separate schemas and credentials:
+Laravel keeps its existing SQLite database on HostGator. The TypeScript engine owns a separate PostgreSQL database: a local container during development, then an external persistent PostgreSQL service reachable by every deployed engine role. It is not assumed to run on Hostinger Business. There is no requirement to migrate Laravel's users, sessions, settings, Telegram records, or other control-plane tables to PostgreSQL.
 
-- `control.*`: Laravel-owned identity, settings, future subscriptions, Telegram connections, and UI audit.
-- `trading.*`: engine-owned market, opportunity, order, ledger, position, risk, transaction, and outbox data.
-- `read_model.*`: projections written by the engine or a dedicated projector and readable by Laravel.
+The databases are deliberately isolated:
 
-Laravel migrations own only `control.*`; engine migrations own only `trading.*` and its projections. Database roles enforce this boundary:
+- Laravel never opens a PostgreSQL connection to query or repair engine tables.
+- The engine never opens Laravel's SQLite file or assumes filesystem/network access to HostGator storage.
+- No cross-database foreign keys or shared migration ownership exist.
+- Laravel sends authenticated, idempotent commands and queries to the engine API.
+- The engine delivers versioned events from its PostgreSQL outbox to an authenticated Laravel webhook. Laravel records event IDs in an SQLite inbox before updating control-plane projections or sending notifications.
+- If the engine is offline, Laravel shows engine state as unavailable/stale. It must not fall back to mutating legacy SQLite trading balances, positions, orders, fills, or attempts.
 
-- Laravel web role: read/write `control.*`, read-only approved `read_model.*`, no write access to `trading.*`.
-- Engine API/worker role: read required identity/config views, write `trading.*`, no mutation of Laravel identity/subscription tables.
-- Migration roles: DDL rights only for their owned schema.
-
-This delivers low operational overhead without shared writes. Separate physical databases remain a later option once event contracts and projections make the split safe.
+This physical separation enforces the architectural boundary more reliably than conventions inside a shared cluster.
 
 ### 5.2 Source-of-truth mapping
 
-| Current Laravel tables | Target owner | Migration disposition |
+| Data | Authoritative store/owner | Disposition |
 |---|---|---|
-| `users`, auth/session tables | Laravel | Keep. Publish only stable user/tenant IDs and entitlement facts. |
-| Future subscription/billing tables | Laravel | Keep in control schema; engine consumes versioned entitlements. |
-| `application_settings`, `setting_audits` | Laravel for intent; engine for active policy snapshot | Keep UI/audit. Engine stores the exact activated risk/provider config version. |
-| `user_trading_preferences`, `paper_strategy_settings` | Laravel for editable preference; engine for applied snapshot | Version changes and synchronize via idempotent commands/events. |
-| `connected_wallets`, `wallet_connection_challenges` | Laravel initially | Keep connection proof. Engine stores an immutable reference plus canonical network/account snapshot for each order. |
-| `token_scans`, `token_scan_histories` | Engine | Backfill normalized observations and retain legacy ID mapping. |
-| `trade_opportunities`, `trade_opportunity_events` | Engine | Backfill aggregate and ordered events; engine becomes sole writer at cutover. |
-| `paper_wallets`, `paper_positions`, `paper_position_snapshots` | Engine | Convert balances to ledger entries and positions/fills; reconcile totals before cutover. |
-| `solana_swap_attempts`, `ethereum_swap_attempts` | Engine | Preserve encrypted intent/evidence and state history; do not re-submit migrated attempts. |
-| `live_positions` and Ethereum accounting tables | Engine | Preserve immutable chain evidence, review identity, code hashes, and eligibility versions. |
-| `system_activities` | Split | Control-plane activity remains Laravel; trading operations become structured engine events/telemetry. |
-| Laravel `jobs`/`cache` | Per service | Laravel keeps its queues. Engine gets separate Redis namespaces and database idempotency records. |
+| `users`, authentication, sessions, onboarding | Laravel SQLite | Keep unchanged. Engine receives only a stable Laravel user reference and signed claims. |
+| Future subscriptions/billing/entitlements | Laravel SQLite | Keep in Laravel; synchronize versioned entitlement facts through the API. |
+| `application_settings`, `setting_audits` | Laravel SQLite for editable control-plane intent | Engine stores the exact activated trading-policy snapshot/version in PostgreSQL. |
+| `user_trading_preferences`, `paper_strategy_settings` | Laravel SQLite for UI intent | Synchronize with an idempotent versioned command; engine snapshots applied values with every decision/order. |
+| `connected_wallets`, `wallet_connection_challenges` | Laravel SQLite initially | Connection authentication remains a Laravel concern. Engine orders store the referenced canonical account/network and authorization evidence. |
+| Existing `token_scans`, histories, opportunities, PAPER tables | Legacy Laravel SQLite | Do not migrate. Preserve untouched as test/reference data; stop writing a workflow only when its engine replacement is authoritative. |
+| Existing Solana/Ethereum attempts, `live_positions`, accounting tables | Legacy Laravel SQLite | Do not migrate or resubmit. Preserve as reference/audit test data; there are no completed production LIVE transactions to import. |
+| New observations, opportunities, PAPER wallets/ledger/positions | Engine PostgreSQL | Create fresh. Engine is the sole writer. |
+| New LIVE intents, orders, attempts, receipts, fills, positions, accounting evidence | Engine PostgreSQL | Engine is the sole writer when those capabilities are enabled. |
+| Notifications and dashboard projections | Laravel SQLite/cache as derived control-plane data | Updated only from authenticated engine queries/events; never authoritative for trading state. |
+| Laravel jobs/cache | Laravel infrastructure | Continue supporting Laravel-only work on HostGator. |
+| Engine jobs/leases/outbox/inbox | External engine PostgreSQL and Redis | Stay entirely within engine infrastructure; neither HostGator nor Hostinger Business is assumed to provide local databases, Redis, or persistent engine workers. |
 
 ### 5.3 Trading schema requirements
 
-- Use UUIDv7/ULID identifiers generated by the authoritative service; retain `legacy_source` and `legacy_id` during migration.
+- Use UUIDv7/ULID identifiers generated by the engine. Store a stable `control_plane_user_id` string rather than a database foreign key to Laravel SQLite.
 - Use `timestamptz` in UTC and store both `observed_at` and `received_at` for provider facts.
 - Store token/native quantities as base-unit integers in `numeric(78,0)` (or a justified tighter bound) plus decimals. Never use binary floating point for money, amounts, prices, fees, balances, or P&L.
 - Store prices/rates as fixed-point numerics with explicit scale and quote currency.
-- Enforce unique idempotency keys for commands, orders, provider submissions, transaction hashes by network, and consumer events.
+- Enforce unique idempotency keys for commands, orders, provider submissions, transaction hashes by network, and consumed events.
 - Enforce legal states with check constraints plus transition code. Add an optimistic `version` column to aggregates.
-- Use `SELECT ... FOR UPDATE` or serializable transactions for reservation and ledger settlement. Do provider/RPC calls outside long database transactions, then re-lock and revalidate version/lease before publication.
+- Use `SELECT ... FOR UPDATE` or serializable transactions for reservation and ledger settlement. Perform provider/RPC calls outside long transactions, then re-lock and revalidate version/lease before publication.
 - Make ledger entries append-only and balanced. Corrections are compensating transactions, never updates to historical entries.
 - Preserve raw provider/chain evidence by encrypted object storage or compressed JSONB with a digest, retention policy, and access audit. Normalized columns remain queryable.
-- Replace ambiguous SOL-specific column names with chain-neutral base-unit names during conversion, not via silent reinterpretation.
+- Use chain-neutral base-unit names from the first engine migration. No legacy SOL-named financial columns are imported.
 
 ### 5.4 Outbox, inbox, and consistency
 
-Every state transition that must notify another process inserts an outbox row in the same PostgreSQL transaction. A dispatcher claims unpublished rows with `FOR UPDATE SKIP LOCKED`, publishes them, and records delivery metadata. Consumers insert `event_id` into an inbox table in the same transaction as their projection/update; a duplicate event becomes a no-op.
+Every engine transition that must notify Laravel inserts an outbox row in the same PostgreSQL transaction. A dispatcher claims unpublished rows with `FOR UPDATE SKIP LOCKED` and POSTs them to the Laravel event endpoint over HTTPS. Laravel verifies the signature/timestamp, inserts `event_id` into an SQLite inbox in the same transaction as its projection update, and treats a duplicate as success/no-op.
 
-Redis/BullMQ delivery is at-least-once in failure scenarios. Therefore:
+Commands from Laravel carry an idempotency key persisted in the engine command inbox before handling. Engine-to-Laravel delivery uses a signed webhook because the two applications do not share Redis or a database. Redis/BullMQ is internal engine coordination only and remains at-least-once in failure scenarios:
 
-- BullMQ `jobId`/deduplication reduces duplicate work but is not the idempotency guarantee.
-- Business idempotency is enforced by PostgreSQL unique keys and current aggregate state.
-- Outbox events remain replayable independently of queue retention.
-- Failed events enter an observable retry/dead-letter workflow with manual replay that preserves the original event ID.
+- BullMQ `jobId`/deduplication reduces duplicate work but is not the business guarantee.
+- PostgreSQL unique keys and aggregate state enforce engine idempotency.
+- Laravel's SQLite inbox enforces event-consumer idempotency.
+- Outbox events remain replayable independently of Redis retention.
+- Failed deliveries enter an observable retry/dead-letter workflow and retain the original event ID.
 
-### 5.5 Backfill and cutover method
+### 5.5 Fresh engine data and cutover
 
-Because existing users/PAPER positions are test data and there are no completed production LIVE trades, the recommended default is to create a fresh normalized engine schema, import only reusable deterministic fixtures, and retain a read-only snapshot of the Laravel test dataset for comparison. If the team elects to carry any existing records forward, use this cutover procedure for each aggregate family:
+No existing PAPER wallet, balance, position, snapshot, or trade is imported. No existing LIVE attempt or legacy record is resubmitted. Phase 3 creates fresh test users/references, PAPER wallets, opening ledger transactions, balances, and positions in PostgreSQL through engine APIs or deterministic test fixtures.
 
-1. Define canonical mapping and invariants.
-2. Backfill into engine tables with legacy IDs and source checksums.
-3. Reconcile row counts, balances, open positions, terminal statuses, and evidence hashes.
-4. Shadow-read and compare API projections.
-5. Pause only that workflow's Laravel writer.
-6. Apply a final high-water-mark delta.
-7. Enable the engine writer and Laravel read model.
-8. Retain legacy tables read-only for an agreed rollback/audit window.
+Cut over one workflow at a time:
 
-Never dual-write PAPER balances, order states, or positions from Laravel and the engine. A rollback switches the whole aggregate writer, not individual records.
+1. Capture the PHP behavior as tests/fixtures and define the engine contract.
+2. Build and validate the engine workflow locally against fresh engine data.
+3. Shadow-read or compare results where useful without copying financial state.
+4. Disable the corresponding Laravel writer/schedule only when the engine is hosted and accepted for that workflow.
+5. Switch Laravel to engine commands/projections.
+6. Keep legacy SQLite rows untouched and read-only for reference until a separately approved cleanup task.
+
+Never dual-write balances, order states, fills, attempts, or positions. A rollback switches the whole workflow authority and cannot merge divergent ledgers.
 
 ## 6. APIs and events between Laravel and the engine
 
@@ -440,7 +497,7 @@ Never dual-write PAPER balances, order states, or positions from Laravel and the
 
 Use versioned JSON REST for commands/queries and versioned asynchronous events for facts. Publish OpenAPI for HTTP and JSON Schema/AsyncAPI-compatible definitions for events. Generate PHP DTOs or validate responses in Laravel; do not pass untyped provider payloads through the boundary.
 
-The engine should be on a private network. Authenticate Laravel using mTLS where available plus a rotating service credential. User-scoped calls carry a short-lived Laravel-signed assertion with:
+During local development, Laravel and the engine should normally run on the MacBook together. A temporary authenticated HTTPS tunnel may be used for physical-phone or HostGator-to-development contract tests, but production Laravel must never depend on that tunnel or laptop. Once hosted, prefer private engine ingress where the platform permits it; otherwise expose only TLS endpoints protected by rotating service authentication, strict rate limits, and an IP/origin policy. User-scoped calls carry a short-lived Laravel-signed assertion with:
 
 - `iss`, `aud`, `sub`, tenant/user ID.
 - Authorized command scope and resource IDs.
@@ -519,9 +576,9 @@ Initial event families:
 
 Laravel consumes notification-worthy and UI-projection events. The engine must not call email/Telegram inside a transaction that changes financial state.
 
-### 6.4 Webhook alternative
+### 6.4 Engine-to-Laravel event delivery
 
-If Laravel cannot consume the engine queue directly, the engine may deliver outbox events to a Laravel webhook. Sign `timestamp + method + path + raw_body` with a rotating HMAC key, reject stale timestamps, store event IDs before processing, and retry with backoff. HTTPS is mandatory. A successful HTTP response acknowledges delivery only; it does not redefine the trading result.
+The engine delivers outbox events to a Laravel webhook; Laravel does not consume the engine's Redis queue. Sign `timestamp + method + path + raw_body` with a rotating HMAC key, reject stale timestamps, store event IDs before processing, and retry with backoff. HTTPS is mandatory. A successful HTTP response acknowledges delivery only; it does not redefine the trading result.
 
 ## 7. Multi-chain architecture
 
@@ -587,15 +644,23 @@ A global `supportsLive=true` flag is insufficient. Capabilities should be indepe
 
 ## 8. PAPER and LIVE execution model
 
-### 8.1 Shared decision pipeline
+### 8.1 Shared decision pipeline and mode semantics
 
 ```text
 observation -> security assessment -> qualification -> opportunity
--> user/strategy policy -> risk decision -> execution intent
+-> entry-mode policy -> risk decision -> execution intent
 -> order -> attempt -> fill -> position -> ledger/projection
 ```
 
-The common pipeline ensures SIGNAL, CONFIRM, and AUTO use the same qualification and risk vocabulary. The executor is selected only after an authorized intent exists.
+`execution_mode` (PAPER or LIVE) and `entry_mode` (SIGNAL, CONFIRM, or AUTO) are independent typed dimensions. The same mode names have consistent intent across both execution modes, while capability gates determine whether execution is allowed.
+
+| Entry mode | PAPER | LIVE |
+|---|---|---|
+| SIGNAL | Record and notify; never create a PAPER order automatically | Record and notify; never prepare, sign, or submit a transaction |
+| CONFIRM | User approves the exact PAPER intent before the simulator executes | User approves intent and then explicitly authorizes each wallet signature; existing exact-intent and receipt safeguards apply |
+| AUTO | Engine may execute within strategy/risk/kill-switch limits; implement before LIVE AUTO | Ultimate product requirement, but disabled until an approved delegated authorization mechanism and always-on operations exist |
+
+The engine stores the requested mode and an independent capability decision. `entry_mode=auto` is never itself sufficient authorization. Unsupported combinations return `CAPABILITY_UNAVAILABLE` and cannot create signing material or orders. PAPER AUTO is the first unattended execution milestone.
 
 ### 8.2 PAPER semantics
 
@@ -608,7 +673,7 @@ PAPER must remain incapable of broadcasting a chain transaction. Its adapter sho
 - Support full and partial exits so take-profit tiers can sell a defined quantity rather than only arm a floor.
 - Keep stop loss, take profit, protected floor, and trailing stop as separate typed rules with a deterministic precedence policy.
 
-Migrate the current behavior exactly first: stop loss, protection level 1, protection level 2, later full exit. Introduce partial take-profit and true trailing stops only as separately reviewed behavior changes after parity.
+Use the existing Laravel behavior/tests as migration references, but create fresh engine data. First reproduce stop loss, protection level 1, protection level 2, and later full exit. Introduce partial take-profit and true trailing stops only as separately reviewed, versioned simulator behavior.
 
 ### 8.3 LIVE semantics
 
@@ -618,11 +683,13 @@ LIVE should use a monotonic state machine similar to:
 requested
   -> risk_reserved
   -> quote_prepared
-  -> signing_claimed
-  -> signing_armed
+  -> authorization_pending
   -> submitted
   -> confirmed
   -> inventory_reconciled
+
+interactive authorization detail:
+signing_claimed -> signing_armed -> wallet_approved | wallet_rejected | outcome_unknown
 
 terminal alternatives:
 rejected | expired | cancelled_before_broadcast | failed_on_chain | unsupported
@@ -633,12 +700,12 @@ Rules:
 - Quote/preparation is not a fill.
 - Wallet handoff is not a broadcast.
 - A transaction hash is not success.
-- A successful receipt at the configured finality is the earliest execution confirmation.
+- A successful receipt at configured finality is the earliest execution confirmation.
 - Inventory evidence determines acquired/sold quantity; the quote does not.
 - An armed/uncertain signing claim is never automatically reissued. Reconcile first.
 - A submitted transaction cannot be cancelled in the database as if it never existed.
 - Every provider call has timeout, retry classification, circuit-breaker/budget controls, and redacted evidence.
-- LIVE entry cannot launch until the matching LIVE exit, inventory, and emergency-control path exists for that network/token class.
+- LIVE entry cannot launch until matching LIVE exit, inventory, emergency controls, and authorization exist for that network/token class.
 
 ### 8.4 Strategy and risk controls
 
@@ -647,15 +714,69 @@ Required hierarchy:
 - Platform kill switch.
 - Network kill switch.
 - Execution-mode kill switch.
+- Entry-mode/capability kill switch, including an independent `live_auto_enabled` defaulting false.
 - User kill switch.
 - Strategy kill switch.
 - Provider degradation block.
 
-Risk limits should include per-order amount, daily notional, concurrent exposure, per-asset exposure, per-network exposure, minimum liquidity, maximum price impact/slippage, observation/security freshness, gas ceiling, token eligibility, and cooldown. Decisions store the effective values and policy version.
+Risk limits should include per-order amount, daily notional, concurrent exposure, per-asset exposure, per-network exposure, minimum liquidity, maximum price impact/slippage, observation/security freshness, gas ceiling, token eligibility, authorization scope, and cooldown. Decisions store effective values and policy version.
 
-The kill switch prevents new exposure and new signing payloads. It cannot undo an already broadcast chain transaction, so reconciliation and protective close policy must continue while entry is disabled.
+The kill switch prevents new exposure and new authorization/signing material. It cannot undo an already broadcast transaction, so reconciliation and permitted protective-close processing continue while entry is disabled.
 
-### 8.5 Copy trading
+### 8.5 Desktop and mobile wallet architecture
+
+The wallet layer must support desktop extensions, desktop-to-phone QR sessions, and same-device mobile wallet apps without assuming Chrome extensions:
+
+- **EVM desktop:** discover injected wallets through [EIP-6963](https://eips.ethereum.org/EIPS/eip-6963), with EIP-1193 fallback only where required.
+- **EVM mobile and QR:** use WalletConnect-compatible sessions through Reown AppKit/Universal Connector. Reown supports mobile SDKs and EVM/Solana adapters; project origins/bundle IDs must be allowlisted. See the [Reown documentation index](https://docs.reown.com/llms.txt) and [relay allowlisting guidance](https://docs.reown.com/walletkit/ios/cloud/relay).
+- **EVM connection authentication:** use a nonce-bound [Sign-In with Ethereum](https://eips.ethereum.org/EIPS/eip-4361)-style message where compatible, while retaining Laravel session authentication.
+- **Solana desktop/in-wallet browser:** use Solana Wallet Standard discovery and feature detection. See the [Solana Wallet Standard](https://github.com/anza-xyz/wallet-standard).
+- **Solana Android mobile:** evaluate the official Mobile Wallet Adapter web integration through `@solana-mobile/wallet-standard-mobile`; current documentation describes Android intent-based local connections. See [Mobile Wallet Standard installation](https://github.com/solana-mobile/solana-mobile-doc-site/blob/main/docs/mobile-wallet-adapter/web-installation.md).
+- **Solana cross-platform mobile/iOS:** evaluate Reown's Solana adapter and supported wallets first. Wallet-specific universal/deep links are a fallback only after compatibility tests; do not make a single wallet vendor protocol the core abstraction.
+
+Connection/authentication flow:
+
+1. Laravel creates a short-lived, one-use challenge bound to domain, Laravel user, network, canonical wallet address, nonce, issued time, and expiry.
+2. The web UI selects an injected provider, QR session, universal link, or supported mobile transport and opens the wallet.
+3. The wallet displays and signs the authentication challenge. Merely establishing a WalletConnect/MWA session is not proof of account ownership.
+4. The wallet returns through an allowlisted HTTPS universal link/app link or the WalletConnect session. The UI verifies a cryptographic `state`/request ID before accepting the response.
+5. Laravel validates signature, domain/origin, address, network, nonce, expiry, user ownership, and one-time use, then records the connection.
+
+Transaction authorization flow:
+
+1. Laravel obtains an exact, expiring prepared intent from the engine and stores the attempt/return context before leaving the browser.
+2. The UI sends a sign-only request through the active desktop/mobile transport. The wallet displays network, assets, amounts, router/recipient, slippage, and fee bounds.
+3. On approval, the returned signed payload/hash is sent through Laravel to the engine. The engine re-verifies the exact message/calldata and attempt state before submission or acceptance.
+4. On explicit rejection, the UI reports `wallet_rejected` against the active one-time claim; no transaction is marked submitted.
+5. If the app is backgrounded, killed, redirected incorrectly, or loses connectivity, the result is `outcome_unknown`. The client restores the attempt ID from durable local state, queries the engine and chain/wallet session, and never automatically creates a replacement signature or broadcast.
+6. After a terminal result, clear local return state and disconnect/revoke the wallet session only when the user requests it or policy requires it.
+
+Universal links/app links are preferred to custom schemes because the operating system can bind them to verified domains. Return URLs, WalletConnect project origins, and mobile bundle IDs must be allowlisted. Connection session tokens/topics are transport credentials, not permission to execute arbitrary transactions.
+
+### 8.6 Architectural decision: unattended LIVE authorization
+
+Interactive browser/mobile wallets are sufficient for LIVE CONFIRM but cannot satisfy unattended LIVE AUTO. The engine needs a revocable, narrowly scoped authority that it can exercise while the user is offline. No such authority is implemented yet.
+
+| Approach | Benefits | Risks/limitations | Decision |
+|---|---|---|---|
+| User signs every transaction in an external wallet | Strong user control; preserves current safeguards | Not unattended; mobile return/recovery complexity | Keep for LIVE CONFIRM |
+| Raw server-held EOA/Solana private key, even encrypted | Simple execution model | Custody, key theft, compliance, broad authority, recovery burden | Rejected for current scope |
+| HSM/MPC/managed signing service | Better key isolation and policy options than plaintext keys | Still introduces custody/signing authority, vendor and compliance risk | Do not implement yet; separate future approval required |
+| EVM smart account with expiring session key/delegated permissions | Can restrict target contracts, assets, amounts, time, and revocation; compatible with ERC-4337-style execution | Wallet/network support varies; permission standards and modules require security review | Primary EVM research path; no implementation yet. See [ERC-4337](https://eips.ethereum.org/EIPS/eip-4337) and [ERC-7715](https://eips.ethereum.org/EIPS/eip-7715) |
+| User-funded on-chain strategy vault with a constrained executor | On-chain enforceable policy, withdrawal/revocation, independent of an always-open wallet | Requires audited contracts, deposits, upgrade/governance design, and chain-specific implementations | Strong long-term candidate for EVM and Solana; architecture decision pending |
+| Solana SPL token delegate or purpose-built program/vault | Token delegation can cap an approved amount while the owner retains custody | One delegate per token account, token-specific scope, SOL/gas and arbitrary swap authority need a program design | Solana research path only. See [Solana spend permissions](https://solana.com/docs/payments/advanced-payments/spend-permissions) |
+| Third-party automation/relayer | Can provide uptime, gas, and transaction delivery | Does not create authorization by itself; adds vendor trust and availability dependencies | May execute an approved smart-account/vault policy, never replace it |
+
+Decision for Phases 1–5:
+
+- Model `ExecutionAuthorization` as an explicit capability with type, network, subject, scope, limits, expiry, revocation state, and evidence, but implement only `interactive_wallet`.
+- Implement and soak PAPER AUTO before designing or enabling LIVE AUTO.
+- Keep `live_auto_enabled=false` at platform and network levels regardless of stored user preference.
+- Do not store user private keys, seed phrases, raw session keys, or a broadly authorized signer on the MacBook or HostGator.
+- Preserve confirm-first preparation, one-time signing claims, exact-intent validation, explicit rejection, uncertain-outcome recovery, receipt finality, and inventory accounting.
+- Before LIVE AUTO, approve a separate ADR selecting authorization per chain; complete contract/module audits, revocation and expiry tests, amount/router/asset constraints, key isolation, always-on hosting, monitoring, incident response, and legal/compliance review.
+
+### 8.7 Copy trading
 
 Copy trading is new scope, not a migration of existing code. Do not model it as calling another user's approve endpoint. It requires explicit leader consent, follower opt-in, allocation caps, delay/slippage policy, eligibility filtering, privacy boundaries, revocation, partial-fill rules, and legal/compliance review. Implement it only after the ordinary order/fill/position/ledger model is stable.
 
@@ -681,10 +802,15 @@ Copy trading is new scope, not a migration of existing code. Do not model it as 
 | Tenant leakage | Global scans become per-user opportunities | Authorization on every query/command, tenant keys in constraints, isolation tests, safe caches. |
 | Address collision across EVM networks | Current global address hash uniqueness | Canonical `(network, address)` identity and explicit cross-user linking policy. |
 | Notification side effects affect trades | Telegram/email are integrated with workflows | Outbox after commit; notification is downstream and replayable. |
+| Laptop mistaken for production | Initial engine runs locally and is not continuously available | Production Laravel has no dependency on it; mark continuous features unavailable until always-on hosting exists. |
+| Hostinger capability over-assumption | An existing Solana/Ethereum validator proves web-app hosting, not database, Redis, worker, scheduler, or trading-engine reliability | Treat Hostinger as an API candidate only; require a disposable-slot capability test and external PostgreSQL/Redis before production dependency. |
+| Existing validator collateral change | The account already hosts `validator.tandafrica.com` | Use a separate slot/domain/configuration; prohibit changes, restarts, shared secrets, or deployment coupling to the validator. |
+| Mobile redirect/session confusion | OS may kill/background apps; deep links can be intercepted/misrouted; wallet result can be unknown | Verified universal links, allowlisted origins, state nonce, durable attempt ID, explicit rejection, query-before-retry recovery. |
+| Over-broad unattended authority | LIVE AUTO ultimately requires offline authorization | Default disabled; scoped/revocable on-chain authority, independent capability gates, audits, bounded-loss tests, no raw user keys. |
 
 ### 9.2 Transaction and key safety
 
-- Maintain non-custodial browser signing unless a separately approved custody project changes the threat model.
+- Maintain non-custodial desktop/mobile signing for CONFIRM. Any delegated unattended authority is a separately approved, narrowly scoped capability and is not equivalent to wallet connection.
 - Never request, transmit, store, or log seed phrases/private keys.
 - Encrypt prepared transaction payloads and sensitive provider evidence with envelope encryption; separate encryption keys from application data.
 - Display network, asset, amount, recipient/router, maximum slippage, fee/gas bound, and expiry before wallet handoff.
@@ -693,7 +819,7 @@ Copy trading is new scope, not a migration of existing code. Do not model it as 
 
 ### 9.3 Service and data security
 
-- Private engine ingress; deny public access by default.
+- Prefer private engine ingress on the future host. If public ingress is unavoidable, expose only TLS endpoints protected by service authentication, strict rate limits, and an IP/origin policy.
 - mTLS/service identity and short-lived user assertions; rotate keys with overlapping key IDs.
 - Separate database/Redis credentials per process role and environment.
 - Egress allowlists for RPC/market providers where operationally feasible.
@@ -716,132 +842,269 @@ Minimum metrics:
 
 Alerts should target invariants and stuck states, not only process uptime. Readiness fails when the service cannot safely accept new work; liveness should remain independent so an orchestrator does not restart a healthy process during a provider outage.
 
-## 10. Migration phases and acceptance criteria
+## 10. Migration phases and implementation readiness
 
-### Phase 0 — Baseline, contracts, and safety freeze
+### 10.1 Final architecture decisions
+
+- Laravel remains on HostGator with SQLite and owns the control plane.
+- The engine is a self-contained `trading-engine/` project in the same repository and owns dedicated PostgreSQL plus Redis; production instances may be external managed services.
+- Hostinger Business is the preferred candidate for a new TypeScript API application slot, subject to a non-invasive capability proof. The existing Solana/Ethereum validator at `validator.tandafrica.com` remains untouched.
+- API, worker, and scheduler are independently deployable. Hostinger worker/scheduler persistence is unproven, so those roles may run on another affordable managed service. No VPS purchase is authorized.
+- The systems integrate only through authenticated versioned APIs and signed replay-protected webhooks/events.
+- Existing PAPER/LIVE data is not migrated. New engine tests use fresh PostgreSQL wallets, ledger entries, positions, and attempts.
+- SIGNAL, CONFIRM, and AUTO are shared entry modes; PAPER AUTO precedes LIVE AUTO, and every mode is capability-gated by execution mode/network.
+- Desktop and mobile external wallets are supported for connection and confirm-first authorization.
+- No private-key custody or delegated LIVE execution is implemented until a separate authorization ADR and security review are approved.
+- The MacBook is for bounded development/testing only. Continuous product features wait for a verified always-on topology, which may split the Hostinger API from externally hosted data services and background roles.
+
+### 10.2 Remaining blockers before Phase 1
+
+There is no unresolved product decision that blocks scaffolding the local foundation. Resolve these setup details before the first code change:
+
+1. Choose Docker Desktop or Colima for local PostgreSQL/Redis/Testcontainers and confirm available CPU, memory, and disk.
+2. Reserve local ports and origins (recommended defaults: API `3100`, PostgreSQL `5433`, Redis `6380`) and choose a temporary HTTPS development URL for physical-phone tests. This URL is never a production endpoint.
+3. Choose the service-auth signing format and key rotation plan. Recommendation: short-lived Ed25519 JWT assertions from Laravel to engine plus a separate HMAC key for engine-to-Laravel webhooks.
+4. Choose a stable Laravel user identifier exposed in claims (`control_plane_user_id`); do not couple PostgreSQL to SQLite row internals if a public UUID can be introduced later.
+5. Confirm the Phase 1 dependency versions together on Node 24/TypeScript 6 and commit the resulting lockfile.
+6. Decide whether GitHub Actions may run Docker-based PostgreSQL/Redis tests within the available budget. Local acceptance does not depend on paid infrastructure.
+
+Wallet SDK selection, provider credentials, the Hostinger production-topology proof, external PostgreSQL/Redis vendor selection, worker/scheduler hosting, and unattended LIVE authorization are not Phase 1 blockers because Phase 1 has no wallet/provider/trading authority.
+
+### 10.3 First implementation milestone
+
+Create a locally runnable, independently testable engine foundation that exposes authenticated health/version endpoints, connects to disposable PostgreSQL and Redis, runs migrations, persists an idempotent no-op command, publishes/delivers a synthetic outbox event to a fake Laravel receiver, and propagates a trace/correlation ID. It must contain no scanner provider, wallet adapter, balance, position, order, fill, transaction preparation, or trade execution behavior.
+
+### 10.4 Exact Phase 1 files and directories
+
+Phase 1 should create only this initial surface (empty domain/provider/chain folders are deferred until their first implementation):
+
+```text
+trading-engine/
+  .dockerignore
+  .env.example
+  .gitignore
+  Dockerfile
+  README.md
+  compose.yaml
+  package.json
+  pnpm-lock.yaml
+  pnpm-workspace.yaml
+  tsconfig.json
+  tsconfig.build.json
+  eslint.config.js
+  vitest.config.ts
+  apps/
+    api/src/
+      app.ts
+      main.ts
+    worker/src/
+      main.ts
+    scheduler/src/
+      main.ts
+  src/
+    application/
+      commands/accept-noop-command.ts
+      handlers/accept-noop-command-handler.ts
+    config/
+      env.ts
+    contracts/
+      http/health.schema.ts
+      http/noop-command.schema.ts
+      events/event-envelope.schema.ts
+    infrastructure/
+      database/client.ts
+      database/migrate.ts
+      database/migrations/001_foundation.ts
+      database/repositories/command-inbox-repository.ts
+      database/repositories/outbox-repository.ts
+      http/laravel-webhook-client.ts
+      queue/connection.ts
+      queue/names.ts
+      telemetry/instrumentation.ts
+    interfaces/
+      http/health-routes.ts
+      http/noop-command-routes.ts
+    shared/
+      errors/application-error.ts
+      ids/id.ts
+    workers/
+      outbox-dispatcher.ts
+  tests/
+    contract/
+      health-contract.test.ts
+      event-envelope-contract.test.ts
+    integration/
+      command-idempotency.test.ts
+      migration.test.ts
+      outbox-delivery.test.ts
+    unit/
+      env.test.ts
+    support/
+      fake-laravel-receiver.ts
+      test-environment.ts
+.github/workflows/
+  trading-engine.yml
+```
+
+`001_foundation.ts` creates only schema-migration metadata, command inbox, event outbox, and delivery-attempt tables. It does not create wallets, balances, opportunities, orders, fills, positions, or transaction attempts. Laravel integration code/migrations are a later explicit task after the engine contract is stable.
+
+### 10.5 Local development prerequisites for macOS
+
+- A supported macOS release for the pinned Node 24 build (official Node 24 binaries require macOS 13.5 or later; see the [Node.js 22-to-24 migration guide](https://nodejs.org/en/blog/migrations/v22-to-v24)), Git, and Xcode Command Line Tools.
+- Node.js 24 LTS managed by Volta, `asdf`, or `nvm`; activate the `pnpm` version pinned in `packageManager`/the lockfile.
+- Docker Desktop or Colima with Docker Compose v2 for PostgreSQL, Redis, and Testcontainers. No local system PostgreSQL/Redis install is required.
+- At least 8 GB RAM available to development workloads and sufficient disk for container images/database volumes; tune the container allocation to the MacBook.
+- Optional PHP 8.5 and Composer when running Laravel locally for end-to-end BFF tests. Otherwise Phase 1 uses the fake Laravel receiver.
+- A current Safari/Chrome browser. Physical-phone wallet tests additionally need an iOS/Android device, test wallets, same-network access or a temporary HTTPS tunnel, and allowlisted development redirect origins.
+- Solana devnet/EVM testnet accounts only for later wallet phases. No mainnet keys or funds are required for Phase 1.
+- Development service-auth/webhook keys stored in uncommitted `.env`; `.env.example` contains names and safe placeholders only.
+
+### 10.6 Phase 1 acceptance criteria
+
+- `pnpm install --frozen-lockfile`, lint, strict typecheck, build, and Vitest pass from `trading-engine/` without running Composer.
+- Laravel's existing build/test commands remain unchanged and no Laravel application file or SQLite migration is modified.
+- `docker compose up` starts only the local engine PostgreSQL/Redis and the engine process roles; no HostGator service is assumed.
+- Migrations apply to an empty PostgreSQL database and re-running them is safe.
+- API readiness distinguishes process liveness from PostgreSQL/Redis readiness and returns version/build metadata without secrets.
+- Missing/invalid/expired service authentication is rejected; an authorized no-op command returns a stable operation ID.
+- Sending the same idempotency key concurrently produces one command-inbox result and no duplicate side effect.
+- A transaction containing the no-op result and outbox event commits atomically; forced worker failure/restart eventually delivers one logical event, while duplicate webhook delivery is accepted as a no-op by the fake receiver.
+- Logs are structured and redact configured secrets; correlation/trace IDs traverse API, database command, queue job, webhook attempt, and fake receiver.
+- Engine shutdown drains HTTP and workers without abandoning a claimed outbox item; restart safely resumes it.
+- No endpoint, job, schema, or credential can scan providers, create a PAPER/LIVE trade, construct a wallet transaction, or broadcast to a blockchain.
+- CI is path-filtered and can test the engine independently; the monorepo still deploys Laravel independently.
+
+### Phase 0 — Baseline, contracts, and local safety freeze
 
 Work:
 
-- Document current state transitions from PHP and convert existing PHPUnit/browser tests into behavior tables and provider fixtures.
+- Preserve current PHPUnit/browser tests and convert the most valuable state transitions into behavior tables and provider fixtures.
 - Define network IDs, amount types, error codes, HTTP/event schemas, idempotency semantics, and ownership matrix.
-- Add explicit capability reporting so the UI distinguishes PAPER, manual LIVE buy, opportunity LIVE buy, LIVE sell, and accounting support.
-- Decide PostgreSQL deployment and migrate production off SQLite if SQLite is used beyond local/test environments.
+- Add explicit capability definitions so SIGNAL/CONFIRM/AUTO and PAPER/LIVE support cannot be inferred from stored preferences.
+- Record that Laravel remains on SQLite, the engine starts with fresh PostgreSQL data, and the laptop is not a production dependency.
 
 Acceptance:
 
-- Every current trading table and writer has an owner and cutover plan.
+- Every current trading writer has an owner and retirement phase.
 - Golden fixtures cover Solana/Ethereum qualification, PAPER exits, exact transaction binding, receipts, and Ethereum inventory evidence.
-- No UI or API can imply that generic/automatic LIVE is enabled.
-- Kill-switch behavior and incident contacts/runbooks are documented and exercised in a non-production environment.
+- No UI/API can imply that LIVE AUTO is enabled merely because AUTO is selectable/stored.
+- Phase 1 blockers in section 10.2 are resolved.
 
-### Phase 1 — Engine foundation, no trading authority
+### Phase 1 — Local engine foundation, no trading authority
 
-Work:
+Work and acceptance are defined in sections 10.3–10.6. Do not connect production Laravel or add provider/wallet credentials in this phase.
 
-- Scaffold TypeScript API/worker/scheduler, PostgreSQL schema, Kysely migrations, Redis/BullMQ, telemetry, secrets, and CI.
-- Implement command inbox, outbox dispatcher, event inbox, structured errors, leases, and health endpoints.
-- Connect Laravel BFF with service authentication and contract tests.
-
-Acceptance:
-
-- Duplicate commands/events produce one state change in forced crash/retry tests.
-- PostgreSQL integration tests exercise locks, constraints, ledger balance, outbox recovery, and competing workers.
-- Trace/correlation IDs cross Laravel, engine, queue, database, and mocked providers.
-- Engine has no provider credentials or route capable of creating a trade in production.
-
-### Phase 2 — Shadow market scanning and qualification
+### Phase 2 — Local shadow market scanning and qualification
 
 Work:
 
 - Port provider clients and normalization, starting with Solana new-token scanning, then momentum, then Ethereum.
 - Add per-provider budgets, recorded fixtures, freshness, provenance, and security policy.
-- Run the engine read-only beside PHP and compare normalized observations/opportunities without exposing engine decisions to customers.
+- Run bounded one-shot scans on the MacBook and compare normalized observations/opportunities without exposing engine decisions to production users.
 
 Acceptance:
 
-- Agreed parity for discovered/qualified/rejected assets over a representative observation window; every difference has a reason code.
-- Ethereum security coverage is explicit, tested, and fails closed for prospective LIVE opportunities.
+- Agreed parity for discovered/qualified/rejected fixture assets; every difference has a reason code.
+- Ethereum security coverage is explicit and fail-closed for prospective LIVE opportunities.
 - Provider 429/timeout/malformed/wrong-asset/stale-data tests pass.
 - Engine scanning cannot debit a PAPER wallet or create LIVE signing material.
+- Stopping the laptop causes no production failure because HostGator has no engine dependency yet.
 
-### Phase 3 — PAPER engine cutover
-
-Work:
-
-- Implement immutable strategy snapshots, simulated orders/fills, double-entry virtual ledger, positions, valuations, and current stop/protection behavior.
-- Prefer fresh engine test wallets/positions. If selected PAPER test data is retained, backfill it with legacy mapping and reconciled balances.
-- Switch Laravel dashboard/history/close/approve paths to engine APIs/projections for a pilot cohort, then all users.
-
-Acceptance:
-
-- Opening balances + ledger entries reconcile exactly to closing balances for every user/network.
-- Existing PHP strategy/reliability/close test vectors pass in TypeScript, including duplicate delivery, lock loss, stale data, and cross-user races.
-- No user can have duplicate funded open inventory for the same strategy/network/asset unless the new model explicitly permits lots.
-- Rollback can switch the entire PAPER writer without merging divergent balances.
-- PHP PAPER scheduler/writers are disabled only after the engine is authoritative.
-
-### Phase 4 — Manual LIVE parity
+### Phase 3 — Fresh PAPER portfolios and PAPER AUTO
 
 Work:
 
-- Port Solana Jupiter and Ethereum 0x preparation, exact intent verification, expiry, browser handoff, submission reporting, and receipt reconciliation.
-- Preserve encrypted payloads, uncertain-broadcast recovery, and Ethereum accounting evidence.
-- Add complete inventory and sell/close workflows before broad availability.
+- Implement immutable strategy snapshots, simulated orders/fills, double-entry virtual ledger, fresh wallets/positions, valuations, and current stop/protection behavior.
+- Implement SIGNAL, CONFIRM, and capability-gated AUTO for PAPER.
+- Integrate a local Laravel instance or authenticated development BFF with fresh engine projections; do not import SQLite PAPER rows.
 
 Acceptance:
 
-- On test networks/forked environments, altered signer/fee payer/recipient/value/calldata/network/message is rejected.
-- Repeated prepare/submit/report/reconcile requests never broadcast twice or create duplicate fills.
+- Opening ledger transactions plus entries reconcile exactly to every fresh wallet balance.
+- Existing PHP strategy/reliability/close test vectors pass in TypeScript against fresh fixtures, including duplicate delivery, lock loss, stale data, and cross-user races.
+- SIGNAL never opens; CONFIRM requires approval; AUTO opens only within enabled strategy/risk/kill-switch policy.
+- No engine test mutates Laravel SQLite or legacy records.
+- Bounded local PAPER AUTO survives forced restarts and resumes idempotently. Continuous PAPER AUTO remains labeled unavailable until always-on hosting.
+
+### Phase 4 — Mobile/desktop wallet integration and confirm-first LIVE parity
+
+Work:
+
+- Implement EIP-6963/Wallet Standard desktop discovery and WalletConnect/Reown plus supported Solana mobile transports.
+- Port Solana Jupiter and Ethereum 0x preparation, exact intent verification, expiry, wallet handoff, rejection/recovery, submission reporting, and receipt reconciliation.
+- Test only devnet/testnets/forked environments locally; preserve uncertain-broadcast recovery and Ethereum accounting evidence.
+
+Acceptance:
+
+- Desktop extension, desktop-to-phone QR, Android same-device, and iOS same-device flows have a documented support matrix and pass connection/sign/reject/return/recovery tests for selected wallets.
+- Altered signer/fee payer/recipient/value/calldata/network/message is rejected.
+- Repeated prepare/confirm/submit/report/reconcile requests never broadcast twice or create duplicate fills.
 - Prepared/submitted attempts never appear as successful trades.
-- Reorg, replaced/dropped/expired transaction, provider outage, and process-crash scenarios converge to a documented state.
-- Entry, inventory, user-visible position, sell/close, fees, and final ledger reconcile end to end per network.
-- Production rollout begins allowlisted, amount-capped, confirm-only, and with network kill switches tested.
+- App-background, killed-browser, broken-return-link, expired-session, wallet rejection, and unknown-outcome cases converge safely.
+- Connection proof cannot authorize a transaction, and a transaction approval cannot be replayed as connection proof.
 
-### Phase 5 — Opportunity-driven LIVE
+### Phase 5 — Opportunity-driven LIVE SIGNAL and CONFIRM
 
 Work:
 
 - Generalize the Ethereum reservation/revalidation/signing-claim design to engine aggregates.
 - Add Solana opportunity linkage only after Solana inventory/exit support exists.
-- Add automated protective monitoring, but retain CONFIRM as the only LIVE entry mode until an explicit risk review approves AUTO.
+- Run from a verified always-on topology before any production enablement; the API may use Hostinger while worker/scheduler roles run separately. Local tests remain testnet-only.
 
 Acceptance:
 
-- LIVE rechecks entitlement, preference, kill switch, market/security freshness, limits, wallet, and opportunity version before signing publication.
+- SIGNAL creates no signing material; CONFIRM rechecks entitlement, preference, kill switch, market/security freshness, limits, wallet, and opportunity version.
 - The same opportunity cannot reserve or execute twice under concurrent approvals.
 - Every confirmed fill has receipt/finality/inventory evidence and balanced ledger entries.
-- Protective exits are tested against gaps, illiquidity, provider outage, and partial fills; the UI states that on-chain stops cannot guarantee price.
-- Emergency halt blocks new signing material within the agreed SLO while continuing reconciliation of already submitted transactions.
+- Protective exits are tested against gaps, illiquidity, provider outage, and partial fills; UI states on-chain stops cannot guarantee price.
+- Emergency halt blocks new signing material within the agreed SLO while reconciliation of submitted transactions continues.
 
-### Phase 6 — Base and BNB expansion
+### Phase 6 — Unattended LIVE authorization and AUTO
+
+Dependencies: Phase 3 PAPER AUTO soak, Phase 5 LIVE SIGNAL/CONFIRM, a verified always-on API/worker/scheduler topology with external PostgreSQL/Redis, and a separately approved authorization ADR. Buying a VPS is not a dependency or an authorized solution.
 
 Work:
 
-- Add network configuration and providers one capability at a time.
-- Run discovery and PAPER before LIVE.
-- Establish independent token eligibility, finality, router/allowance, gas, and inventory policies.
+- Select and audit chain-specific bounded authorization (for example, EVM smart-account/session permissions and a Solana program/vault/delegate design).
+- Implement revocation, expiry, asset/router/amount/daily limits, authorization evidence, key isolation, executor failover, monitoring, and incident controls.
+- Enable LIVE AUTO independently by platform, network, user, strategy, and token capability.
+
+Acceptance:
+
+- No raw user private key/seed is held by Laravel or the engine.
+- On-chain/off-chain enforcement prevents calls outside approved networks, assets, routers, methods, amounts, time windows, and daily exposure.
+- Revocation and platform kill switch stop new automated authorization within the defined SLO; already submitted transactions continue reconciliation.
+- Compromise simulations demonstrate bounded loss and produce complete audit evidence.
+- Contract/module audits, legal/compliance review, disaster recovery, and production incident exercises are complete.
+- A database/interface AUTO value cannot bypass any capability gate.
+
+### Phase 7 — Base and BNB expansion
+
+Work:
+
+- Add network configuration/providers one capability at a time.
+- Run discovery and PAPER before LIVE; establish independent eligibility, finality, router/allowance, gas, authorization, and inventory policies.
 
 Acceptance per network:
 
 - Canonical identity, decimals, native/wrapped asset, RPC failover, finality, explorer, and provider support tests pass.
-- Discovery/PAPER runs for an agreed soak period with no cross-network address/cache collisions.
-- LIVE buy and sell quotes, exact intent validation, receipts, inventory, ledger, and reorg recovery pass.
-- Security/risk owner explicitly signs off; enabling one EVM network cannot enable another.
+- Discovery/PAPER soak shows no cross-network address/cache collisions.
+- LIVE buy/sell quotes, exact intent validation, receipts, inventory, ledger, authorization, and reorg recovery pass.
+- Enabling one EVM network cannot enable another.
 
-### Phase 7 — Laravel retirement and hardening
+### Phase 8 — Laravel retirement and hardening
 
 Work:
 
-- Remove disabled writers/schedules and provider secrets from Laravel.
-- Replace legacy trading models with typed engine clients/read projections.
-- Archive or remove legacy tables after audit/rollback retention expires.
-- Load, chaos, restoration, incident, key-rotation, and disaster-recovery exercises.
+- Remove retired writers/schedules and provider secrets from Laravel without deleting legacy SQLite records in the migration task itself.
+- Replace legacy trading models with typed engine clients/projections.
+- Exercise load, restoration, incident, key-rotation, and disaster-recovery procedures.
 
 Acceptance:
 
-- Database permissions prove Laravel cannot mutate engine-owned trading data.
-- No Laravel scheduler/job/controller/service can call a market/execution provider for a retired workflow.
-- Backup restore reproduces ledger/positions and resumes outbox/inbox safely.
+- Architecture and integration tests prove Laravel cannot mutate engine-owned trading state.
+- No retired Laravel scheduler/job/controller/service can call a market/execution provider.
+- Engine backup restore reproduces ledger/positions and resumes outbox/inbox safely.
 - SLOs, dashboards, alerts, on-call runbooks, and reconciliation reports are owned and exercised.
 - Legacy code removal is covered by Laravel contract/UI tests and TypeScript engine tests.
 
@@ -880,7 +1143,7 @@ The controllers/views can remain as a compatibility UI while their data source c
 - Solana/Ethereum attempt expiry and reconciliation commands/schedules.
 - `LivePositionService`, Ethereum inventory-accounting workers/services, and their direct Laravel models after evidence is moved.
 
-Keep `resources/js/solana-wallet.js`, `ethereum-wallet.js`, and `ethereum-opportunity.js` initially, adapted to Laravel BFF contracts. Browser wallet integration belongs in the web client; transaction construction, authoritative validation, and state transitions belong in the engine.
+Keep `resources/js/solana-wallet.js`, `ethereum-wallet.js`, and `ethereum-opportunity.js` initially as behavior references, then evolve the Laravel-served client into a standards-based desktop/mobile wallet layer. Wallet discovery, QR/deep-link handoff, signing UI, return, and recovery stay client-side; transaction construction, authoritative validation, and state transitions belong in the engine.
 
 ### 11.4 Keep and simplify in Laravel
 
@@ -902,28 +1165,28 @@ Keep `resources/js/solana-wallet.js`, `ethereum-wallet.js`, and `ethereum-opport
 
 ## 12. Open decisions
 
-These decisions materially affect design or risk and should be resolved before their referenced phase:
+The initial hosting direction, database ownership, repository, data-migration, mode, and initial custody decisions are settled above. These remaining decisions do not block the local Phase 1 scaffold unless explicitly noted:
 
-1. **Production database today:** Is production using SQLite or another connection despite the default configuration? PostgreSQL is required before multi-instance financial writers.
-2. **Deployment platform:** Separate containers, VMs/systemd, or a managed orchestrator? The answer determines service discovery, mTLS, scaling, and secret delivery, but not domain boundaries.
-3. **Repository shape:** Keep `trading-engine/` in this monorepo initially (recommended) or create a separate repository with a versioned contracts package?
-4. **Wallet connection ownership:** Keep proof/linking in Laravel permanently, or move chain-specific proof verification to the engine after the first cutover?
-5. **EVM address sharing:** May the same address be linked to multiple users? If not, enforce by `(network,address)`; if yes, define proof, visibility, and abuse policy explicitly.
-6. **Custody:** Confirm the platform will remain non-custodial. Any server-side key custody is a separate security/compliance architecture, not an implementation detail.
-7. **LIVE product boundary:** Is manual wallet execution the target, or should confirm-first opportunity execution become the standard? Is LIVE AUTO intentionally out of scope?
-8. **Network order:** Base before BNB is recommended after Ethereum/Solana parity. Provider availability, target users, and liquidity/security coverage may change that order.
-9. **Provider contracts:** Which providers permit the intended storage, redistribution, automated trading, call rate, and production networks? Define primary/fallback per capability.
-10. **Security fail policy:** Which checks are mandatory for PAPER, confirmed LIVE, and any future automatic LIVE on each network? Unknown security should remain a reasoned state, not a boolean default.
-11. **PAPER realism:** Preserve mark-based legacy results, or adopt executable-quote/fees/latency immediately? Recommendation: migrate legacy behavior first, then introduce a versioned simulator.
-12. **Strategy semantics:** Define partial take-profit percentages, protection-floor rules, true trailing stops, precedence, gap behavior, and whether strategy edits affect only new positions.
-13. **Portfolio accounting:** FIFO, LIFO, or specific-lot; realized/unrealized P&L quote currency; gas allocation; fee-on-transfer/rebase handling; and tax/reporting expectations.
-14. **Finality policy:** Required confirmations/finality per Solana, Ethereum, Base, and BNB; handling for reorgs after provisional UI display.
-15. **Read-model latency:** What lag is acceptable for dashboard, Telegram notifications, kill-switch acknowledgement, and trade history?
-16. **Entitlements/subscriptions:** Plans and limits do not exist today. Define which engine commands require which entitlement and how revocation affects open positions.
-17. **Copy trading:** Is it actually in product scope? If yes, complete legal/compliance review and define consent, privacy, allocation, delay, and leader-failure behavior before schema design.
-18. **Admin review model:** Can Ethereum bytecode/token eligibility review generalize to other EVM networks, and which roles may approve/reconsider it?
-19. **Retention and privacy:** Define retention for raw provider payloads, wallet addresses, signed transaction material, RPC evidence, logs, and audit events.
-20. **Disaster recovery:** Set RPO/RTO, backup cadence, restore verification, Redis-loss behavior, RPC/provider outage posture, and criteria for globally halting entry.
-21. **Rollout governance:** Identify the owner who can enable each capability/network, required soak period, amount/user caps, and rollback authority.
+1. **Hostinger production topology:** Validate a new disposable API slot without touching `validator.tandafrica.com`; confirm monorepo deployment, Node/Fastify runtime, resource/restart limits, health checks, egress, logs, secrets, and custom-domain behavior. Separately determine whether Hostinger supports persistent independent BullMQ worker and scheduler processes. If not, select affordable non-VPS managed hosting for those roles plus external PostgreSQL and Redis. Required before any production engine dependency, not before Phase 1.
+2. **Service authentication:** Confirm Ed25519 JWT versus another short-lived assertion format, webhook HMAC rotation, clock-skew window, and key storage on HostGator/future host. Required before Laravel integration.
+3. **Stable control-plane identity:** Use current Laravel integer IDs or introduce public UUIDs before cross-system user references become durable?
+4. **Mobile wallet support matrix:** Which EVM/Solana wallets and OS/browser versions are launch requirements, and which Reown/MWA/deep-link combinations pass real-device tests?
+5. **Wallet connection ownership:** Keep proof/linking in Laravel permanently, or move chain-specific verification behind an engine contract later?
+6. **Unattended LIVE authorization:** Select EVM smart-account/session permissions versus a strategy vault, and select the Solana delegate/program/vault design. This blocks Phase 6, not Phase 1.
+7. **Executor key isolation:** If a bounded delegated signer is approved, choose HSM/KMS/MPC storage, rotation, recovery, quorum, and compromise response. A plaintext server key is not an option.
+8. **EVM address sharing:** May the same address link to multiple Laravel users? Define proof, visibility, and abuse policy.
+9. **Network order:** Base before BNB remains recommended after Solana/Ethereum parity; provider coverage and target users may change it.
+10. **Provider contracts:** Confirm permitted storage, redistribution, automated trading, rates, and production networks; define primary/fallback per capability.
+11. **Security fail policy:** Define mandatory checks for PAPER, LIVE CONFIRM, and LIVE AUTO per network. Unknown security remains an explicit state.
+12. **PAPER realism:** Select the first versioned simulator's quote, fee, latency, price-impact, and failure assumptions. No legacy PAPER result must be preserved.
+13. **Strategy semantics:** Define partial take-profit percentages, protected floors, true trailing stops, precedence, gap behavior, and whether edits affect only new positions.
+14. **Portfolio accounting:** Choose FIFO/LIFO/specific-lot, quote currency, gas allocation, fee-on-transfer/rebase behavior, and reporting expectations.
+15. **Finality policy:** Set confirmations/finality per network and reorg behavior after provisional UI display.
+16. **Read-model latency:** Set acceptable dashboard, notification, kill-switch acknowledgement, and history lag.
+17. **Entitlements/subscriptions:** Define plans/limits and behavior when entitlement is revoked while positions remain open.
+18. **Copy trading:** Confirm product scope and complete legal/compliance, consent, privacy, allocation, delay, and leader-failure design.
+19. **Admin review model:** Decide how Ethereum bytecode/token eligibility review generalizes to Base/BNB and which roles may approve/reconsider.
+20. **Retention/privacy/disaster recovery:** Set evidence/log retention, RPO/RTO, backup cadence, restore verification, Redis-loss behavior, and global halt criteria.
+21. **Rollout governance:** Identify who enables each capability/network, required soak periods, amount/user caps, and rollback authority.
 
-The safest first implementation milestone is therefore not a LIVE trade. It is a read-only TypeScript foundation that reproduces existing Solana/Ethereum scan decisions from recorded and shadow data, with durable contracts, idempotency, and observability. That milestone reduces architectural uncertainty without putting balances or chain transactions at risk.
+The first implementation milestone is still the local Phase 1 foundation in sections 10.3–10.6—not a scanner, trade, or Hostinger deployment. It proves independent packaging and process roles, dedicated PostgreSQL/Redis, authentication, idempotency, outbox delivery, observability, and restart behavior without putting assets, wallets, HostGator, Hostinger's existing validator, or the legacy SQLite database at risk.

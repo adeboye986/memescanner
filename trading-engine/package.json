@@ -1,0 +1,60 @@
+{
+  "name": "@meme-scanner/trading-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local non-trading foundation for the Meme Scanner TypeScript engine",
+  "type": "module",
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": "24.21.0",
+    "pnpm": "12.6.0"
+  },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "dev:api": "tsx watch apps/api/src/main.ts",
+    "dev:worker": "tsx watch apps/worker/src/main.ts",
+    "dev:scheduler": "tsx watch apps/scheduler/src/main.ts",
+    "format:check": "eslint .",
+    "lint": "eslint .",
+    "migrate": "tsx src/infrastructure/database/migrate.ts",
+    "start:api": "node dist/apps/api/src/main.js",
+    "start:worker": "node dist/apps/worker/src/main.js",
+    "start:scheduler": "node dist/apps/scheduler/src/main.js",
+    "test": "vitest run",
+    "test:contract": "vitest run tests/contract",
+    "test:integration": "vitest run tests/integration",
+    "test:unit": "vitest run tests/unit",
+    "typecheck": "tsc --noEmit --project tsconfig.json"
+  },
+  "dependencies": {
+    "@fastify/type-provider-typebox": "6.1.0",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/auto-instrumentations-node": "0.80.0",
+    "@opentelemetry/resources": "2.11.0",
+    "@opentelemetry/sdk-node": "0.222.0",
+    "@opentelemetry/semantic-conventions": "1.43.0",
+    "@sinclair/typebox": "0.34.52",
+    "bullmq": "6.3.9",
+    "fastify": "5.12.5",
+    "ioredis": "6.0.0",
+    "jose": "6.2.12",
+    "kysely": "0.29.6",
+    "pg": "8.23.0",
+    "pino": "10.3.1",
+    "ulid": "3.0.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@testcontainers/postgresql": "12.1.0",
+    "@testcontainers/redis": "12.1.0",
+    "@types/node": "24.19.0",
+    "@types/pg": "8.23.1",
+    "@vitest/coverage-v8": "5.0.2",
+    "eslint": "10.11.0",
+    "testcontainers": "12.1.0",
+    "tsx": "4.23.15",
+    "typescript": "6.0.2",
+    "typescript-eslint": "8.70.1",
+    "vitest": "5.0.2"
+  }
+}
