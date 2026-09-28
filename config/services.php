@@ -164,4 +164,16 @@ return [
         ),
     ],
 
+    'trading_engine' => [
+        'enabled' => env('TRADING_ENGINE_ENABLED', false),
+        'base_url' => env('TRADING_ENGINE_BASE_URL'),
+        'service_issuer' => env('TRADING_ENGINE_SERVICE_ISSUER', 'meme-scanner-laravel'),
+        'service_audience' => env('TRADING_ENGINE_SERVICE_AUDIENCE', 'meme-scanner-trading-engine'),
+        'service_subject' => env('TRADING_ENGINE_SERVICE_SUBJECT', 'meme-scanner-laravel'),
+        'private_key_base64' => env('TRADING_ENGINE_PRIVATE_KEY_BASE64'),
+        'assertion_lifetime_seconds' => env('TRADING_ENGINE_ASSERTION_LIFETIME_SECONDS', 30),
+        'connect_timeout_seconds' => env('TRADING_ENGINE_CONNECT_TIMEOUT_SECONDS', 3),
+        'timeout_seconds' => env('TRADING_ENGINE_TIMEOUT_SECONDS', 8),
+    ],
+
 ];

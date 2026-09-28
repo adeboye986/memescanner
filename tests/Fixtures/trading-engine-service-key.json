@@ -1,0 +1,6 @@
+{
+    "purpose": "TEST ONLY - PUBLIC FIXTURE - NEVER USE IN PRODUCTION",
+    "private_key_base64": "TQewQTfi2dEz+xGwTS+5GxAqNCO5TIdE4H5g2Jg9OZEdgPgDTXdnS86uWHmingDzp/59g7pfvySYGFvUfz9o5Q==",
+    "public_key_base64": "HYD4A013Z0vOrlh5op4A86f+fYO6X78kmBhb1H8/aOU=",
+    "public_key_spki_base64": "MCowBQYDK2VwAyEAHYD4A013Z0vOrlh5op4A86f+fYO6X78kmBhb1H8/aOU="
+}
