@@ -32,6 +32,36 @@ export type RequireServiceAuth = (
   requiredScope: string,
 ) => Promise<ServiceClaims>;
 
+export interface PreValidationServiceAuth {
+  readonly preValidation: (request: FastifyRequest) => Promise<void>;
+  readonly claimsFor: (request: FastifyRequest) => ServiceClaims;
+}
+
+export function createPreValidationServiceAuth(
+  requireServiceAuth: RequireServiceAuth,
+  requiredScope: string,
+): PreValidationServiceAuth {
+  const claimsByRequest = new WeakMap<FastifyRequest, ServiceClaims>();
+
+  return {
+    preValidation: async (request): Promise<void> => {
+      claimsByRequest.set(
+        request,
+        await requireServiceAuth(request, requiredScope),
+      );
+    },
+    claimsFor: (request): ServiceClaims => {
+      const claims = claimsByRequest.get(request);
+
+      if (claims === undefined) {
+        throw new Error('Service claims were not established before route handling');
+      }
+
+      return claims;
+    },
+  };
+}
+
 export interface HealthRouteDependencies {
   readonly config: EngineConfig;
   readonly database: Kysely<Database>;

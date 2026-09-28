@@ -1,8 +1,11 @@
 import { Kysely, PostgresDialect, sql, type ColumnType, type Generated } from 'kysely';
-import { Pool } from 'pg';
+import { Pool, types } from 'pg';
 
 import type { EngineConfig } from '../../config/env.js';
 import type { EventEnvelope } from '../../contracts/events/event-envelope.schema.js';
+import { canonicalizeDatabaseDecimal } from '../../shared/amount/canonical-decimal.js';
+
+types.setTypeParser(types.builtins.NUMERIC, canonicalizeDatabaseDecimal);
 
 export type JsonValue =
   | null

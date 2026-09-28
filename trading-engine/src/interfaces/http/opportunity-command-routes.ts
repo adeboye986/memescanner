@@ -4,7 +4,11 @@ import {
   OpportunityCommandSchema,
   type OpportunityCommand,
 } from '../../contracts/http/opportunity-command.schema.js';
-import type { EngineFastifyInstance, RequireServiceAuth } from './health-routes.js';
+import {
+  createPreValidationServiceAuth,
+  type EngineFastifyInstance,
+  type RequireServiceAuth,
+} from './health-routes.js';
 
 const IdempotencyHeadersSchema = {
   type: 'object',
@@ -29,12 +33,18 @@ export function registerOpportunityCommandRoutes(
   app: EngineFastifyInstance,
   dependencies: OpportunityCommandRouteDependencies,
 ): void {
+  const serviceAuth = createPreValidationServiceAuth(
+    dependencies.requireServiceAuth,
+    'commands:opportunities:create',
+  );
+
   app.post<{
     Body: OpportunityCommand;
     Headers: { readonly 'idempotency-key': string };
   }>(
     '/v1/commands/opportunities',
     {
+      preValidation: serviceAuth.preValidation,
       schema: {
         body: OpportunityCommandSchema,
         headers: IdempotencyHeadersSchema,
@@ -44,10 +54,7 @@ export function registerOpportunityCommandRoutes(
       },
     },
     async (request, reply) => {
-      const claims = await dependencies.requireServiceAuth(
-        request,
-        'commands:opportunities:create',
-      );
+      const claims = serviceAuth.claimsFor(request);
       const result = await dependencies.handler.execute({
         idempotencyKey: request.headers['idempotency-key'],
         authJti: claims.jti,

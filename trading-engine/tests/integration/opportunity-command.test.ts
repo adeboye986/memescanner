@@ -331,8 +331,22 @@ describe('opportunity record command', () => {
     const outbox = await database.selectFrom('event_outbox').selectAll().executeTakeFirstOrThrow();
 
     expect(typeof stored.price_usd).toBe('string');
-    expect(stored.price_usd).toBe('0.00000125');
-    expect(stored.volume_window).toBe('5m');
+    expect(stored).toMatchObject({
+      price_usd: '0.00000125',
+      market_cap_usd: '12500',
+      liquidity_usd: '3500',
+      volume_usd: '1500',
+      volume_window: '5m',
+      discovery_market_cap_usd: '10000',
+      move_since_discovery_percent: '20',
+    });
+    expect(stored.security).toMatchObject({
+      holder_concentration: {
+        largest_holder_percent: '12.5',
+        top_5_percent: '30',
+        top_10_percent: '45.5',
+      },
+    });
     expect(stored.accepted_request).toEqual(body);
     expect(outbox.envelope).toEqual({
       event_id: result.eventId,

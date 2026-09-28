@@ -5,7 +5,11 @@ import {
   type NoopCommand,
 } from '../../contracts/http/noop-command.schema.js';
 import { ApplicationError } from '../../shared/errors/application-error.js';
-import type { EngineFastifyInstance, RequireServiceAuth } from './health-routes.js';
+import {
+  createPreValidationServiceAuth,
+  type EngineFastifyInstance,
+  type RequireServiceAuth,
+} from './health-routes.js';
 
 const IdempotencyHeadersSchema = {
   type: 'object',
@@ -30,9 +34,15 @@ export function registerNoopCommandRoutes(
   app: EngineFastifyInstance,
   dependencies: NoopRouteDependencies,
 ): void {
+  const serviceAuth = createPreValidationServiceAuth(
+    dependencies.requireServiceAuth,
+    'commands:noop',
+  );
+
   app.post<{ Body: NoopCommand; Headers: { readonly 'idempotency-key': string } }>(
     '/v1/commands/noop',
     {
+      preValidation: serviceAuth.preValidation,
       schema: {
         body: NoopCommandSchema,
         headers: IdempotencyHeadersSchema,
@@ -42,7 +52,7 @@ export function registerNoopCommandRoutes(
       },
     },
     async (request, reply) => {
-      const claims = await dependencies.requireServiceAuth(request, 'commands:noop');
+      const claims = serviceAuth.claimsFor(request);
       const result = await dependencies.handler.execute({
         idempotencyKey: request.headers['idempotency-key'],
         authJti: claims.jti,

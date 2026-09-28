@@ -2,6 +2,7 @@ import { Type, type Static } from '@sinclair/typebox';
 
 const unsignedPattern = '^(?:0|[1-9][0-9]{0,47})(?:\\.[0-9]{0,29}[1-9])?$';
 const signedPattern = '^-?(?:0|[1-9][0-9]{0,47})(?:\\.[0-9]{0,29}[1-9])?$';
+const databaseDecimalPattern = /^(-?)([0-9]+)(?:\.([0-9]+))?$/;
 
 export const NonNegativeDecimalStringSchema = Type.String({
   pattern: unsignedPattern,
@@ -33,4 +34,21 @@ export function isCanonicalSignedDecimal(
   return typeof value === 'string'
     && value !== '-0'
     && signedExpression.test(value);
+}
+
+export function canonicalizeDatabaseDecimal(value: string): string {
+  const match = databaseDecimalPattern.exec(value);
+
+  if (match === null) {
+    throw new Error('PostgreSQL returned a non-decimal NUMERIC value');
+  }
+
+  const sign = match[1] ?? '';
+  const integerDigits = (match[2] ?? '').replace(/^0+(?=[0-9])/, '');
+  const fractionalDigits = (match[3] ?? '').replace(/0+$/, '');
+  const unsigned = fractionalDigits === ''
+    ? integerDigits
+    : `${integerDigits}.${fractionalDigits}`;
+
+  return sign === '-' && unsigned !== '0' ? `-${unsigned}` : unsigned;
 }
