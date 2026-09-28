@@ -38,6 +38,8 @@ describe('environment configuration', () => {
     expect(config.redisUrl).toBe('rediss://redis.example.test:6380');
     expect(config.databaseSsl).toBe(true);
     expect(config.port).toBe(3200);
+    expect(config.evaluationBatchSize).toBe(25);
+    expect(config.evaluationClaimTtlMs).toBe(30_000);
   });
 
   it('rejects a missing database URL', () => {

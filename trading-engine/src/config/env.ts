@@ -25,6 +25,8 @@ export interface EngineConfig {
   readonly outboxBatchSize: number;
   readonly outboxPollIntervalMs: number;
   readonly outboxClaimTtlMs: number;
+  readonly evaluationBatchSize: number;
+  readonly evaluationClaimTtlMs: number;
   readonly shutdownTimeoutMs: number;
 }
 
@@ -187,6 +189,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     outboxBatchSize: integer(env, 'OUTBOX_BATCH_SIZE', 25, 1, 500),
     outboxPollIntervalMs: integer(env, 'OUTBOX_POLL_INTERVAL_MS', 1_000, 100, 60_000),
     outboxClaimTtlMs: integer(env, 'OUTBOX_CLAIM_TTL_MS', 30_000, 1_000, 600_000),
+    evaluationBatchSize: integer(env, 'EVALUATION_BATCH_SIZE', 25, 1, 500),
+    evaluationClaimTtlMs: integer(
+      env,
+      'EVALUATION_CLAIM_TTL_MS',
+      30_000,
+      1_000,
+      600_000,
+    ),
     shutdownTimeoutMs: integer(env, 'SHUTDOWN_TIMEOUT_MS', 15_000, 1_000, 60_000),
   };
 }

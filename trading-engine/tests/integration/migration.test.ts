@@ -26,8 +26,12 @@ describe('foundation migration and infrastructure connectivity', () => {
     await stopTestEnvironment(environment);
   });
 
-  it('applies the foundation migration to an empty PostgreSQL database and reruns safely', async () => {
+  it('applies all migrations to an empty PostgreSQL database and reruns safely', async () => {
     await assertDedicatedTestDatabase(database);
+    await database.schema.dropTable('opportunity_evaluations').ifExists().cascade().execute();
+    await database.schema.dropTable('opportunity_evaluation_tasks').ifExists().cascade().execute();
+    await database.schema.dropTable('evaluation_policies').ifExists().cascade().execute();
+    await sql`drop function if exists reject_opportunity_evaluation_mutation()`.execute(database);
     await database.schema.dropTable('opportunities').ifExists().cascade().execute();
     await database.schema.dropTable('event_delivery_attempts').ifExists().cascade().execute();
     await database.schema.dropTable('event_outbox').ifExists().cascade().execute();
@@ -37,7 +41,7 @@ describe('foundation migration and infrastructure connectivity', () => {
 
     const first = await migrateDatabase(database);
     const second = await migrateDatabase(database);
-    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities') order by table_name").execute(database);
+    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities', 'evaluation_policies', 'opportunity_evaluation_tasks', 'opportunity_evaluations') order by table_name").execute(database);
 
     expect(first.error).toBeUndefined();
     expect(first.results).toEqual([
@@ -49,14 +53,21 @@ describe('foundation migration and infrastructure connectivity', () => {
         migrationName: '002_opportunities',
         status: 'Success',
       }),
+      expect.objectContaining({
+        migrationName: '003_opportunity_evaluations',
+        status: 'Success',
+      }),
     ]);
     expect(second.error).toBeUndefined();
     expect(second.results).toEqual([]);
     expect(tables.rows.map((table) => table.table_name)).toEqual([
       'command_inbox',
+      'evaluation_policies',
       'event_delivery_attempts',
       'event_outbox',
       'opportunities',
+      'opportunity_evaluation_tasks',
+      'opportunity_evaluations',
     ]);
   });
 

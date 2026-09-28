@@ -198,6 +198,10 @@ export async function assertDedicatedTestDatabase(
 export async function resetDatabase(database: Kysely<Database>): Promise<void> {
   await assertDedicatedTestDatabase(database);
   await sql`
+    drop table if exists opportunity_evaluations cascade;
+    drop table if exists opportunity_evaluation_tasks cascade;
+    drop table if exists evaluation_policies cascade;
+    drop function if exists reject_opportunity_evaluation_mutation();
     drop table if exists opportunities cascade;
     drop table if exists event_delivery_attempts cascade;
     drop table if exists event_outbox cascade;

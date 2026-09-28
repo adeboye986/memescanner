@@ -3,6 +3,7 @@ import { Pool, types } from 'pg';
 
 import type { EngineConfig } from '../../config/env.js';
 import type { EventEnvelope } from '../../contracts/events/event-envelope.schema.js';
+import type { EvaluationOutcome } from '../../domain/opportunities/evaluation-policy.js';
 import { canonicalizeDatabaseDecimal } from '../../shared/amount/canonical-decimal.js';
 
 types.setTypeParser(types.builtins.NUMERIC, canonicalizeDatabaseDecimal);
@@ -96,11 +97,58 @@ export interface OpportunityTable {
   created_at: ColumnType<Date, Date | string | undefined, never>;
 }
 
+export interface EvaluationPolicyTable {
+  policy_key: string;
+  policy_version: number;
+  algorithm_key: string;
+  algorithm_version: number;
+  definition: JsonValue;
+  definition_sha256: string;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface OpportunityEvaluationTaskTable {
+  opportunity_id: string;
+  policy_key: string;
+  policy_version: number;
+  source_event_id: string;
+  status: 'pending' | 'processing' | 'completed';
+  available_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  claimed_by: string | null;
+  claimed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  attempt_count: Generated<number>;
+  last_error_code: string | null;
+  completed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface OpportunityEvaluationTable {
+  id: string;
+  opportunity_id: string;
+  policy_key: string;
+  policy_version: number;
+  policy_snapshot: JsonValue;
+  policy_definition_sha256: string;
+  source_request_sha256: string;
+  evaluation_input_sha256: string;
+  outcome: EvaluationOutcome;
+  reason_codes: JsonValue;
+  advisory_codes: JsonValue;
+  evidence: JsonValue;
+  result_sha256: string;
+  correlation_id: string;
+  traceparent: string;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
 export interface Database {
   command_inbox: CommandInboxTable;
   event_outbox: EventOutboxTable;
   event_delivery_attempts: EventDeliveryAttemptTable;
   opportunities: OpportunityTable;
+  evaluation_policies: EvaluationPolicyTable;
+  opportunity_evaluation_tasks: OpportunityEvaluationTaskTable;
+  opportunity_evaluations: OpportunityEvaluationTable;
 }
 
 export function createDatabase(config: EngineConfig): Kysely<Database> {
