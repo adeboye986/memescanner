@@ -30,6 +30,9 @@ class AppServiceProvider extends ServiceProvider
             && in_array((string) $user->id, EthereumAccountingReviewerAllowlist::normalize(config('services.ethereum.accounting.reviewer_ids')), true));
         Gate::define('manage-settings', fn (User $user): bool => (bool) $user->is_admin);
         RateLimiter::for('telegram-webhook', fn (Request $request) => Limit::perMinute(120)->by($request->ip()));
+        RateLimiter::for('trading-engine-webhook', fn (Request $request) => Limit::perMinute(
+            max(1, (int) config('services.trading_engine.webhook_rate_limit_per_minute', 600))
+        )->by($request->ip()));
         RateLimiter::for('login', fn (Request $request) => Limit::perMinute(5)->by(Str::lower((string) $request->input('email')).'|'.$request->ip()));
         RateLimiter::for('registration', fn (Request $request) => Limit::perMinute(5)->by($request->ip()));
     }

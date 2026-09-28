@@ -174,6 +174,10 @@ return [
         'assertion_lifetime_seconds' => env('TRADING_ENGINE_ASSERTION_LIFETIME_SECONDS', 30),
         'connect_timeout_seconds' => env('TRADING_ENGINE_CONNECT_TIMEOUT_SECONDS', 3),
         'timeout_seconds' => env('TRADING_ENGINE_TIMEOUT_SECONDS', 8),
+        'webhook_secret' => env('TRADING_ENGINE_WEBHOOK_SECRET'),
+        'webhook_timestamp_tolerance_seconds' => (int) env('TRADING_ENGINE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS', 60),
+        'webhook_body_max_bytes' => (int) env('TRADING_ENGINE_WEBHOOK_BODY_MAX_BYTES', 262144),
+        'webhook_rate_limit_per_minute' => (int) env('TRADING_ENGINE_WEBHOOK_RATE_LIMIT_PER_MINUTE', 600),
     ],
 
 ];
