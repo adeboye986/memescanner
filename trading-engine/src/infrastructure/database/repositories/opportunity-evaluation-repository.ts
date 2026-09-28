@@ -1,4 +1,3 @@
-import { Value } from '@sinclair/typebox/value';
 import {
   sql,
   type Insertable,
@@ -9,7 +8,7 @@ import {
 } from 'kysely';
 
 import type { EventEnvelope } from '../../../contracts/events/event-envelope.schema.js';
-import { OpportunityCommandSchema, type OpportunityCommand } from '../../../contracts/http/opportunity-command.schema.js';
+import type { OpportunityCommand } from '../../../contracts/http/opportunity-command.schema.js';
 import type { OpportunityEvaluationResult } from '../../../domain/opportunities/evaluate-opportunity.js';
 import {
   OPPORTUNITY_EVALUATION_POLICY_V1,
@@ -146,13 +145,15 @@ export class OpportunityEvaluationRepository {
       .where('task.policy_version', '=', task.policy_version)
       .executeTakeFirstOrThrow();
 
-    if (!Value.Check(OpportunityCommandSchema, row.accepted_request)) {
-      throw new Error('Stored opportunity request no longer matches its immutable contract');
+    if (hashCanonicalJson(row.accepted_request) !== row.source_request_sha256) {
+      throw new Error('Stored opportunity request no longer matches its immutable hash');
     }
+
+    const request = row.accepted_request as unknown as OpportunityCommand;
 
     return {
       opportunityId: row.opportunity_id,
-      request: row.accepted_request,
+      request,
       sourceRequestSha256: row.source_request_sha256,
       sourceEventId: row.source_event_id,
       correlationId: row.correlation_id,
