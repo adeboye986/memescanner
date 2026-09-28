@@ -2,10 +2,12 @@ import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 
 import { AcceptNoopCommandHandler } from '../../../src/application/handlers/accept-noop-command-handler.js';
+import { RecordOpportunityCommandHandler } from '../../../src/application/handlers/record-opportunity-command-handler.js';
 import { loadConfig } from '../../../src/config/env.js';
 import { createDatabase } from '../../../src/infrastructure/database/client.js';
 import { migrateDatabase } from '../../../src/infrastructure/database/migrate.js';
 import { CommandInboxRepository } from '../../../src/infrastructure/database/repositories/command-inbox-repository.js';
+import { OpportunityRepository } from '../../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../../src/infrastructure/database/repositories/outbox-repository.js';
 import {
   closeRedis,
@@ -25,9 +27,16 @@ const database = createDatabase(config);
 const redis = createRedisConnection(config);
 const commandInbox = new CommandInboxRepository();
 const outbox = new OutboxRepository();
+const opportunities = new OpportunityRepository();
 const noopHandler = new AcceptNoopCommandHandler(
   database,
   commandInbox,
+  outbox,
+);
+const opportunityHandler = new RecordOpportunityCommandHandler(
+  database,
+  commandInbox,
+  opportunities,
   outbox,
 );
 const app = buildApp({
@@ -35,6 +44,7 @@ const app = buildApp({
   database,
   redis,
   noopHandler,
+  opportunityHandler,
   logger,
 });
 let shuttingDown = false;

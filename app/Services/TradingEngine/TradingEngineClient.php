@@ -134,6 +134,51 @@ class TradingEngineClient
     }
 
     /**
+     * @param  array<string, mixed>  $payload
+     * @return array{operationId: string, opportunityId: string, eventId: string, status: string, duplicate: bool}
+     */
+    public function recordOpportunity(
+        string $idempotencyKey,
+        array $payload,
+        ?string $correlationId = null,
+        ?string $traceparent = null,
+    ): array {
+        if (config('services.trading_engine.opportunity_export_enabled', false) !== true) {
+            throw new TradingEngineException('INTEGRATION_DISABLED', 'Trading engine opportunity export is disabled.');
+        }
+
+        if (preg_match('/^[A-Za-z0-9._:-]{1,128}$/D', $idempotencyKey) !== 1) {
+            throw new TradingEngineException('VALIDATION_FAILED', 'The trading engine idempotency key is invalid.');
+        }
+
+        [$response, $correlationId, $traceparent] = $this->request(
+            'POST',
+            '/v1/commands/opportunities',
+            'commands:opportunities:create',
+            $payload,
+            ['Idempotency-Key' => $idempotencyKey],
+            $correlationId,
+            $traceparent,
+        );
+
+        $this->requireStatus($response, [202]);
+        $this->requireResponseContext($response, $correlationId, $traceparent);
+        $result = $response->json();
+
+        if (! is_array($result)
+            || ! $this->hasExactKeys($result, ['operationId', 'opportunityId', 'eventId', 'status', 'duplicate'])
+            || ! $this->validEngineId($result['operationId'] ?? null)
+            || ! $this->validEngineId($result['opportunityId'] ?? null)
+            || ! $this->validEngineId($result['eventId'] ?? null)
+            || $result['status'] !== 'accepted'
+            || ! is_bool($result['duplicate'])) {
+            throw $this->invalidResponse();
+        }
+
+        return $result;
+    }
+
+    /**
      * @param  array<string, mixed>  $body
      * @param  array<string, string>  $headers
      * @return array{Response, string, string}
@@ -304,6 +349,11 @@ class TradingEngineClient
             && $this->hasExactKeys($result['dependencies'], ['postgres', 'redis'])
             && in_array($result['dependencies']['postgres'], ['up', 'down'], true)
             && in_array($result['dependencies']['redis'], ['up', 'down'], true);
+    }
+
+    private function validEngineId(mixed $value): bool
+    {
+        return is_string($value) && preg_match('/^[0-9A-HJKMNP-TV-Z]{26}$/D', $value) === 1;
     }
 
     private function validTimestamp(mixed $value): bool

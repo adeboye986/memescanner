@@ -11,6 +11,9 @@ import { loadConfig, type EngineConfig } from '../../src/config/env.js';
 import { createDatabase, type Database } from '../../src/infrastructure/database/client.js';
 import { migrateDatabase } from '../../src/infrastructure/database/migrate.js';
 
+const DEDICATED_TEST_DATABASE = 'trading_engine_test';
+const DEDICATED_TEST_REDIS_INDEX = 15;
+
 export interface TestEnvironment {
   readonly databaseUrl: string;
   readonly redisUrl: string;
@@ -24,10 +27,19 @@ export interface TestIdentity {
 }
 
 export async function startTestEnvironment(): Promise<TestEnvironment> {
-  const configuredDatabaseUrl = process.env['DATABASE_URL'];
-  const configuredRedisUrl = process.env['REDIS_URL'];
+  const configuredDatabaseUrl = nonEmptyEnvironmentValue(process.env['DATABASE_URL']);
+  const configuredRedisUrl = nonEmptyEnvironmentValue(process.env['REDIS_URL']);
+
+  if ((configuredDatabaseUrl === undefined) !== (configuredRedisUrl === undefined)) {
+    throw new Error(
+      'External integration tests require both DATABASE_URL and REDIS_URL; refusing container fallback',
+    );
+  }
 
   if (configuredDatabaseUrl !== undefined && configuredRedisUrl !== undefined) {
+    assertDedicatedTestDatabaseUrl(configuredDatabaseUrl);
+    assertDedicatedTestRedisUrl(configuredRedisUrl);
+
     return {
       databaseUrl: configuredDatabaseUrl,
       redisUrl: configuredRedisUrl,
@@ -36,16 +48,21 @@ export async function startTestEnvironment(): Promise<TestEnvironment> {
 
   const [postgresContainer, redisContainer] = await Promise.all([
     new PostgreSqlContainer('postgres:17.6-alpine')
-      .withDatabase('trading_engine_test')
+      .withDatabase(DEDICATED_TEST_DATABASE)
       .withUsername('trading_engine')
       .withPassword('test_only_password')
       .start(),
     new RedisContainer('redis:8.2.1-alpine').start(),
   ]);
+  const databaseUrl = postgresContainer.getConnectionUri();
+  const redisUrl = withRedisDatabase(redisContainer.getConnectionUrl());
+
+  assertDedicatedTestDatabaseUrl(databaseUrl);
+  assertDedicatedTestRedisUrl(redisUrl);
 
   return {
-    databaseUrl: postgresContainer.getConnectionUri(),
-    redisUrl: redisContainer.getConnectionUrl(),
+    databaseUrl,
+    redisUrl,
     postgresContainer,
     redisContainer,
   };
@@ -81,7 +98,7 @@ export function createTestIdentity(
       ?? 'postgresql://trading_engine:test@127.0.0.1:5433/trading_engine_test',
     DATABASE_MAX_CONNECTIONS: '5',
     DATABASE_SSL: 'false',
-    REDIS_URL: environment?.redisUrl ?? 'redis://127.0.0.1:6380',
+    REDIS_URL: environment?.redisUrl ?? 'redis://127.0.0.1:6380/15',
     REDIS_PREFIX: `meme-scanner:test:${process.pid}`,
     SERVICE_AUTH_ISSUER: 'laravel-test',
     SERVICE_AUTH_AUDIENCE: 'trading-engine-test',
@@ -133,8 +150,55 @@ export async function createServiceToken(
     .sign(identity.privateKey);
 }
 
+export function assertDedicatedTestDatabaseUrl(databaseUrl: string): void {
+  const parsed = parseUrl(databaseUrl);
+  const databaseName = parsed === undefined
+    || !['postgres:', 'postgresql:'].includes(parsed.protocol)
+    || parsed.searchParams.has('database')
+    || parsed.searchParams.has('dbname')
+    ? undefined
+    : decodedPathSegment(parsed);
+
+  if (databaseName !== DEDICATED_TEST_DATABASE) {
+    throw new Error(
+      `Refusing destructive PostgreSQL test reset: DATABASE_URL must target ${DEDICATED_TEST_DATABASE}`,
+    );
+  }
+}
+
+export function assertDedicatedTestRedisUrl(redisUrl: string): void {
+  const parsed = parseUrl(redisUrl);
+  const databaseIndex = parsed === undefined
+    || !['redis:', 'rediss:'].includes(parsed.protocol)
+    || parsed.searchParams.has('db')
+    ? undefined
+    : decodedPathSegment(parsed);
+
+  if (databaseIndex !== String(DEDICATED_TEST_REDIS_INDEX)) {
+    throw new Error(
+      `Refusing destructive Redis test reset: REDIS_URL must explicitly select database ${DEDICATED_TEST_REDIS_INDEX}`,
+    );
+  }
+}
+
+export async function assertDedicatedTestDatabase(
+  database: Kysely<Database>,
+): Promise<void> {
+  const result = await sql<{ readonly database_name: string }>`
+    select current_database() as database_name
+  `.execute(database);
+
+  if (result.rows[0]?.database_name !== DEDICATED_TEST_DATABASE) {
+    throw new Error(
+      `Refusing destructive PostgreSQL test reset: connected database must be ${DEDICATED_TEST_DATABASE}`,
+    );
+  }
+}
+
 export async function resetDatabase(database: Kysely<Database>): Promise<void> {
+  await assertDedicatedTestDatabase(database);
   await sql`
+    drop table if exists opportunities cascade;
     drop table if exists event_delivery_attempts cascade;
     drop table if exists event_outbox cascade;
     drop table if exists command_inbox cascade;
@@ -145,6 +209,7 @@ export async function resetDatabase(database: Kysely<Database>): Promise<void> {
 }
 
 export async function resetRedis(redisUrl: string): Promise<void> {
+  assertDedicatedTestRedisUrl(redisUrl);
   const redis = new Redis(redisUrl, {
     lazyConnect: true,
     maxRetriesPerRequest: 1,
@@ -160,4 +225,35 @@ export async function resetRedis(redisUrl: string): Promise<void> {
 
 export function databaseFor(environment: TestEnvironment): Kysely<Database> {
   return createDatabase(createTestIdentity(environment).config);
+}
+
+function nonEmptyEnvironmentValue(value: string | undefined): string | undefined {
+  return value === undefined || value.trim() === '' ? undefined : value;
+}
+
+function parseUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function decodedPathSegment(url: URL): string | undefined {
+  if (!/^\/[^/]+$/.test(url.pathname)) {
+    return undefined;
+  }
+
+  try {
+    return decodeURIComponent(url.pathname.slice(1));
+  } catch {
+    return undefined;
+  }
+}
+
+function withRedisDatabase(redisUrl: string): string {
+  const parsed = new URL(redisUrl);
+  parsed.pathname = `/${DEDICATED_TEST_REDIS_INDEX}`;
+
+  return parsed.toString();
 }

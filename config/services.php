@@ -166,6 +166,7 @@ return [
 
     'trading_engine' => [
         'enabled' => env('TRADING_ENGINE_ENABLED', false),
+        'opportunity_export_enabled' => env('TRADING_ENGINE_OPPORTUNITY_EXPORT_ENABLED', false),
         'base_url' => env('TRADING_ENGINE_BASE_URL'),
         'service_issuer' => env('TRADING_ENGINE_SERVICE_ISSUER', 'meme-scanner-laravel'),
         'service_audience' => env('TRADING_ENGINE_SERVICE_AUDIENCE', 'meme-scanner-trading-engine'),

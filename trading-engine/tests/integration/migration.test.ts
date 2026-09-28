@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDatabase, type Database } from '../../src/infrastructure/database/client.js';
 import { migrateDatabase } from '../../src/infrastructure/database/migrate.js';
 import {
+  assertDedicatedTestDatabase,
   createTestIdentity,
   startTestEnvironment,
   stopTestEnvironment,
@@ -26,6 +27,8 @@ describe('foundation migration and infrastructure connectivity', () => {
   });
 
   it('applies the foundation migration to an empty PostgreSQL database and reruns safely', async () => {
+    await assertDedicatedTestDatabase(database);
+    await database.schema.dropTable('opportunities').ifExists().cascade().execute();
     await database.schema.dropTable('event_delivery_attempts').ifExists().cascade().execute();
     await database.schema.dropTable('event_outbox').ifExists().cascade().execute();
     await database.schema.dropTable('command_inbox').ifExists().cascade().execute();
@@ -34,12 +37,16 @@ describe('foundation migration and infrastructure connectivity', () => {
 
     const first = await migrateDatabase(database);
     const second = await migrateDatabase(database);
-    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts') order by table_name").execute(database);
+    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities') order by table_name").execute(database);
 
     expect(first.error).toBeUndefined();
     expect(first.results).toEqual([
       expect.objectContaining({
         migrationName: '001_foundation',
+        status: 'Success',
+      }),
+      expect.objectContaining({
+        migrationName: '002_opportunities',
         status: 'Success',
       }),
     ]);
@@ -49,6 +56,7 @@ describe('foundation migration and infrastructure connectivity', () => {
       'command_inbox',
       'event_delivery_attempts',
       'event_outbox',
+      'opportunities',
     ]);
   });
 

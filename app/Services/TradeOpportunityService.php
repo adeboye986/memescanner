@@ -6,9 +6,11 @@ use App\Chain;
 use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
+use App\Jobs\SubmitTradingEngineOpportunity;
 use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Models\User;
+use App\Services\TradingEngine\TradingEngineOpportunityCommandFactory;
 use Throwable;
 
 class TradeOpportunityService
@@ -18,6 +20,7 @@ class TradeOpportunityService
         private EntryPolicy $policy,
         private UserTradingPreferenceService $preferences,
         private UserTelegramNotificationService $userTelegram,
+        private TradingEngineOpportunityCommandFactory $tradingEngineCommands,
     ) {}
 
     /** @param array<string, mixed> $data
@@ -95,6 +98,8 @@ class TradeOpportunityService
             return ['opportunity' => $opportunity, 'position' => $opportunity->paperPosition];
         }
 
+        $this->queueTradingEngineExport($opportunity);
+
         $position = $this->policy->apply($opportunity);
 
         $status = $opportunity->fresh()->status;
@@ -118,5 +123,25 @@ class TradeOpportunityService
         }
 
         return ['opportunity' => $opportunity, 'position' => $position];
+    }
+
+    private function queueTradingEngineExport(TradeOpportunity $opportunity): void
+    {
+        if (config('services.trading_engine.enabled') !== true
+            || config('services.trading_engine.opportunity_export_enabled') !== true
+            || $opportunity->user_id === null
+            || ! in_array($opportunity->scanner, ['new-token', 'momentum'], true)) {
+            return;
+        }
+
+        try {
+            $command = $this->tradingEngineCommands->make($opportunity);
+            SubmitTradingEngineOpportunity::dispatch(
+                $command['payload'],
+                $command['idempotency_key'],
+            );
+        } catch (Throwable $exception) {
+            report($exception);
+        }
     }
 }

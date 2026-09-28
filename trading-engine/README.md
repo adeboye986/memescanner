@@ -146,9 +146,16 @@ pnpm build
 pnpm test
 ```
 
-The integration tests use `DATABASE_URL` and `REDIS_URL` when both are
-defined. Otherwise they start disposable PostgreSQL and Redis containers through
-Testcontainers. Docker must be running in either case.
+The integration tests use `DATABASE_URL` and `REDIS_URL` unchanged when both are
+defined, so external test services do not require Docker. Supplying only one URL
+fails instead of silently falling back to containers. Destructive resets refuse
+to run unless PostgreSQL targets the database named `trading_engine_test` and
+the Redis URL explicitly selects database `/15`.
+
+When neither URL is defined, the tests start disposable PostgreSQL and Redis
+containers through Testcontainers. The fallback uses the same dedicated
+PostgreSQL database name and Redis database index; Docker is required only for
+this fallback.
 
 Start all three process roles after the checks pass:
 

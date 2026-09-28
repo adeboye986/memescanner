@@ -57,10 +57,47 @@ export interface EventDeliveryAttemptTable {
   created_at: ColumnType<Date, Date | string | undefined, never>;
 }
 
+export interface OpportunityTable {
+  id: string;
+  aggregate_version: 1;
+  state: 'recorded';
+  source_system: string;
+  source_opportunity_id: string;
+  control_plane_user_id: string;
+  discovery_key: string;
+  scanner: 'new-token' | 'momentum';
+  network_id: string;
+  asset_address: string;
+  symbol: string | null;
+  name: string | null;
+  price_usd: string | null;
+  price_provider: string | null;
+  market_cap_usd: string | null;
+  market_cap_provider: string | null;
+  liquidity_usd: string | null;
+  liquidity_provider: string | null;
+  volume_usd: string | null;
+  volume_provider: string | null;
+  volume_window: '1m' | '5m' | null;
+  pair_address: string | null;
+  dex: string | null;
+  pair_provider: string | null;
+  qualified_at: Date;
+  discovery_market_cap_usd: string | null;
+  move_since_discovery_percent: string | null;
+  classification: string | null;
+  security: JsonValue | null;
+  accepted_request: JsonValue;
+  request_sha256: string;
+  received_at: ColumnType<Date, Date | string | undefined, never>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
 export interface Database {
   command_inbox: CommandInboxTable;
   event_outbox: EventOutboxTable;
   event_delivery_attempts: EventDeliveryAttemptTable;
+  opportunities: OpportunityTable;
 }
 
 export function createDatabase(config: EngineConfig): Kysely<Database> {

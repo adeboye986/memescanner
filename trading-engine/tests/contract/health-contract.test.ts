@@ -5,8 +5,10 @@ import type { Redis } from 'ioredis';
 import { describe, expect, it } from 'vitest';
 
 import { AcceptNoopCommandHandler } from '../../src/application/handlers/accept-noop-command-handler.js';
+import { RecordOpportunityCommandHandler } from '../../src/application/handlers/record-opportunity-command-handler.js';
 import type { Database } from '../../src/infrastructure/database/client.js';
 import { CommandInboxRepository } from '../../src/infrastructure/database/repositories/command-inbox-repository.js';
+import { OpportunityRepository } from '../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../src/infrastructure/database/repositories/outbox-repository.js';
 import {
   buildApp,
@@ -21,16 +23,25 @@ function inertDependencies(): {
   readonly database: Kysely<Database>;
   readonly redis: Redis;
   readonly handler: AcceptNoopCommandHandler;
+  readonly opportunityHandler: RecordOpportunityCommandHandler;
 } {
   const database = {} as Kysely<Database>;
+  const commandInbox = new CommandInboxRepository();
+  const outbox = new OutboxRepository();
 
   return {
     database,
     redis: {} as Redis,
     handler: new AcceptNoopCommandHandler(
       database,
-      new CommandInboxRepository(),
-      new OutboxRepository(),
+      commandInbox,
+      outbox,
+    ),
+    opportunityHandler: new RecordOpportunityCommandHandler(
+      database,
+      commandInbox,
+      new OpportunityRepository(),
+      outbox,
     ),
   };
 }
@@ -44,6 +55,7 @@ describe('health and version contracts', () => {
       database: dependencies.database,
       redis: dependencies.redis,
       noopHandler: dependencies.handler,
+      opportunityHandler: dependencies.opportunityHandler,
     });
 
     const response = await app.inject({
@@ -69,6 +81,7 @@ describe('health and version contracts', () => {
       database: dependencies.database,
       redis: dependencies.redis,
       noopHandler: dependencies.handler,
+      opportunityHandler: dependencies.opportunityHandler,
     });
     const now = Math.floor(Date.now() / 1_000);
     const token = await createServiceToken(identity, {
@@ -102,6 +115,7 @@ describe('health and version contracts', () => {
       database: dependencies.database,
       redis: dependencies.redis,
       noopHandler: dependencies.handler,
+      opportunityHandler: dependencies.opportunityHandler,
     });
     const token = await createServiceToken(identity, {
       scopes: ['commands:noop'],
@@ -132,6 +146,7 @@ describe('health and version contracts', () => {
       database: dependencies.database,
       redis: dependencies.redis,
       noopHandler: dependencies.handler,
+      opportunityHandler: dependencies.opportunityHandler,
     });
     const token = await createServiceToken(identity, {
       scopes: ['health:read'],

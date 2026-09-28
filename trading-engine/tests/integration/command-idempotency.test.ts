@@ -11,8 +11,10 @@ import {
 
 import { buildApp } from '../../apps/api/src/app.js';
 import { AcceptNoopCommandHandler } from '../../src/application/handlers/accept-noop-command-handler.js';
+import { RecordOpportunityCommandHandler } from '../../src/application/handlers/record-opportunity-command-handler.js';
 import { createDatabase, type Database } from '../../src/infrastructure/database/client.js';
 import { CommandInboxRepository } from '../../src/infrastructure/database/repositories/command-inbox-repository.js';
+import { OpportunityRepository } from '../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../src/infrastructure/database/repositories/outbox-repository.js';
 import {
   closeRedis,
@@ -52,6 +54,12 @@ describe('idempotent no-op command', () => {
       database,
       redis,
       noopHandler: handler,
+      opportunityHandler: new RecordOpportunityCommandHandler(
+        database,
+        new CommandInboxRepository(),
+        new OpportunityRepository(),
+        new OutboxRepository(),
+      ),
     });
   });
 

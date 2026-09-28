@@ -12,6 +12,10 @@ use Throwable;
 
 class TradingEngineEventEnvelopeValidator
 {
+    public function __construct(
+        private TradingEngineOpportunityPayloadValidator $opportunityPayloads,
+    ) {}
+
     private const REQUIRED_KEYS = [
         'event_id',
         'event_type',
@@ -87,6 +91,11 @@ class TradingEngineEventEnvelopeValidator
             $handlingStatus = TradingEngineEvent::STATUS_STORED;
         }
 
+        if ($envelope['event_type'] === 'opportunity.recorded.v1') {
+            $this->validateOpportunityRecorded($envelope);
+            $handlingStatus = TradingEngineEvent::STATUS_STORED;
+        }
+
         return [
             'envelope' => $envelope,
             'handling_status' => $handlingStatus,
@@ -109,6 +118,22 @@ class TradingEngineEventEnvelopeValidator
             || $envelope['aggregate_version'] !== 1
             || $payload['operation_id'] !== $envelope['aggregate_id']
             || $envelope['causation_id'] !== $envelope['aggregate_id']) {
+            $this->rejectEnvelope();
+        }
+    }
+
+    /** @param array<string, mixed> $envelope */
+    private function validateOpportunityRecorded(array $envelope): void
+    {
+        $payload = $envelope['payload'];
+
+        if (! is_array($payload)
+            || ! $this->opportunityPayloads->isValid($payload)
+            || $envelope['schema_version'] !== 1
+            || $envelope['aggregate_type'] !== 'opportunity'
+            || $envelope['aggregate_version'] !== 1
+            || $payload['opportunity_id'] !== $envelope['aggregate_id']
+            || $payload['operation_id'] !== $envelope['causation_id']) {
             $this->rejectEnvelope();
         }
     }
