@@ -1,9 +1,73 @@
 import { sql, type Kysely } from 'kysely';
 
-import {
-  OPPORTUNITY_EVALUATION_POLICY_V1,
-  OPPORTUNITY_EVALUATION_POLICY_V1_SHA256,
-} from '../../../domain/opportunities/evaluation-policy.js';
+const opportunityEvaluationPolicyV1Definition = {
+  policy_key: 'migration-opportunity-snapshot',
+  policy_version: 1,
+  algorithm_key: 'threshold-matrix',
+  algorithm_version: 1,
+  outcome_precedence: ['failed', 'indeterminate', 'passed'],
+  reason_order: [
+    'MARKET_CAP_MISSING',
+    'MARKET_CAP_BELOW_MINIMUM',
+    'MARKET_CAP_ABOVE_MAXIMUM',
+    'LIQUIDITY_MISSING',
+    'LIQUIDITY_BELOW_MINIMUM',
+    'VOLUME_5M_MISSING',
+    'VOLUME_5M_BELOW_MINIMUM',
+    'MOVEMENT_MISSING',
+    'MOVEMENT_AT_OR_BELOW_MINIMUM',
+    'MOVEMENT_ABOVE_MAXIMUM',
+    'CLASSIFICATION_MISSING',
+    'CLASSIFICATION_NOT_STRONG',
+    'PAIR_EVIDENCE_MISSING',
+    'PAIR_VALIDATION_FAILED',
+    'SECURITY_EVIDENCE_MISSING',
+    'SECURITY_EVIDENCE_FAILED',
+    'SECURITY_EVIDENCE_CONTRADICTORY',
+  ],
+  advisory_order: ['SECURITY_EVIDENCE_UNAVAILABLE'],
+  profiles: {
+    'solana:new-token': {
+      market_cap_usd: { minimum: '2000', maximum: '20000' },
+      liquidity_usd: { minimum: '500' },
+      movement_percent: { exclusive_minimum: '-30', maximum: '35' },
+      classification: 'strong',
+      security: 'required-passed-goplus',
+      pair_validation: 'not-required',
+      volume_5m_usd: 'not-required',
+    },
+    'solana:momentum': {
+      market_cap_usd: { minimum: '5000', maximum: '100000' },
+      liquidity_usd: { minimum: '1000' },
+      movement_percent: { exclusive_minimum: '-30', maximum: '35' },
+      classification: 'not-required',
+      security: 'holder-failure-fails-unavailable-advisory',
+      pair_validation: 'required-pair-and-base',
+      volume_5m_usd: { minimum: '500' },
+    },
+    'ethereum:new-token': {
+      market_cap_usd: { minimum: '2000', maximum: '20000' },
+      liquidity_usd: { minimum: '500' },
+      movement_percent: { exclusive_minimum: '-30', maximum: '35' },
+      classification: 'not-required',
+      security: 'unavailable-advisory',
+      pair_validation: 'required-pair-and-base',
+      volume_5m_usd: 'not-required',
+    },
+    'ethereum:momentum': {
+      market_cap_usd: { minimum: '5000', maximum: '100000' },
+      liquidity_usd: { minimum: '1000' },
+      movement_percent: { exclusive_minimum: '-30', maximum: '35' },
+      classification: 'not-required',
+      security: 'unavailable-advisory',
+      pair_validation: 'required-pair-and-base',
+      volume_5m_usd: { minimum: '500' },
+    },
+  },
+} as const;
+
+const opportunityEvaluationPolicyV1DefinitionSha256 =
+  '7274b84fda5959c257a24fa585d5f4a6e00ad48c047a5ba44b9d109b12ace6dc';
 
 export async function up(database: Kysely<unknown>): Promise<void> {
   await database.schema
@@ -34,12 +98,12 @@ export async function up(database: Kysely<unknown>): Promise<void> {
       definition,
       definition_sha256
     ) values (
-      ${OPPORTUNITY_EVALUATION_POLICY_V1.policy_key},
-      ${OPPORTUNITY_EVALUATION_POLICY_V1.policy_version},
-      ${OPPORTUNITY_EVALUATION_POLICY_V1.algorithm_key},
-      ${OPPORTUNITY_EVALUATION_POLICY_V1.algorithm_version},
-      ${JSON.stringify(OPPORTUNITY_EVALUATION_POLICY_V1)}::jsonb,
-      ${OPPORTUNITY_EVALUATION_POLICY_V1_SHA256}
+      ${opportunityEvaluationPolicyV1Definition.policy_key},
+      ${opportunityEvaluationPolicyV1Definition.policy_version},
+      ${opportunityEvaluationPolicyV1Definition.algorithm_key},
+      ${opportunityEvaluationPolicyV1Definition.algorithm_version},
+      ${JSON.stringify(opportunityEvaluationPolicyV1Definition)}::jsonb,
+      ${opportunityEvaluationPolicyV1DefinitionSha256}
     )
   `.execute(database);
 
