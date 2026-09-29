@@ -12,6 +12,7 @@ use App\Models\TradingEngineEvent;
 use App\Models\TradingEngineOpportunityLink;
 use App\Models\User;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
+use App\Services\TradingEngine\TradingEngineProjectionEligibility;
 use App\Services\TradingEngine\TradingEngineProjectionRecovery;
 use App\Services\UserTelegramNotificationService;
 use Illuminate\Console\Scheduling\Schedule;
@@ -286,6 +287,7 @@ class TradingEngineProjectionRecoveryTest extends TestCase
         $recovery = new TradingEngineProjectionRecovery(
             $dispatcher,
             app(TradingEngineOpportunityProjector::class),
+            app(TradingEngineProjectionEligibility::class),
         );
 
         $result = $recovery->recover();

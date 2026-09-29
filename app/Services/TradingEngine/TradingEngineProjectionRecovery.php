@@ -5,26 +5,15 @@ namespace App\Services\TradingEngine;
 use App\Jobs\ProjectTradingEngineEvent;
 use App\Models\TradingEngineEvent;
 use Illuminate\Contracts\Bus\Dispatcher;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
 class TradingEngineProjectionRecovery
 {
-    private const MAXIMUM_BATCH_SIZE = 500;
-
-    private const MAXIMUM_INTERVAL_SECONDS = 3600;
-
-    private const MINIMUM_INTERVAL_SECONDS = 30;
-
-    private const PROJECTABLE_EVENT_TYPES = [
-        'opportunity.recorded.v1',
-        'opportunity.evaluated.v1',
-    ];
-
     public function __construct(
         private Dispatcher $dispatcher,
         private TradingEngineOpportunityProjector $projector,
+        private TradingEngineProjectionEligibility $eligibility,
     ) {}
 
     /**
@@ -32,8 +21,7 @@ class TradingEngineProjectionRecovery
      */
     public function recover(): array
     {
-        if (config('services.trading_engine.enabled', false) !== true
-            || config('services.trading_engine.opportunity_projection_enabled', false) !== true) {
+        if (! $this->eligibility->enabled()) {
             return [
                 'enabled' => false,
                 'selected' => 0,
@@ -47,12 +35,10 @@ class TradingEngineProjectionRecovery
         $failed = 0;
 
         foreach ($eventIds as $eventId) {
-            try {
-                $this->dispatcher->dispatch(new ProjectTradingEngineEvent($eventId));
+            if ($this->dispatch($eventId)) {
                 $dispatched++;
-            } catch (Throwable) {
+            } else {
                 $failed++;
-                $this->projector->markDispatchFailure($eventId);
             }
         }
 
@@ -64,61 +50,90 @@ class TradingEngineProjectionRecovery
         ];
     }
 
+    /**
+     * @return array{status: string, error_code: string|null}
+     */
+    public function retry(string $eventId): array
+    {
+        if (! $this->eligibility->enabled()) {
+            return [
+                'status' => 'blocked',
+                'error_code' => 'PROJECTION_RECOVERY_DISABLED',
+            ];
+        }
+
+        $lease = DB::transaction(function () use ($eventId): array {
+            $now = now();
+            $event = TradingEngineEvent::query()
+                ->where('event_id', $eventId)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $event) {
+                return ['acquired' => false, 'error_code' => 'PROJECTION_EVENT_NOT_FOUND'];
+            }
+
+            $blockCode = $this->eligibility->manualRetryBlockCode($event, $now);
+
+            if ($blockCode !== null) {
+                return ['acquired' => false, 'error_code' => $blockCode];
+            }
+
+            $claim = TradingEngineEvent::query()
+                ->whereKey($event->getKey())
+                ->where('handling_status', $event->handling_status);
+            $originalNextHandlingAt = $event->getRawOriginal('next_handling_at');
+
+            if ($originalNextHandlingAt === null) {
+                $claim->whereNull('next_handling_at');
+            } else {
+                $claim->where('next_handling_at', $originalNextHandlingAt);
+            }
+
+            $acquired = $claim->update([
+                'next_handling_at' => $this->eligibility->leaseUntil($now),
+                'updated_at' => $now,
+            ]) === 1;
+
+            return [
+                'acquired' => $acquired,
+                'error_code' => $acquired ? null : 'PROJECTION_LEASE_NOT_ACQUIRED',
+            ];
+        }, 3);
+
+        if (! $lease['acquired']) {
+            return [
+                'status' => 'blocked',
+                'error_code' => $lease['error_code'],
+            ];
+        }
+
+        if (! $this->dispatch($eventId)) {
+            return [
+                'status' => 'failed',
+                'error_code' => 'PROJECTION_DISPATCH_FAILED',
+            ];
+        }
+
+        return [
+            'status' => 'dispatched',
+            'error_code' => null,
+        ];
+    }
+
     /** @return array<int, string> */
     private function leaseEligibleEventIds(): array
     {
         $now = now();
-        $staleBefore = $now->copy()->subSeconds($this->interval(
-            'projection_recovery_stale_after_seconds',
-            300,
-        ));
-        $leaseUntil = $now->copy()->addSeconds($this->interval(
-            'projection_recovery_lease_seconds',
-            120,
-        ));
-        $batchSize = max(1, min(
-            self::MAXIMUM_BATCH_SIZE,
-            (int) config('services.trading_engine.projection_recovery_batch_size', 100),
-        ));
+        $leaseUntil = $this->eligibility->leaseUntil($now);
+        $batchSize = $this->eligibility->batchSize();
 
-        return DB::transaction(function () use ($batchSize, $leaseUntil, $now, $staleBefore): array {
-            $events = TradingEngineEvent::query()
-                ->select(['id', 'event_id'])
-                ->whereIn('event_type', self::PROJECTABLE_EVENT_TYPES)
-                ->where(function (Builder $query) use ($now, $staleBefore): void {
-                    $query
-                        ->where(function (Builder $stored) use ($now, $staleBefore): void {
-                            $stored
-                                ->where('handling_status', TradingEngineEvent::STATUS_STORED)
-                                ->where('received_at', '<=', $staleBefore)
-                                ->where(function (Builder $lease) use ($now): void {
-                                    $lease
-                                        ->whereNull('next_handling_at')
-                                        ->orWhere('next_handling_at', '<=', $now);
-                                });
-                        })
-                        ->orWhere(function (Builder $retryable) use ($now): void {
-                            $retryable
-                                ->where('handling_status', TradingEngineEvent::STATUS_RETRYABLE)
-                                ->whereNotNull('next_handling_at')
-                                ->where('next_handling_at', '<=', $now);
-                        })
-                        ->orWhere(function (Builder $deferred) use ($now): void {
-                            $deferred
-                                ->where('handling_status', TradingEngineEvent::STATUS_DEFERRED)
-                                ->whereNotNull('next_handling_at')
-                                ->where('next_handling_at', '<=', $now)
-                                ->whereExists(function ($link): void {
-                                    $link
-                                        ->selectRaw('1')
-                                        ->from('trading_engine_opportunity_links')
-                                        ->whereColumn(
-                                            'trading_engine_opportunity_links.recorded_event_id',
-                                            'trading_engine_event_inbox.causation_id',
-                                        );
-                                });
-                        });
-                })
+        return DB::transaction(function () use ($batchSize, $leaseUntil, $now): array {
+            $query = $this->eligibility->projectableQuery()
+                ->select(['id', 'event_id']);
+            $this->eligibility->applyAutomaticEligibility($query, $now);
+
+            $events = $query
                 ->orderBy('id')
                 ->limit($batchSize)
                 ->lockForUpdate()
@@ -141,14 +156,16 @@ class TradingEngineProjectionRecovery
         }, 3);
     }
 
-    private function interval(string $key, int $default): int
+    private function dispatch(string $eventId): bool
     {
-        return max(
-            self::MINIMUM_INTERVAL_SECONDS,
-            min(
-                self::MAXIMUM_INTERVAL_SECONDS,
-                (int) config('services.trading_engine.'.$key, $default),
-            ),
-        );
+        try {
+            $this->dispatcher->dispatch(new ProjectTradingEngineEvent($eventId));
+
+            return true;
+        } catch (Throwable) {
+            $this->projector->markDispatchFailure($eventId);
+
+            return false;
+        }
     }
 }
