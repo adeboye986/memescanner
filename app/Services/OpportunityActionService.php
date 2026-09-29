@@ -11,9 +11,11 @@ use App\Models\TradeOpportunity;
 use App\Models\TradeOpportunityEvent;
 use App\Models\User;
 use App\Services\Trading\PaperTradeExecutor;
+use App\Services\TradingEngine\TradingEngineLiveDecisionIntegration;
 use DomainException;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
+use Throwable;
 
 class OpportunityActionService
 {
@@ -23,6 +25,7 @@ class OpportunityActionService
         private PaperTradeExecutor $paperExecutor,
         private UserTradingPreferenceService $preferences,
         private EthereumOpportunityReservationService $ethereumReservations,
+        private TradingEngineLiveDecisionIntegration $liveDecisionIntegration,
     ) {}
 
     /** @param array{sell_amount_wei?: mixed, slippage_bps?: mixed}|null $liveInput */
@@ -32,6 +35,17 @@ class OpportunityActionService
         $executionMode = $opportunity->user_id
             ? $this->preferences->forUser($actor)->execution_mode
             : ExecutionMode::from((string) $this->settings->get('trading.execution_mode'));
+
+        if ($executionMode === ExecutionMode::Live
+            && config('services.trading_engine.live_decision_integration_enabled', false) === true) {
+            try {
+                $this->liveDecisionIntegration->assess($opportunity);
+            } catch (Throwable) {
+                throw new DomainException('The informational LIVE decision is unavailable. No execution was started.');
+            }
+
+            throw new DomainException('The informational LIVE decision cannot authorize execution. No execution was started.');
+        }
 
         if ($executionMode === ExecutionMode::Live && $opportunity->chain === Chain::Ethereum) {
             if ($liveInput === null) {

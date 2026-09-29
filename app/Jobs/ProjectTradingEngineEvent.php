@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Services\TradingEngine\TradingEngineLiveDecisionIntegration;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
 use App\Services\TradingEngine\TradingEnginePaperDecisionIntegration;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -28,6 +29,7 @@ class ProjectTradingEngineEvent implements ShouldQueue
     public function handle(
         TradingEngineOpportunityProjector $projector,
         ?TradingEnginePaperDecisionIntegration $paperDecisionIntegration = null,
+        ?TradingEngineLiveDecisionIntegration $liveDecisionIntegration = null,
     ): void {
         if (config('services.trading_engine.enabled', false) !== true
             || config('services.trading_engine.opportunity_projection_enabled', false) !== true) {
@@ -35,12 +37,15 @@ class ProjectTradingEngineEvent implements ShouldQueue
         }
 
         $paperDecisionIntegration ??= app(TradingEnginePaperDecisionIntegration::class);
+        $liveDecisionIntegration ??= app(TradingEngineLiveDecisionIntegration::class);
         $result = $projector->project($this->eventId);
         $paperDecisionIntegration->attemptForProjectedEvaluation($this->eventId);
+        $liveDecisionIntegration->assessForProjectedEvaluation($this->eventId);
 
         foreach ($result['dependent_event_ids'] as $dependentEventId) {
             $projector->project($dependentEventId);
             $paperDecisionIntegration->attemptForProjectedEvaluation($dependentEventId);
+            $liveDecisionIntegration->assessForProjectedEvaluation($dependentEventId);
         }
     }
 }
