@@ -172,6 +172,7 @@ return [
         'decision_boundary_enabled' => env('TRADING_ENGINE_DECISION_BOUNDARY_ENABLED', false),
         'paper_decision_integration_enabled' => env('TRADING_ENGINE_PAPER_DECISION_INTEGRATION_ENABLED', false),
         'live_decision_integration_enabled' => env('TRADING_ENGINE_LIVE_DECISION_INTEGRATION_ENABLED', false),
+        'live_preparation_enabled' => env('TRADING_ENGINE_LIVE_PREPARATION_ENABLED', false),
         'projection_recovery_batch_size' => (int) env('TRADING_ENGINE_PROJECTION_RECOVERY_BATCH_SIZE', 100),
         'projection_recovery_stale_after_seconds' => (int) env('TRADING_ENGINE_PROJECTION_RECOVERY_STALE_AFTER_SECONDS', 300),
         'projection_recovery_lease_seconds' => (int) env('TRADING_ENGINE_PROJECTION_RECOVERY_LEASE_SECONDS', 120),

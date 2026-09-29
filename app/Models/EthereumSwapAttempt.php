@@ -3,9 +3,9 @@
 namespace App\Models;
 
 use App\Chain;
-use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
+use App\Services\EthereumOpportunityExecutionPolicy;
 use DomainException;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -43,7 +43,8 @@ class EthereumSwapAttempt extends Model
             if (! $opportunity || ! $wallet
                 || $opportunity->user_id !== $attempt->user_id || $wallet->user_id !== $attempt->user_id
                 || $opportunity->chain !== Chain::Ethereum || $wallet->chain !== Chain::Ethereum
-                || $opportunity->entry_mode !== EntryMode::Confirm || $opportunity->execution_mode !== ExecutionMode::Live
+                || ! app(EthereumOpportunityExecutionPolicy::class)->permitsConfirmFirstFlow($opportunity)
+                || $opportunity->execution_mode !== ExecutionMode::Live
                 || $opportunity->status !== TradeOpportunityStatus::Executing
                 || ! $wallet->isVerified()
                 || $attempt->wallet_address !== strtolower($wallet->address)

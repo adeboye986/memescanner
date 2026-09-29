@@ -8,6 +8,7 @@ use App\Enums\TradeOpportunityStatus;
 use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Services\TradingEngine\TradingEngineLiveDecisionIntegration;
+use App\Services\TradingEngine\TradingEngineLivePreparationIntegration;
 use App\Services\TradingEngine\TradingEnginePaperDecisionIntegration;
 use Throwable;
 
@@ -19,6 +20,7 @@ class EntryPolicy
         private UserTradingPreferenceService $preferences,
         private TradingEnginePaperDecisionIntegration $paperDecisionIntegration,
         private TradingEngineLiveDecisionIntegration $liveDecisionIntegration,
+        private TradingEngineLivePreparationIntegration $livePreparationIntegration,
     ) {}
 
     public function apply(TradeOpportunity $opportunity): ?PaperPosition
@@ -29,6 +31,7 @@ class EntryPolicy
         if ($useLiveDecisionIntegration) {
             try {
                 $this->liveDecisionIntegration->assess($opportunity);
+                $this->livePreparationIntegration->attempt($opportunity);
             } catch (Throwable) {
                 return null;
             }

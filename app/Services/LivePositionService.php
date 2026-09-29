@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Chain;
-use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Models\ConnectedWallet;
@@ -17,6 +16,8 @@ use LogicException;
 
 class LivePositionService
 {
+    public function __construct(private EthereumOpportunityExecutionPolicy $executionPolicy) {}
+
     /** Backfill uses stored confirmation evidence only; no provider calls or execution-state updates. */
     public function backfill(EthereumSwapAttempt $candidate): LivePosition
     {
@@ -49,7 +50,7 @@ class LivePositionService
         if ($attempt->status !== 'confirmed' || $attempt->confirmed_at === null || $attempt->failed_at !== null
             || $attempt->failure_reason !== null || $opportunity->status !== TradeOpportunityStatus::Executed
             || $opportunity->executed_at === null || $opportunity->execution_mode !== ExecutionMode::Live
-            || $opportunity->entry_mode !== EntryMode::Confirm || $opportunity->chain !== Chain::Ethereum
+            || ! $this->executionPolicy->permitsSubmittedEvidence($opportunity) || $opportunity->chain !== Chain::Ethereum
             || $attempt->trade_opportunity_id !== $opportunity->id || $attempt->user_id !== $opportunity->user_id
             || ! $wallet || $wallet->user_id !== $attempt->user_id || $wallet->chain !== Chain::Ethereum
             || ! $this->matchesAttemptId(data_get($opportunity->execution_data, 'ethereum_swap_attempt_id'), $attempt->id)

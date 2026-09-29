@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Chain;
+use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Models\EthereumSwapAttempt;
@@ -44,7 +45,10 @@ class OpportunityActionService
                 throw new DomainException('The informational LIVE decision is unavailable. No execution was started.');
             }
 
-            throw new DomainException('The informational LIVE decision cannot authorize execution. No execution was started.');
+            if (config('services.trading_engine.live_preparation_enabled', false) !== true
+                || $opportunity->entry_mode !== EntryMode::Confirm) {
+                throw new DomainException('The informational LIVE decision cannot authorize execution. No execution was started.');
+            }
         }
 
         if ($executionMode === ExecutionMode::Live && $opportunity->chain === Chain::Ethereum) {

@@ -3,7 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Chain;
-use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Exceptions\EthereumPreparationException;
@@ -11,6 +10,7 @@ use App\Http\Requests\EthereumSwapRequest;
 use App\Models\EthereumSwapAttempt;
 use App\Models\TradeOpportunity;
 use App\Services\CryptoPriceService;
+use App\Services\EthereumOpportunityExecutionPolicy;
 use App\Services\EthereumOpportunityPreparationService;
 use App\Services\EthereumQuoteLimitService;
 use App\Services\EthereumService;
@@ -93,7 +93,7 @@ class EthereumSwapController extends Controller
         ]]);
     }
 
-    public function submitted(Request $request, EthereumService $ethereum): JsonResponse
+    public function submitted(Request $request, EthereumService $ethereum, EthereumOpportunityExecutionPolicy $executionPolicy): JsonResponse
     {
         $validated = $request->validate([
             'attempt_id' => ['required', 'integer'],
@@ -128,7 +128,7 @@ class EthereumSwapController extends Controller
         }
 
         try {
-            $attempt = DB::transaction(function () use ($request, $validated, $submittedHash, $transaction, $ethereum, $attempt): EthereumSwapAttempt {
+            $attempt = DB::transaction(function () use ($request, $validated, $submittedHash, $transaction, $ethereum, $attempt, $executionPolicy): EthereumSwapAttempt {
                 $opportunity = $attempt->trade_opportunity_id
                     ? TradeOpportunity::query()->lockForUpdate()->find($attempt->trade_opportunity_id)
                     : null;
@@ -149,7 +149,7 @@ class EthereumSwapController extends Controller
                     || $opportunity->id !== $attempt->trade_opportunity_id
                     || $opportunity->chain !== Chain::Ethereum
                     || $opportunity->execution_mode !== ExecutionMode::Live
-                    || $opportunity->entry_mode !== EntryMode::Confirm
+                    || ! $executionPolicy->permitsSubmittedEvidence($opportunity)
                     || strtolower($opportunity->address) !== $attempt->buy_token
                     || (int) data_get($opportunity->execution_data, 'ethereum_swap_attempt_id') !== $attempt->id
                     || ! in_array($opportunity->status, [TradeOpportunityStatus::Executing, TradeOpportunityStatus::Expired], true))) {

@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Chain;
-use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Models\EthereumSwapAttempt;
@@ -13,7 +12,10 @@ use Illuminate\Support\Facades\DB;
 
 class EthereumReceiptReconciliationService
 {
-    public function __construct(private LivePositionService $positions) {}
+    public function __construct(
+        private LivePositionService $positions,
+        private EthereumOpportunityExecutionPolicy $executionPolicy,
+    ) {}
 
     /** RPC happens in the command, before this locking transaction.
      * @param  array{transaction_hash: string, succeeded: bool, block_number: string, gas_used: string, effective_gas_price_wei: string, actual_network_fee_wei: string}  $receipt
@@ -31,7 +33,7 @@ class EthereumReceiptReconciliationService
             }
             if ($attempt->trade_opportunity_id !== null) {
                 if (! $opportunity || $opportunity->user_id !== $attempt->user_id || $opportunity->chain !== Chain::Ethereum
-                    || $opportunity->execution_mode !== ExecutionMode::Live || $opportunity->entry_mode !== EntryMode::Confirm
+                    || $opportunity->execution_mode !== ExecutionMode::Live || ! $this->executionPolicy->permitsSubmittedEvidence($opportunity)
                     || strtolower($opportunity->address) !== $attempt->buy_token
                     || $opportunity->ethereumSwapAttempt()->value('id') !== $attempt->id
                     || (int) data_get($opportunity->execution_data, 'ethereum_swap_attempt_id') !== $attempt->id

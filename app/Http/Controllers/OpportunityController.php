@@ -8,6 +8,7 @@ use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Http\Requests\OpportunityIndexRequest;
 use App\Models\TradeOpportunity;
+use App\Services\EthereumOpportunityExecutionPolicy;
 use App\Services\OpportunityPresentationService;
 use Illuminate\Contracts\View\View;
 
@@ -41,17 +42,21 @@ class OpportunityController extends Controller
         ]);
     }
 
-    public function show(TradeOpportunity $opportunity, OpportunityPresentationService $presenter): View
-    {
+    public function show(
+        TradeOpportunity $opportunity,
+        OpportunityPresentationService $presenter,
+        EthereumOpportunityExecutionPolicy $executionPolicy,
+    ): View {
         $user = request()->user();
         abort_unless($opportunity->user_id === $user->id || ($user->is_admin && $opportunity->user_id === null), 404);
         $opportunity->load(['paperPosition', 'events.user:id,name']);
         $preference = $user->tradingPreference;
         $ethereumLive = $opportunity->user_id === $user->id && $opportunity->chain === Chain::Ethereum
-            && $opportunity->entry_mode === EntryMode::Confirm
-            && ($opportunity->execution_mode === ExecutionMode::Live
-                || ($opportunity->status === TradeOpportunityStatus::PendingConfirmation
-                    && $preference?->execution_mode === ExecutionMode::Live && $preference?->entry_mode === EntryMode::Confirm));
+            && (($opportunity->entry_mode === EntryMode::Confirm
+                && ($opportunity->execution_mode === ExecutionMode::Live
+                    || ($opportunity->status === TradeOpportunityStatus::PendingConfirmation
+                        && $preference?->execution_mode === ExecutionMode::Live && $preference?->entry_mode === EntryMode::Confirm)))
+                || $executionPolicy->permitsConfirmFirstFlow($opportunity));
 
         if ($ethereumLive) {
             $opportunity->load('ethereumSwapAttempt');

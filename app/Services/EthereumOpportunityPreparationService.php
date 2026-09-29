@@ -28,6 +28,7 @@ class EthereumOpportunityPreparationService
         private EthereumOpportunityRevalidationService $revalidation,
         private EthereumSwapInputRules $inputs,
         private ApplicationSettingsService $settings,
+        private EthereumOpportunityExecutionPolicy $executionPolicy,
     ) {}
 
     public function prepare(TradeOpportunity $opportunity, User $user): EthereumSwapAttempt
@@ -158,7 +159,7 @@ class EthereumOpportunityPreparationService
                 || ! in_array($attempt->status, ['prepared', 'expired'], true)
                 || ! $attempt->signing_claim_hash || ! hash_equals($attempt->signing_claim_hash, hash('sha256', $token))
                 || $locked->chain !== Chain::Ethereum || $locked->execution_mode !== ExecutionMode::Live
-                || $locked->entry_mode !== EntryMode::Confirm || strtolower($locked->address) !== $attempt->buy_token
+                || ! $this->executionPolicy->permitsConfirmFirstFlow($locked) || strtolower($locked->address) !== $attempt->buy_token
                 || (int) data_get($locked->execution_data, 'ethereum_swap_attempt_id') !== $attempt->id
                 || ! in_array($locked->status, [TradeOpportunityStatus::Executing, TradeOpportunityStatus::Expired], true)) {
                 throw new EthereumPreparationException('The signing claim is unavailable.', 409);
@@ -205,13 +206,13 @@ class EthereumOpportunityPreparationService
     private function assertCurrent(TradeOpportunity $opportunity, EthereumSwapAttempt $attempt, int $userId): void
     {
         if ($opportunity->user_id !== $userId || $attempt->user_id !== $userId
-            || $opportunity->chain !== Chain::Ethereum || $opportunity->entry_mode !== EntryMode::Confirm
+            || $opportunity->chain !== Chain::Ethereum || ! $this->executionPolicy->permitsConfirmFirstFlow($opportunity)
             || $opportunity->execution_mode !== ExecutionMode::Live || $opportunity->status !== TradeOpportunityStatus::Executing
             || strtolower($opportunity->address) !== $attempt->buy_token) {
             throw new EthereumPreparationException('The live Ethereum opportunity is no longer eligible for preparation.');
         }
         $preference = UserTradingPreference::query()->where('user_id', $userId)->lockForUpdate()->first();
-        if (! $preference || $preference->execution_mode !== ExecutionMode::Live || $preference->entry_mode !== EntryMode::Confirm
+        if (! $preference || $preference->execution_mode !== ExecutionMode::Live || $preference->entry_mode !== $opportunity->entry_mode
             || ! $preference->trading_enabled || $this->settings->get('risk.kill_switch')) {
             throw new EthereumPreparationException('Live confirmation is disabled or its trading controls have changed.');
         }
@@ -234,7 +235,10 @@ class EthereumOpportunityPreparationService
                 return;
             }
             $attempt->update(['revalidation_data' => $audit]);
-            $this->releaseLocked($opportunity, $attempt, $reason, $terminal ? TradeOpportunityStatus::Failed : TradeOpportunityStatus::PendingConfirmation);
+            $retryState = $opportunity->entry_mode === EntryMode::Auto
+                ? TradeOpportunityStatus::Qualified
+                : TradeOpportunityStatus::PendingConfirmation;
+            $this->releaseLocked($opportunity, $attempt, $reason, $terminal ? TradeOpportunityStatus::Failed : $retryState);
         });
     }
 
@@ -245,7 +249,11 @@ class EthereumOpportunityPreparationService
             || $attempt->transaction_hash !== null || ! in_array($attempt->status, ['reserved', 'preparing', 'prepared', 'expired', 'cancelled'], true)) {
             return;
         }
-        if ($target === TradeOpportunityStatus::PendingConfirmation && ! app(EthereumOpportunityFreshness::class)->isFresh($opportunity)) {
+        if ($target === TradeOpportunityStatus::PendingConfirmation && $opportunity->entry_mode === EntryMode::Auto) {
+            $target = TradeOpportunityStatus::Qualified;
+        }
+        if (in_array($target, [TradeOpportunityStatus::PendingConfirmation, TradeOpportunityStatus::Qualified], true)
+            && ! app(EthereumOpportunityFreshness::class)->isFresh($opportunity)) {
             $target = TradeOpportunityStatus::Expired;
         }
         $published = $attempt->transaction_payload !== null;
