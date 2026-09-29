@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Chain;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
+use App\Exceptions\EthereumPreparationException;
 use App\Models\EthereumSwapAttempt;
 use App\Models\TradeOpportunity;
 use App\Models\TradeOpportunityEvent;
@@ -15,6 +16,7 @@ class EthereumReceiptReconciliationService
     public function __construct(
         private LivePositionService $positions,
         private EthereumOpportunityExecutionPolicy $executionPolicy,
+        private EthereumPreparedAttemptIntegrity $integrity,
     ) {}
 
     /** RPC happens in the command, before this locking transaction.
@@ -32,7 +34,16 @@ class EthereumReceiptReconciliationService
                 return null;
             }
             if ($attempt->trade_opportunity_id !== null) {
-                if (! $opportunity || $opportunity->user_id !== $attempt->user_id || $opportunity->chain !== Chain::Ethereum
+                if (! $opportunity) {
+                    return null;
+                }
+                try {
+                    $this->integrity->assertValid($opportunity, $attempt);
+                    $this->integrity->assertHumanHandoff($attempt);
+                } catch (EthereumPreparationException) {
+                    return null;
+                }
+                if ($opportunity->user_id !== $attempt->user_id || $opportunity->chain !== Chain::Ethereum
                     || $opportunity->execution_mode !== ExecutionMode::Live || ! $this->executionPolicy->permitsSubmittedEvidence($opportunity)
                     || strtolower($opportunity->address) !== $attempt->buy_token
                     || $opportunity->ethereumSwapAttempt()->value('id') !== $attempt->id

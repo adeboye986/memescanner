@@ -100,6 +100,9 @@ class EthereumOpportunityReservationService
                     'buy_token' => strtolower($validated['buy_token']),
                     'sell_amount_wei' => $validated['sell_amount_wei'],
                     'slippage_bps' => (int) $validated['slippage_bps'],
+                    'preparation_origin' => $entryMode === EntryMode::Auto
+                        ? EthereumPreparedAttemptIntegrity::ENGINE_ORIGIN
+                        : null,
                 ];
                 $existing = $locked->ethereumSwapAttempt;
                 if ($existing) {
@@ -190,7 +193,7 @@ class EthereumOpportunityReservationService
         return $data;
     }
 
-    /** @param array{trade_opportunity_id: int, user_id: int, connected_wallet_id: int, wallet_address: string, buy_token: string, sell_amount_wei: string, slippage_bps: int} $binding */
+    /** @param array{trade_opportunity_id: int, user_id: int, connected_wallet_id: int, wallet_address: string, buy_token: string, sell_amount_wei: string, slippage_bps: int, preparation_origin: ?string} $binding */
     private function matchesBinding(EthereumSwapAttempt $attempt, array $binding): bool
     {
         foreach ($binding as $field => $value) {

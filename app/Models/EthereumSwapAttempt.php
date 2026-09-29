@@ -3,9 +3,11 @@
 namespace App\Models;
 
 use App\Chain;
+use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Services\EthereumOpportunityExecutionPolicy;
+use App\Services\EthereumPreparedAttemptIntegrity;
 use DomainException;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,6 +16,7 @@ class EthereumSwapAttempt extends Model
 {
     protected $fillable = [
         'signing_claim_hash', 'signing_armed_at', 'signing_requested_at', 'trade_opportunity_id', 'wallet_address', 'preparation_token', 'preparation_expires_at', 'revalidation_data',
+        'preparation_origin', 'preparation_binding_sha256',
         'user_id', 'connected_wallet_id', 'buy_token', 'sell_amount_wei',
         'slippage_bps', 'quote_id', 'transaction_payload', 'status',
         'transaction_hash', 'expires_at', 'submitted_at', 'confirmed_at',
@@ -21,15 +24,19 @@ class EthereumSwapAttempt extends Model
         'actual_network_fee_wei',
     ];
 
-    protected $hidden = ['signing_claim_hash', 'transaction_payload', 'preparation_token', 'revalidation_data'];
+    protected $hidden = ['signing_claim_hash', 'transaction_payload', 'preparation_token', 'revalidation_data', 'preparation_binding_sha256'];
 
     protected static function booted(): void
     {
         static::saving(function (EthereumSwapAttempt $attempt): void {
-            $binding = ['trade_opportunity_id', 'user_id', 'connected_wallet_id', 'wallet_address', 'buy_token', 'sell_amount_wei', 'slippage_bps'];
+            $binding = ['trade_opportunity_id', 'user_id', 'connected_wallet_id', 'wallet_address', 'buy_token', 'sell_amount_wei', 'slippage_bps', 'preparation_origin'];
             if ($attempt->exists && ($attempt->getOriginal('trade_opportunity_id') !== null || $attempt->trade_opportunity_id !== null)) {
                 if ($attempt->isDirty($binding)) {
                     throw new DomainException('An opportunity execution binding cannot be changed.');
+                }
+                if ($attempt->getOriginal('preparation_binding_sha256') !== null
+                    && $attempt->isDirty(['preparation_binding_sha256', 'quote_id', 'transaction_payload', 'expires_at'])) {
+                    throw new DomainException('A prepared Ethereum integrity binding cannot be changed.');
                 }
 
                 return;
@@ -49,6 +56,8 @@ class EthereumSwapAttempt extends Model
                 || ! $wallet->isVerified()
                 || $attempt->wallet_address !== strtolower($wallet->address)
                 || $attempt->buy_token !== strtolower($opportunity->address)
+                || ($opportunity->entry_mode === EntryMode::Auto
+                    && $attempt->preparation_origin !== EthereumPreparedAttemptIntegrity::ENGINE_ORIGIN)
                 || $attempt->status !== 'reserved' || $attempt->transaction_payload !== null || $attempt->expires_at !== null) {
                 throw new DomainException('Invalid Ethereum opportunity execution binding.');
             }

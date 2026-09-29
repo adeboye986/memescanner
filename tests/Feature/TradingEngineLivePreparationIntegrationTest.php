@@ -173,7 +173,7 @@ class TradingEngineLivePreparationIntegrationTest extends TestCase
         $this->providers();
         $integration = app(TradingEngineLivePreparationIntegration::class);
         $attempt = $integration->attempt($opportunity);
-        $attempt?->update(['expires_at' => now()->subSecond()]);
+        $this->travel(61)->seconds();
 
         $this->assertNull($integration->attempt($opportunity));
         $this->assertSame('prepared', $attempt?->fresh()->status);

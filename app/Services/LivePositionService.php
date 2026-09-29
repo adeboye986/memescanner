@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Chain;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
+use App\Exceptions\EthereumPreparationException;
 use App\Models\ConnectedWallet;
 use App\Models\EthereumSwapAttempt;
 use App\Models\LivePosition;
@@ -16,7 +17,10 @@ use LogicException;
 
 class LivePositionService
 {
-    public function __construct(private EthereumOpportunityExecutionPolicy $executionPolicy) {}
+    public function __construct(
+        private EthereumOpportunityExecutionPolicy $executionPolicy,
+        private EthereumPreparedAttemptIntegrity $integrity,
+    ) {}
 
     /** Backfill uses stored confirmation evidence only; no provider calls or execution-state updates. */
     public function backfill(EthereumSwapAttempt $candidate): LivePosition
@@ -46,6 +50,12 @@ class LivePositionService
         }
         if (! is_array($payload)) {
             throw new DomainException('Retained Ethereum transaction evidence is malformed.');
+        }
+        try {
+            $this->integrity->assertValid($opportunity, $attempt);
+            $this->integrity->assertHumanHandoff($attempt);
+        } catch (EthereumPreparationException) {
+            throw new DomainException('Prepared Ethereum attempt integrity could not be verified.');
         }
         if ($attempt->status !== 'confirmed' || $attempt->confirmed_at === null || $attempt->failed_at !== null
             || $attempt->failure_reason !== null || $opportunity->status !== TradeOpportunityStatus::Executed

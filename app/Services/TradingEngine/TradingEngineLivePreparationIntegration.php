@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Services\EthereumOpportunityExecutionPolicy;
 use App\Services\EthereumOpportunityPreparationService;
 use App\Services\EthereumOpportunityReservationService;
+use App\Services\EthereumPreparedAttemptIntegrity;
 use App\Services\EthereumQuoteLimitService;
 use App\Services\EthereumSwapInputRules;
 use Throwable;
@@ -24,6 +25,7 @@ class TradingEngineLivePreparationIntegration
         private EthereumOpportunityReservationService $reservations,
         private EthereumOpportunityPreparationService $preparations,
         private EthereumOpportunityExecutionPolicy $executionPolicy,
+        private EthereumPreparedAttemptIntegrity $integrity,
         private EthereumQuoteLimitService $limits,
         private EthereumSwapInputRules $inputs,
     ) {}
@@ -49,6 +51,7 @@ class TradingEngineLivePreparationIntegration
             $existing = $candidate->ethereumSwapAttempt;
             if ($existing instanceof EthereumSwapAttempt) {
                 if (! $this->executionPolicy->permitsConfirmFirstFlow($candidate)
+                    || $existing->preparation_origin !== EthereumPreparedAttemptIntegrity::ENGINE_ORIGIN
                     || $existing->user_id !== $candidate->user_id
                     || $existing->transaction_hash !== null
                     || $existing->submitted_at !== null) {
@@ -56,6 +59,7 @@ class TradingEngineLivePreparationIntegration
                 }
 
                 if ($existing->status === 'prepared') {
+                    $this->integrity->assertValid($candidate, $existing);
                     return $existing->expires_at?->isFuture() ? $existing : null;
                 }
 

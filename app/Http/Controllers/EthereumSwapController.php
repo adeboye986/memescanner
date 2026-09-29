@@ -12,6 +12,7 @@ use App\Models\TradeOpportunity;
 use App\Services\CryptoPriceService;
 use App\Services\EthereumOpportunityExecutionPolicy;
 use App\Services\EthereumOpportunityPreparationService;
+use App\Services\EthereumPreparedAttemptIntegrity;
 use App\Services\EthereumQuoteLimitService;
 use App\Services\EthereumService;
 use App\Services\EthereumSwapPreparationService;
@@ -93,7 +94,7 @@ class EthereumSwapController extends Controller
         ]]);
     }
 
-    public function submitted(Request $request, EthereumService $ethereum, EthereumOpportunityExecutionPolicy $executionPolicy): JsonResponse
+    public function submitted(Request $request, EthereumService $ethereum, EthereumOpportunityExecutionPolicy $executionPolicy, EthereumPreparedAttemptIntegrity $integrity): JsonResponse
     {
         $validated = $request->validate([
             'attempt_id' => ['required', 'integer'],
@@ -108,6 +109,7 @@ class EthereumSwapController extends Controller
 
         try {
             $this->assertSubmissionAvailable($attempt, $submittedHash);
+            $this->assertPreparationIntegrity($attempt, $attempt->tradeOpportunity, $integrity);
         } catch (RuntimeException $exception) {
             return response()->json(['message' => $exception->getMessage()], 422);
         }
@@ -128,7 +130,7 @@ class EthereumSwapController extends Controller
         }
 
         try {
-            $attempt = DB::transaction(function () use ($request, $validated, $submittedHash, $transaction, $ethereum, $attempt, $executionPolicy): EthereumSwapAttempt {
+            $attempt = DB::transaction(function () use ($request, $validated, $submittedHash, $transaction, $ethereum, $attempt, $executionPolicy, $integrity): EthereumSwapAttempt {
                 $opportunity = $attempt->trade_opportunity_id
                     ? TradeOpportunity::query()->lockForUpdate()->find($attempt->trade_opportunity_id)
                     : null;
@@ -140,6 +142,8 @@ class EthereumSwapController extends Controller
                     ->firstOrFail();
 
                 $this->assertSubmissionAvailable($attempt, $submittedHash);
+
+                $this->assertPreparationIntegrity($attempt, $opportunity, $integrity);
 
                 if ($attempt->transaction_hash !== null) {
                     return $attempt;
@@ -202,6 +206,17 @@ class EthereumSwapController extends Controller
         if (! in_array($attempt->status, ['prepared', 'expired'], true)) {
             throw new RuntimeException('This Ethereum swap order is no longer available for submission.');
         }
+    }
+
+    private function assertPreparationIntegrity(EthereumSwapAttempt $attempt, ?TradeOpportunity $opportunity, EthereumPreparedAttemptIntegrity $integrity): void
+    {
+        if ($attempt->trade_opportunity_id !== null && ! $opportunity) {
+            throw new RuntimeException('The prepared Ethereum attempt failed its integrity check.');
+        }
+        if ($opportunity) {
+            $integrity->assertValid($opportunity, $attempt);
+        }
+        $integrity->assertHumanHandoff($attempt);
     }
 
     private function submissionResponse(EthereumSwapAttempt $attempt): JsonResponse

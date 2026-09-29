@@ -29,6 +29,7 @@ class EthereumOpportunityPreparationService
         private EthereumSwapInputRules $inputs,
         private ApplicationSettingsService $settings,
         private EthereumOpportunityExecutionPolicy $executionPolicy,
+        private EthereumPreparedAttemptIntegrity $integrity,
     ) {}
 
     public function prepare(TradeOpportunity $opportunity, User $user): EthereumSwapAttempt
@@ -107,6 +108,8 @@ class EthereumOpportunityPreparationService
                     throw new EthereumPreparationException('Preparation or validation became stale. No transaction was published.', 409);
                 }
                 $attempt->update([...$prepared, 'status' => 'prepared', 'preparation_token' => null, 'preparation_expires_at' => null, 'revalidation_data' => $audit]);
+                $attempt->refresh();
+                $this->integrity->seal($locked, $attempt);
                 $locked->update(['execution_data' => [...($locked->execution_data ?? []), 'stage' => 'prepared']]);
                 $this->event($locked, 'live_execution_prepared', $locked->status, 'prepared');
 
@@ -138,6 +141,7 @@ class EthereumOpportunityPreparationService
                 throw new EthereumPreparationException('Signing handoff is unavailable or unresolved. Refresh its status; do not send again.', 409);
             }
             $this->assertCurrent($locked, $attempt, $user->id);
+            $this->integrity->assertValid($locked, $attempt);
             if (! $attempt->expires_at || $attempt->expires_at->lte(now())) {
                 throw new EthereumPreparationException('The prepared transaction expired.', 409);
             }
@@ -164,6 +168,7 @@ class EthereumOpportunityPreparationService
                 || ! in_array($locked->status, [TradeOpportunityStatus::Executing, TradeOpportunityStatus::Expired], true)) {
                 throw new EthereumPreparationException('The signing claim is unavailable.', 409);
             }
+            $this->integrity->assertValid($locked, $attempt);
             if ($action === 'release') {
                 if ($attempt->signing_armed_at !== null) {
                     throw new EthereumPreparationException('An armed signing request cannot be released. Its outcome is unresolved.', 409);
