@@ -27,5 +27,6 @@ class TradingEngineConfigurationTest extends TestCase
 
         $this->assertFalse($services['trading_engine']['enabled']);
         $this->assertFalse($services['trading_engine']['opportunity_export_enabled']);
+        $this->assertFalse($services['trading_engine']['opportunity_projection_enabled']);
     }
 }

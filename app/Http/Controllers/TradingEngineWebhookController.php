@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\TradingEngineWebhookException;
+use App\Jobs\ProjectTradingEngineEvent;
 use App\Services\TradingEngine\TradingEngineEventEnvelopeValidator;
 use App\Services\TradingEngine\TradingEngineEventInbox;
+use App\Services\TradingEngine\TradingEngineOpportunityProjector;
 use App\Services\TradingEngine\TradingEngineWebhookAuthenticator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,6 +22,7 @@ class TradingEngineWebhookController extends Controller
         TradingEngineWebhookAuthenticator $authenticator,
         TradingEngineEventEnvelopeValidator $validator,
         TradingEngineEventInbox $inbox,
+        TradingEngineOpportunityProjector $projector,
     ): JsonResponse {
         $authenticated = $authenticator->authenticate($request);
         $validated = $validator->validate($authenticated['raw_body'], $request);
@@ -45,6 +48,18 @@ class TradingEngineWebhookController extends Controller
                 'The trading engine event ID was already used for different content.',
                 409,
             );
+        }
+
+        if (config('services.trading_engine.opportunity_projection_enabled', false) === true
+            && in_array($validated['envelope']['event_type'], [
+                'opportunity.recorded.v1',
+                'opportunity.evaluated.v1',
+            ], true)) {
+            try {
+                ProjectTradingEngineEvent::dispatch($validated['envelope']['event_id']);
+            } catch (Throwable) {
+                $projector->markDispatchFailure($validated['envelope']['event_id']);
+            }
         }
 
         return response()->json([

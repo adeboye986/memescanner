@@ -39,6 +39,20 @@ class TradingEngineOpportunityExportTest extends TestCase
         Queue::assertNothingPushed();
     }
 
+    public function test_projection_enabled_alone_does_not_enable_opportunity_export(): void
+    {
+        Queue::fake([SubmitTradingEngineOpportunity::class]);
+        config()->set([
+            'services.trading_engine.enabled' => true,
+            'services.trading_engine.opportunity_export_enabled' => false,
+            'services.trading_engine.opportunity_projection_enabled' => true,
+        ]);
+
+        app(TradeOpportunityService::class)->qualify($this->candidate(), User::factory()->create());
+
+        Queue::assertNothingPushed();
+    }
+
     public function test_disabled_engine_does_not_export_even_when_export_flag_is_enabled(): void
     {
         Queue::fake([SubmitTradingEngineOpportunity::class]);
