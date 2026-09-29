@@ -28,6 +28,7 @@ class TradingEngineConfigurationTest extends TestCase
         $this->assertFalse($services['trading_engine']['enabled']);
         $this->assertFalse($services['trading_engine']['opportunity_export_enabled']);
         $this->assertFalse($services['trading_engine']['opportunity_projection_enabled']);
+        $this->assertFalse($services['trading_engine']['evaluation_consumption_enabled']);
         $this->assertSame(100, $services['trading_engine']['projection_recovery_batch_size']);
         $this->assertSame(300, $services['trading_engine']['projection_recovery_stale_after_seconds']);
         $this->assertSame(120, $services['trading_engine']['projection_recovery_lease_seconds']);
