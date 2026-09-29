@@ -8,6 +8,7 @@ use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Services\Trading\LiveTradeExecutor;
 use App\Services\Trading\PaperTradeExecutor;
+use LogicException;
 use RuntimeException;
 
 class TradeExecutionManager
@@ -58,5 +59,14 @@ class TradeExecutionManager
         ]);
 
         return $position;
+    }
+
+    public function executePaper(TradeOpportunity $opportunity, bool $sendNotification = true): ?PaperPosition
+    {
+        if ($opportunity->execution_mode !== ExecutionMode::Paper) {
+            throw new LogicException('The PAPER-only execution boundary rejected a non-PAPER opportunity.');
+        }
+
+        return $this->execute($opportunity, $sendNotification);
     }
 }

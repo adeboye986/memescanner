@@ -104,7 +104,10 @@ class TradeOpportunityService
 
         $status = $opportunity->fresh()->status;
 
-        if ($sendNotification && ! $position && in_array($status, [TradeOpportunityStatus::Qualified, TradeOpportunityStatus::PendingConfirmation], true)) {
+        $shouldNotifyOpportunity = $status === TradeOpportunityStatus::PendingConfirmation
+            || ($status === TradeOpportunityStatus::Qualified && $opportunity->entry_mode === EntryMode::Signal);
+
+        if ($sendNotification && ! $position && $shouldNotifyOpportunity) {
             try {
                 $instruction = $status === TradeOpportunityStatus::PendingConfirmation
                     ? 'Open Telegram controls or the dashboard to approve or ignore it.'
