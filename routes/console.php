@@ -19,6 +19,11 @@ Schedule::call(fn () => app(OperationalHealthService::class)->recordSchedulerRun
     ->name('operations.scheduler-heartbeat')
     ->everyMinute();
 
+Schedule::command('trading-engine:recover-projections')
+    ->name('trading-engine.projection-recovery')
+    ->everyMinute()
+    ->withoutOverlapping(5);
+
 Schedule::command('ethereum:reconcile-inventory')
     ->everyMinute()
     ->withoutOverlapping();

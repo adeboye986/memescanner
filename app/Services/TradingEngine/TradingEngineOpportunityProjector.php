@@ -98,11 +98,16 @@ class TradingEngineOpportunityProjector
         try {
             TradingEngineEvent::query()
                 ->where('event_id', $eventId)
-                ->where('handling_status', TradingEngineEvent::STATUS_STORED)
+                ->whereIn('handling_status', [
+                    TradingEngineEvent::STATUS_STORED,
+                    TradingEngineEvent::STATUS_DEFERRED,
+                    TradingEngineEvent::STATUS_RETRYABLE,
+                ])
                 ->update([
                     'handling_status' => TradingEngineEvent::STATUS_RETRYABLE,
                     'handling_error_code' => 'PROJECTION_DISPATCH_FAILED',
                     'next_handling_at' => now()->addMinute(),
+                    'handled_at' => null,
                     'updated_at' => now(),
                 ]);
         } catch (Throwable) {
