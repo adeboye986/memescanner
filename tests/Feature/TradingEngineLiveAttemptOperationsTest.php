@@ -8,11 +8,11 @@ use App\Models\EthereumSwapAttempt;
 use App\Models\SolanaSwapAttempt;
 use App\Models\User;
 use App\Services\TradingEngine\TradingEngineLiveAttemptInspector;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
-use Illuminate\Support\Facades\Schedule;
 use Tests\TestCase;
 
 class TradingEngineLiveAttemptOperationsTest extends TestCase
