@@ -176,6 +176,7 @@ return [
         'live_preparation_enabled' => env('TRADING_ENGINE_LIVE_PREPARATION_ENABLED', false),
         'live_recovery_enabled' => env('TRADING_ENGINE_LIVE_RECOVERY_ENABLED', false),
         'solana_live_integration_enabled' => env('TRADING_ENGINE_SOLANA_LIVE_INTEGRATION_ENABLED', false),
+        'live_attempt_attention_after_seconds' => (int) env('TRADING_ENGINE_LIVE_ATTEMPT_ATTENTION_AFTER_SECONDS', 900),
         'projection_recovery_batch_size' => (int) env('TRADING_ENGINE_PROJECTION_RECOVERY_BATCH_SIZE', 100),
         'projection_recovery_stale_after_seconds' => (int) env('TRADING_ENGINE_PROJECTION_RECOVERY_STALE_AFTER_SECONDS', 300),
         'projection_recovery_lease_seconds' => (int) env('TRADING_ENGINE_PROJECTION_RECOVERY_LEASE_SECONDS', 120),
