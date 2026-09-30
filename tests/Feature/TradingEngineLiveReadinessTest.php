@@ -273,10 +273,7 @@ class TradingEngineLiveReadinessTest extends TestCase
 
     private function readiness(?Schedule $schedule = null): TradingEngineLiveReadiness
     {
-        return new class(
-            app(TradingEngineLiveAttemptInspector::class),
-            $schedule ?? app(Schedule::class),
-        ) extends TradingEngineLiveReadiness
+        return new class(app(TradingEngineLiveAttemptInspector::class), $schedule ?? app(Schedule::class)) extends TradingEngineLiveReadiness
         {
             protected function sodiumAvailable(): bool
             {
@@ -291,7 +288,7 @@ class TradingEngineLiveReadinessTest extends TestCase
     }
 
     /**
-     * @param array{checks: list<array{group: string, status: string, name: string, message: string}>} $result
+     * @param  array{checks: list<array{group: string, status: string, name: string, message: string}>}  $result
      */
     private function assertCheck(array $result, string $name, string $status): void
     {
