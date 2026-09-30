@@ -76,7 +76,7 @@ export async function startApi(
       throw new AggregateError(
         [error, cleanupError],
         'API startup and cleanup failed',
-        { cause: error },
+        { cause: cleanupError },
       );
     }
 

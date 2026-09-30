@@ -142,7 +142,7 @@ export async function startWorker(
       throw new AggregateError(
         [error, cleanupError],
         'Worker startup and cleanup failed',
-        { cause: error },
+        { cause: cleanupError },
       );
     }
 

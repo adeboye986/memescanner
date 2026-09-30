@@ -115,7 +115,7 @@ export async function startHostingerRuntime(
       throw new AggregateError(
         [error, cleanupError],
         'Combined runtime startup and cleanup failed',
-        { cause: error },
+        { cause: cleanupError },
       );
     }
 

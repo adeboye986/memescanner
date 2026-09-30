@@ -125,7 +125,7 @@ export async function startScheduler(
       throw new AggregateError(
         [error, cleanupError],
         'Scheduler startup and cleanup failed',
-        { cause: error },
+        { cause: cleanupError },
       );
     }
 
