@@ -98,7 +98,7 @@ export async function runManagedProcess(
 
       try {
         await closeInOrder(`${options.name} shutdown`, [
-          { name: 'runtime', close: () => runtime.close() },
+          { name: 'runtime', close: (): Promise<void> => runtime.close() },
           ...(finalize === undefined
             ? []
             : [{ name: 'finalizer', close: finalize }]),

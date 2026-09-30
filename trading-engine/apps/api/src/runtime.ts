@@ -54,9 +54,9 @@ export async function startApi(
   });
   const close = idempotentClose(async (): Promise<void> => {
     await closeInOrder('api resource shutdown', [
-      { name: 'fastify', close: () => app.close() },
-      { name: 'redis', close: () => closeRedis(redis) },
-      { name: 'database', close: () => database.destroy() },
+      { name: 'fastify', close: (): Promise<void> => app.close() },
+      { name: 'redis', close: (): Promise<void> => closeRedis(redis) },
+      { name: 'database', close: (): Promise<void> => database.destroy() },
     ]);
   });
 
@@ -76,6 +76,7 @@ export async function startApi(
       throw new AggregateError(
         [error, cleanupError],
         'API startup and cleanup failed',
+        { cause: error },
       );
     }
 

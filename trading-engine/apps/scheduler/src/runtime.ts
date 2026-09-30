@@ -85,10 +85,13 @@ export async function startScheduler(
     await closeInOrder('scheduler resource shutdown', [
       ...(currentQueue === undefined
         ? []
-        : [{ name: 'queue', close: () => currentQueue.close() }]),
+        : [{ name: 'queue', close: (): Promise<void> => currentQueue.close() }]),
       ...(currentRedis === undefined
         ? []
-        : [{ name: 'redis', close: () => closeRedis(currentRedis) }]),
+        : [{
+            name: 'redis',
+            close: (): Promise<void> => closeRedis(currentRedis),
+          }]),
     ]);
   });
 
@@ -122,6 +125,7 @@ export async function startScheduler(
       throw new AggregateError(
         [error, cleanupError],
         'Scheduler startup and cleanup failed',
+        { cause: error },
       );
     }
 

@@ -48,23 +48,32 @@ export async function startWorker(
     await closeInOrder('worker resource shutdown', [
       ...(currentWorker === undefined
         ? []
-        : [{ name: 'worker', close: () => currentWorker.close() }]),
+        : [{
+            name: 'worker',
+            close: (): Promise<void> => currentWorker.close(),
+          }]),
       ...(currentOutboxDispatcher === undefined
         ? []
         : [{
             name: 'outbox dispatcher',
-            close: () => currentOutboxDispatcher.shutdown(),
+            close: (): Promise<void> => currentOutboxDispatcher.shutdown(),
           }]),
       ...(currentEvaluationDispatcher === undefined
         ? []
         : [{
             name: 'evaluation dispatcher',
-            close: () => currentEvaluationDispatcher.shutdown(),
+            close: (): Promise<void> => currentEvaluationDispatcher.shutdown(),
           }]),
       ...(currentRedis === undefined
         ? []
-        : [{ name: 'redis', close: () => closeRedis(currentRedis) }]),
-      { name: 'database', close: () => database.destroy() },
+        : [{
+            name: 'redis',
+            close: (): Promise<void> => closeRedis(currentRedis),
+          }]),
+      {
+        name: 'database',
+        close: (): Promise<void> => database.destroy(),
+      },
     ]);
   });
 
@@ -133,6 +142,7 @@ export async function startWorker(
       throw new AggregateError(
         [error, cleanupError],
         'Worker startup and cleanup failed',
+        { cause: error },
       );
     }
 

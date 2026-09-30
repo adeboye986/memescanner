@@ -1,10 +1,12 @@
 import pino from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { StartApiOptions } from '../../apps/api/src/runtime.js';
 import {
   startHostingerRuntime,
   type HostingerRuntimeDependencies,
 } from '../../apps/hostinger/src/runtime.js';
+import type { StartWorkerOptions } from '../../apps/worker/src/runtime.js';
 import type { RuntimeHandle } from '../../src/infrastructure/runtime/process-lifecycle.js';
 import type { Telemetry } from '../../src/infrastructure/telemetry/instrumentation.js';
 import { createTestIdentity } from '../support/test-environment.js';
@@ -46,12 +48,12 @@ function dependencies(
 
       return Promise.resolve();
     }),
-    apiStarter: vi.fn((options): Promise<RuntimeHandle> => {
+    apiStarter: vi.fn((options: StartApiOptions): Promise<RuntimeHandle> => {
       events.push(`start:api:${String(options.runMigrations)}`);
 
       return Promise.resolve(runtimeHandle('api', events));
     }),
-    workerStarter: vi.fn((options): Promise<RuntimeHandle> => {
+    workerStarter: vi.fn((options: StartWorkerOptions): Promise<RuntimeHandle> => {
       events.push(`start:worker:${String(options.runMigrations)}`);
 
       return Promise.resolve(runtimeHandle('worker', events));

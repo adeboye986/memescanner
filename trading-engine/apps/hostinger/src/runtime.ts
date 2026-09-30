@@ -18,6 +18,7 @@ import { migrateDatabase } from '../../../src/infrastructure/database/migrate.js
 import {
   closeInOrder,
   idempotentClose,
+  type CloseStep,
   type RuntimeHandle,
 } from '../../../src/infrastructure/runtime/process-lifecycle.js';
 import type { Telemetry } from '../../../src/infrastructure/telemetry/instrumentation.js';
@@ -80,10 +81,13 @@ export async function startHostingerRuntime(
 
     const close = idempotentClose(async (): Promise<void> => {
       await closeInOrder('combined runtime shutdown', [
-        { name: 'scheduler', close: () => scheduler.close() },
-        { name: 'api', close: () => api.close() },
-        { name: 'worker', close: () => worker.close() },
-        { name: 'telemetry', close: () => dependencies.telemetry.shutdown() },
+        { name: 'scheduler', close: (): Promise<void> => scheduler.close() },
+        { name: 'api', close: (): Promise<void> => api.close() },
+        { name: 'worker', close: (): Promise<void> => worker.close() },
+        {
+          name: 'telemetry',
+          close: (): Promise<void> => dependencies.telemetry.shutdown(),
+        },
       ]);
     });
 
@@ -96,10 +100,13 @@ export async function startHostingerRuntime(
   } catch (error) {
     const cleanup = started
       .toReversed()
-      .map(({ name, handle }) => ({ name, close: () => handle.close() }));
+      .map(({ name, handle }): CloseStep => ({
+        name,
+        close: (): Promise<void> => handle.close(),
+      }));
     cleanup.push({
       name: 'telemetry',
-      close: () => dependencies.telemetry.shutdown(),
+      close: (): Promise<void> => dependencies.telemetry.shutdown(),
     });
 
     try {
@@ -108,6 +115,7 @@ export async function startHostingerRuntime(
       throw new AggregateError(
         [error, cleanupError],
         'Combined runtime startup and cleanup failed',
+        { cause: error },
       );
     }
 
