@@ -106,8 +106,8 @@ class TradingEngineSolanaLiveLifecycleTest extends TestCase
         $confirm = $this->opportunity(['entry_mode' => EntryMode::Confirm]);
         $killSwitch = $this->opportunity();
         $disabled = $this->opportunity();
-        foreach ([$paper, $confirm, $killSwitch, $disabled] as $candidate) {
-            $this->wallet($candidate->user, self::WALLET.substr(hash('sha256', (string) $candidate->id), 0, 1));
+        foreach ([$paper, $confirm, $killSwitch, $disabled] as $index => $candidate) {
+            $this->wallet($candidate->user, substr(self::WALLET, 0, -1).(string) ($index + 1));
         }
         $this->mock(TradingEngineLiveDecisionIntegration::class)->shouldReceive('assess')->andReturn($this->wouldEnter());
         app(ApplicationSettingsService::class)->update(['risk.kill_switch' => true]);
@@ -158,7 +158,9 @@ class TradingEngineSolanaLiveLifecycleTest extends TestCase
     public function test_tampered_prepared_binding_fails_closed_before_wallet_handoff(): void
     {
         [$opportunity, $attempt] = $this->prepared();
-        DB::table('solana_swap_attempts')->whereKey($attempt->id)->update(['input_amount_lamports' => 1]);
+        $this->assertSame(1, DB::table('solana_swap_attempts')
+            ->where('id', $attempt->id)
+            ->update(['input_amount_lamports' => 1]));
 
         $this->actingAs($opportunity->user)
             ->postJson(route('opportunities.solana.confirm', $opportunity))
@@ -242,8 +244,8 @@ class TradingEngineSolanaLiveLifecycleTest extends TestCase
         $attempt->update([
             'status' => 'submitted', 'transaction_signature' => self::SIGNATURE, 'submitted_at' => now(),
         ]);
-        $opportunity->update([
-            'execution_data' => [...$opportunity->execution_data, 'stage' => 'submitted'],
+        $opportunity->refresh()->update([
+            'execution_data' => [...($opportunity->execution_data ?? []), 'stage' => 'submitted'],
         ]);
         $receipt = [
             'succeeded' => false, 'slot' => 123456789, 'network_fee_lamports' => 5000,
@@ -267,8 +269,8 @@ class TradingEngineSolanaLiveLifecycleTest extends TestCase
         $attempt->update([
             'status' => 'submitted', 'transaction_signature' => self::SIGNATURE, 'submitted_at' => now(),
         ]);
-        $opportunity->update([
-            'execution_data' => [...$opportunity->execution_data, 'stage' => 'submitted'],
+        $opportunity->refresh()->update([
+            'execution_data' => [...($opportunity->execution_data ?? []), 'stage' => 'submitted'],
         ]);
         $receipt = [
             'succeeded' => true, 'slot' => 123456789, 'network_fee_lamports' => 5000,
