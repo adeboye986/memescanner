@@ -16,7 +16,7 @@ class LivePosition extends Model
 
     protected $fillable = [
         'user_id', 'chain', 'network', 'wallet_address', 'connected_wallet_id',
-        'trade_opportunity_id', 'ethereum_swap_attempt_id', 'token_address',
+        'trade_opportunity_id', 'ethereum_swap_attempt_id', 'solana_swap_attempt_id', 'token_address',
         'entry_transaction_hash', 'entry_block_number', 'entry_confirmed_at', 'accounting_status',
     ];
 
@@ -40,7 +40,7 @@ class LivePosition extends Model
                 throw new DomainException('Verified inventory evidence is immutable; record a discrepancy revision.');
             }
             if ($position->isDirty(['user_id', 'chain', 'network', 'wallet_address', 'connected_wallet_id',
-                'trade_opportunity_id', 'ethereum_swap_attempt_id', 'token_address',
+                'trade_opportunity_id', 'ethereum_swap_attempt_id', 'solana_swap_attempt_id', 'token_address',
                 'entry_transaction_hash', 'entry_block_number', 'entry_confirmed_at'])) {
                 throw new DomainException('LIVE entry identity and confirmation evidence are immutable.');
             }
@@ -78,5 +78,10 @@ class LivePosition extends Model
     public function ethereumSwapAttempt(): BelongsTo
     {
         return $this->belongsTo(EthereumSwapAttempt::class);
+    }
+
+    public function solanaSwapAttempt(): BelongsTo
+    {
+        return $this->belongsTo(SolanaSwapAttempt::class);
     }
 }

@@ -24,6 +24,7 @@ use App\Http\Controllers\PrepareEthereumOpportunityController;
 use App\Http\Controllers\RegisteredUserController;
 use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\SolanaSwapExecuteController;
+use App\Http\Controllers\SolanaOpportunityController;
 use App\Http\Controllers\SolanaSwapOrderController;
 use App\Http\Controllers\SolanaSwapQuoteController;
 use App\Http\Controllers\SolanaWalletConnectionController;
@@ -150,6 +151,10 @@ Route::middleware('auth')->prefix('opportunities')->name('opportunities.')->grou
     Route::post('/{opportunity}/ethereum/signing/{action}', [ConfirmEthereumOpportunityController::class, 'transition'])->whereIn('action', ['arm', 'release', 'rejected'])->middleware('customer.verified')->name('ethereum.signing');
     Route::post('/{opportunity}/ethereum/confirm', ConfirmEthereumOpportunityController::class)->middleware('customer.verified')->name('ethereum.confirm');
     Route::post('/{opportunity}/ethereum/prepare', PrepareEthereumOpportunityController::class)->middleware('customer.verified')->name('ethereum.prepare');
+    Route::post('/{opportunity}/solana/prepare', [SolanaOpportunityController::class, 'prepare'])->middleware('customer.verified')->name('solana.prepare');
+    Route::post('/{opportunity}/solana/confirm', [SolanaOpportunityController::class, 'confirm'])->middleware('customer.verified')->name('solana.confirm');
+    Route::post('/{opportunity}/solana/signing/{action}', [SolanaOpportunityController::class, 'transition'])->whereIn('action', ['arm', 'release', 'rejected'])->middleware('customer.verified')->name('solana.signing');
+    Route::post('/{opportunity}/solana/submitted', [SolanaOpportunityController::class, 'submitted'])->middleware(['customer.verified', 'throttle:10,1'])->name('solana.submitted');
     Route::post('/{opportunity}/approve', ApproveOpportunityController::class)->middleware('customer.verified')->name('approve');
     Route::post('/{opportunity}/ignore', IgnoreOpportunityController::class)->name('ignore');
 });

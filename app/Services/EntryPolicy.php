@@ -10,6 +10,7 @@ use App\Models\TradeOpportunity;
 use App\Services\TradingEngine\TradingEngineLiveDecisionIntegration;
 use App\Services\TradingEngine\TradingEngineLivePreparationIntegration;
 use App\Services\TradingEngine\TradingEnginePaperDecisionIntegration;
+use App\Services\TradingEngine\TradingEngineSolanaLivePreparationIntegration;
 use Throwable;
 
 class EntryPolicy
@@ -21,6 +22,7 @@ class EntryPolicy
         private TradingEnginePaperDecisionIntegration $paperDecisionIntegration,
         private TradingEngineLiveDecisionIntegration $liveDecisionIntegration,
         private TradingEngineLivePreparationIntegration $livePreparationIntegration,
+        private TradingEngineSolanaLivePreparationIntegration $solanaLivePreparationIntegration,
     ) {}
 
     public function apply(TradeOpportunity $opportunity): ?PaperPosition
@@ -32,6 +34,7 @@ class EntryPolicy
             try {
                 $this->liveDecisionIntegration->assess($opportunity);
                 $this->livePreparationIntegration->attempt($opportunity);
+                $this->solanaLivePreparationIntegration->attempt($opportunity);
             } catch (Throwable) {
                 return null;
             }

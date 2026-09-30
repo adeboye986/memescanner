@@ -1,10 +1,12 @@
 import { mountEthereumOpportunity } from './ethereum-opportunity';
 import { mountWalletCard } from './solana-wallet';
+import { mountSolanaOpportunity } from './solana-opportunity';
 import { mountEthereumWalletCard } from './ethereum-wallet';
 
 mountWalletCard(document.querySelector('#solana-wallet'));
 mountEthereumWalletCard(document.querySelector('#ethereum-wallet'));
 mountEthereumOpportunity(document.querySelector('[data-ethereum-opportunity]'));
+mountSolanaOpportunity(document.querySelector('[data-solana-opportunity]'));
 
 const closeModal = document.querySelector('#close-position-modal');
 const closeForm = document.querySelector('#close-position-form');

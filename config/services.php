@@ -57,6 +57,7 @@ return [
             'SOLANA_RPC_URL',
             'https://api.mainnet-beta.solana.com'
         ),
+        'opportunity_max_age_seconds' => env('SOLANA_OPPORTUNITY_MAX_AGE_SECONDS', 300),
         'metadata_cache_store' => env('OPERATIONS_CACHE_STORE', 'file'),
         'token_metadata_cache_seconds' => env('SOLANA_TOKEN_METADATA_CACHE_SECONDS', 86400),
         'transaction_validator_node' => env('SOLANA_TRANSACTION_VALIDATOR_NODE', 'node'),
@@ -174,6 +175,7 @@ return [
         'live_decision_integration_enabled' => env('TRADING_ENGINE_LIVE_DECISION_INTEGRATION_ENABLED', false),
         'live_preparation_enabled' => env('TRADING_ENGINE_LIVE_PREPARATION_ENABLED', false),
         'live_recovery_enabled' => env('TRADING_ENGINE_LIVE_RECOVERY_ENABLED', false),
+        'solana_live_integration_enabled' => env('TRADING_ENGINE_SOLANA_LIVE_INTEGRATION_ENABLED', false),
         'projection_recovery_batch_size' => (int) env('TRADING_ENGINE_PROJECTION_RECOVERY_BATCH_SIZE', 100),
         'projection_recovery_stale_after_seconds' => (int) env('TRADING_ENGINE_PROJECTION_RECOVERY_STALE_AFTER_SECONDS', 300),
         'projection_recovery_lease_seconds' => (int) env('TRADING_ENGINE_PROJECTION_RECOVERY_LEASE_SECONDS', 120),

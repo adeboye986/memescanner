@@ -24,6 +24,8 @@
 
     @if ($ethereumLive)
         @include('opportunities.ethereum-execution', ['attempt' => $opportunity->ethereumSwapAttempt])
+    @elseif ($solanaLive)
+        @include('opportunities.solana-execution', ['attempt' => $opportunity->solanaSwapAttempt])
     @elseif ($opportunity->status === \App\Enums\TradeOpportunityStatus::PendingConfirmation)
         <section class="rounded-2xl border border-amber-400/25 bg-amber-400/5 p-6"><p class="text-xs font-bold uppercase tracking-[0.2em] text-amber-300">Decision Required</p><h2 class="mt-2 text-xl font-semibold text-white">Approve or ignore this opportunity</h2><p class="mt-2 text-sm text-slate-400">Approval revalidates the state and uses the currently configured execution environment. LIVE remains locked server-side.</p><div class="mt-5 flex flex-wrap gap-3"><form method="POST" action="{{ route('opportunities.approve', $opportunity) }}">@csrf<button class="rounded-xl bg-emerald-400 px-5 py-3 text-sm font-bold text-slate-950">Approve Opportunity</button></form><form method="POST" action="{{ route('opportunities.ignore', $opportunity) }}">@csrf<button class="rounded-xl border border-slate-600 px-5 py-3 text-sm font-semibold text-slate-200">Ignore</button></form></div></section>
     @elseif ($opportunity->status === \App\Enums\TradeOpportunityStatus::Qualified && $opportunity->entry_mode === \App\Enums\EntryMode::Signal)

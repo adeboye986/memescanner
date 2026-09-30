@@ -230,6 +230,86 @@ class SolanaServiceTest extends TestCase
         );
     }
 
+    public function test_it_retrieves_the_confirmed_signed_transaction_as_base64(): void
+    {
+        $rpcUrl = 'https://solana-rpc.example.test';
+        $signature = str_repeat('3', 88);
+        $encoded = base64_encode('signed-versioned-transaction');
+
+        $settings = $this->mock(ApplicationSettingsService::class);
+        $settings->shouldReceive('getSecret')->once()->andReturn($rpcUrl);
+        Http::fake([
+            $rpcUrl => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => ['transaction' => [$encoded, 'base64']],
+                'id' => 1,
+            ]),
+        ]);
+
+        $this->assertSame($encoded, app(SolanaService::class)->getTransactionBase64($signature));
+
+        Http::assertSent(fn ($request): bool => $request['method'] === 'getTransaction'
+            && $request['params'] === [
+                $signature,
+                [
+                    'encoding' => 'base64',
+                    'commitment' => 'confirmed',
+                    'maxSupportedTransactionVersion' => 0,
+                ],
+            ]);
+    }
+
+    public function test_opportunity_receipt_aggregates_exact_wallet_token_balance_delta(): void
+    {
+        $rpcUrl = 'https://solana-rpc.example.test';
+        $wallet = '6Z7KvfSvatJqaj5kKB53TzZDxMJB8w3e2k2qz6qfYCvP';
+        $mint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+        $settings = $this->mock(ApplicationSettingsService::class);
+        $settings->shouldReceive('getSecret')->once()->andReturn($rpcUrl);
+        Http::fake([
+            $rpcUrl => Http::response([
+                'jsonrpc' => '2.0',
+                'result' => [
+                    'slot' => 123456789,
+                    'meta' => [
+                        'err' => null,
+                        'fee' => 5000,
+                        'preTokenBalances' => [
+                            $this->tokenBalance($wallet, $mint, '900719925474099300000', 9),
+                            $this->tokenBalance('another-wallet', $mint, '999999999', 9),
+                        ],
+                        'postTokenBalances' => [
+                            $this->tokenBalance($wallet, $mint, '900719925474099300005', 9),
+                            $this->tokenBalance($wallet, $mint, '7', 9),
+                            $this->tokenBalance($wallet, 'another-mint', '999999999', 9),
+                        ],
+                    ],
+                    'transaction' => [],
+                ],
+                'id' => 1,
+            ]),
+        ]);
+
+        $receipt = app(SolanaService::class)
+            ->getOpportunityTransactionReceipt(str_repeat('4', 88), $wallet, $mint);
+
+        $this->assertSame('12', $receipt['acquired_raw_amount']);
+        $this->assertSame(9, $receipt['token_decimals']);
+        $this->assertSame(123456789, $receipt['slot']);
+        $this->assertTrue($receipt['succeeded']);
+    }
+
+    /** @return array{owner: string, mint: string, uiTokenAmount: array{amount: string, decimals: int}} */
+    private function tokenBalance(string $owner, string $mint, string $amount, int $decimals): array
+    {
+        return [
+            'owner' => $owner,
+            'mint' => $mint,
+            'uiTokenAmount' => ['amount' => $amount, 'decimals' => $decimals],
+        ];
+    }
+
     public function test_it_reports_a_valid_recent_blockhash(): void
     {
         $rpcUrl = 'https://solana-rpc.example.test';

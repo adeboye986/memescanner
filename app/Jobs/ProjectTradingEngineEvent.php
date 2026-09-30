@@ -6,6 +6,7 @@ use App\Services\TradingEngine\TradingEngineLiveDecisionIntegration;
 use App\Services\TradingEngine\TradingEngineLivePreparationIntegration;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
 use App\Services\TradingEngine\TradingEnginePaperDecisionIntegration;
+use App\Services\TradingEngine\TradingEngineSolanaLivePreparationIntegration;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
@@ -32,6 +33,7 @@ class ProjectTradingEngineEvent implements ShouldQueue
         ?TradingEnginePaperDecisionIntegration $paperDecisionIntegration = null,
         ?TradingEngineLiveDecisionIntegration $liveDecisionIntegration = null,
         ?TradingEngineLivePreparationIntegration $livePreparationIntegration = null,
+        ?TradingEngineSolanaLivePreparationIntegration $solanaLivePreparationIntegration = null,
     ): void {
         if (config('services.trading_engine.enabled', false) !== true
             || config('services.trading_engine.opportunity_projection_enabled', false) !== true) {
@@ -41,16 +43,19 @@ class ProjectTradingEngineEvent implements ShouldQueue
         $paperDecisionIntegration ??= app(TradingEnginePaperDecisionIntegration::class);
         $liveDecisionIntegration ??= app(TradingEngineLiveDecisionIntegration::class);
         $livePreparationIntegration ??= app(TradingEngineLivePreparationIntegration::class);
+        $solanaLivePreparationIntegration ??= app(TradingEngineSolanaLivePreparationIntegration::class);
         $result = $projector->project($this->eventId);
         $paperDecisionIntegration->attemptForProjectedEvaluation($this->eventId);
         $liveDecisionIntegration->assessForProjectedEvaluation($this->eventId);
         $livePreparationIntegration->attemptForProjectedEvaluation($this->eventId);
+        $solanaLivePreparationIntegration->attemptForProjectedEvaluation($this->eventId);
 
         foreach ($result['dependent_event_ids'] as $dependentEventId) {
             $projector->project($dependentEventId);
             $paperDecisionIntegration->attemptForProjectedEvaluation($dependentEventId);
             $liveDecisionIntegration->assessForProjectedEvaluation($dependentEventId);
             $livePreparationIntegration->attemptForProjectedEvaluation($dependentEventId);
+            $solanaLivePreparationIntegration->attemptForProjectedEvaluation($dependentEventId);
         }
     }
 }

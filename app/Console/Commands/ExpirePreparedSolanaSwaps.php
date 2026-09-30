@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\SolanaSwapAttempt;
+use App\Services\SolanaOpportunityPreparationService;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -11,10 +12,11 @@ use Illuminate\Console\Command;
 #[Description('Mark expired prepared Solana swap attempts as expired.')]
 class ExpirePreparedSolanaSwaps extends Command
 {
-    public function handle(): int
+    public function handle(SolanaOpportunityPreparationService $opportunities): int
     {
         $expired = SolanaSwapAttempt::query()
             ->where('status', 'prepared')
+            ->whereNull('trade_opportunity_id')
             ->whereNotNull('expires_at')
             ->where('expires_at', '<=', now())
             ->update([
@@ -22,7 +24,10 @@ class ExpirePreparedSolanaSwaps extends Command
                 'updated_at' => now(),
             ]);
 
+        $opportunityExpired = $opportunities->cleanup();
+
         $this->info("Expired {$expired} prepared Solana swap attempt(s).");
+        $this->info("Expired {$opportunityExpired} opportunity-linked Solana swap attempt(s).");
 
         return self::SUCCESS;
     }

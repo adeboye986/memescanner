@@ -62,6 +62,11 @@ class TradeOpportunity extends Model
         return $this->hasOne(EthereumSwapAttempt::class);
     }
 
+    public function solanaSwapAttempt(): HasOne
+    {
+        return $this->hasOne(SolanaSwapAttempt::class);
+    }
+
     public function paperPosition(): BelongsTo
     {
         return $this->belongsTo(PaperPosition::class);

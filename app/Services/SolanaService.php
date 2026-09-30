@@ -422,29 +422,56 @@ class SolanaService
         );
     }
 
-    public function getTransactionReceipt(string $signature): ?array
+    public function getTransactionBase64(string $signature): ?string
     {
-        $transaction = $this->getTransaction($signature);
-
-        if ($transaction === null || $transaction === []) {
+        $result = $this->rpcRequest('getTransaction', [
+            $signature,
+            ['encoding' => 'base64', 'commitment' => 'confirmed', 'maxSupportedTransactionVersion' => 0],
+        ]);
+        if ($result === []) {
             return null;
         }
 
-        $slot = $transaction['slot'] ?? null;
-        $meta = $transaction['meta'] ?? null;
-
-        if (! is_int($slot) || $slot < 0 || ! is_array($meta)) {
-            throw new RuntimeException(
-                'Solana RPC returned an invalid transaction receipt.'
-            );
+        $transaction = $result['transaction'] ?? null;
+        $encoded = is_array($transaction) ? ($transaction[0] ?? null) : null;
+        if (! is_string($encoded) || $encoded === '' || base64_decode($encoded, true) === false) {
+            throw new RuntimeException('Solana RPC returned invalid transaction bytes.');
         }
 
-        $fee = $meta['fee'] ?? null;
+        return $encoded;
+    }
 
+    public function getTransactionReceipt(string $signature): ?array
+    {
+        return $this->receiptFromTransaction($this->getTransaction($signature));
+    }
+
+    /** @return array{succeeded: bool, slot: int, network_fee_lamports: int, error: mixed, acquired_raw_amount: string, token_decimals: int}|null */
+    public function getOpportunityTransactionReceipt(string $signature, string $wallet, string $outputMint): ?array
+    {
+        $transaction = $this->getTransaction($signature);
+        $receipt = $this->receiptFromTransaction($transaction);
+        if ($receipt === null || ! $receipt['succeeded']) {
+            return $receipt;
+        }
+
+        return [...$receipt, ...$this->tokenBalanceDelta($transaction['meta'], $wallet, $outputMint)];
+    }
+
+    /** @return array{succeeded: bool, slot: int, network_fee_lamports: int, error: mixed}|null */
+    private function receiptFromTransaction(?array $transaction): ?array
+    {
+        if ($transaction === null || $transaction === []) {
+            return null;
+        }
+        $slot = $transaction['slot'] ?? null;
+        $meta = $transaction['meta'] ?? null;
+        if (! is_int($slot) || $slot < 0 || ! is_array($meta)) {
+            throw new RuntimeException('Solana RPC returned an invalid transaction receipt.');
+        }
+        $fee = $meta['fee'] ?? null;
         if (! is_int($fee) || $fee < 0) {
-            throw new RuntimeException(
-                'Solana RPC returned an invalid transaction fee.'
-            );
+            throw new RuntimeException('Solana RPC returned an invalid transaction fee.');
         }
 
         return [
@@ -453,6 +480,43 @@ class SolanaService
             'network_fee_lamports' => $fee,
             'error' => $meta['err'] ?? null,
         ];
+    }
+
+    /** @return array{acquired_raw_amount: string, token_decimals: int} */
+    private function tokenBalanceDelta(array $meta, string $wallet, string $mint): array
+    {
+        $totals = ['preTokenBalances' => '0', 'postTokenBalances' => '0'];
+        $decimals = null;
+        foreach ($totals as $key => $total) {
+            $balances = $meta[$key] ?? null;
+            if (! is_array($balances)) {
+                throw new RuntimeException('Solana RPC omitted token balance evidence.');
+            }
+            foreach ($balances as $balance) {
+                if (! is_array($balance) || ($balance['owner'] ?? null) !== $wallet || ($balance['mint'] ?? null) !== $mint) {
+                    continue;
+                }
+                $amount = data_get($balance, 'uiTokenAmount.amount');
+                $candidateDecimals = data_get($balance, 'uiTokenAmount.decimals');
+                if (! is_string($amount) || preg_match('/^(0|[1-9][0-9]{0,77})$/D', $amount) !== 1
+                    || ! is_int($candidateDecimals) || $candidateDecimals < 0 || $candidateDecimals > 30
+                    || ($decimals !== null && $decimals !== $candidateDecimals)) {
+                    throw new RuntimeException('Solana RPC returned malformed token balance evidence.');
+                }
+                $decimals = $candidateDecimals;
+                $total = bcadd($total, $amount, 0);
+            }
+            $totals[$key] = $total;
+        }
+        if ($decimals === null) {
+            throw new RuntimeException('Solana RPC did not prove output-token inventory for the reserved wallet.');
+        }
+        $delta = bcsub($totals['postTokenBalances'], $totals['preTokenBalances'], 0);
+        if (preg_match('/^[1-9][0-9]{0,77}$/D', $delta) !== 1) {
+            throw new RuntimeException('Solana RPC did not prove a positive output-token acquisition.');
+        }
+
+        return ['acquired_raw_amount' => $delta, 'token_decimals' => $decimals];
     }
 
     public function findPumpFunBondingCurve(
