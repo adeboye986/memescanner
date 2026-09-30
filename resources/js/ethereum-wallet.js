@@ -163,6 +163,25 @@ export function createEthereumSwapRecovery(userId, walletAddress, storage) {
     };
 }
 
+export async function reportKnownEthereumTransaction(attemptId, transactionHash, recovery, post) {
+    const hash = String(transactionHash ?? '').trim().toLowerCase();
+    if (!Number.isSafeInteger(attemptId) || attemptId < 1 || !/^0x[a-f0-9]{64}$/.test(hash)) {
+        throw new Error('Enter a valid Ethereum transaction hash from this wallet attempt.');
+    }
+    if (!recovery || typeof recovery.pending !== 'function' || typeof recovery.remember !== 'function'
+        || typeof recovery.recover !== 'function') {
+        throw new Error('Transaction recovery is unavailable. Refresh the opportunity and try again.');
+    }
+
+    const pending = recovery.pending();
+    if (pending && (pending.attempt_id !== attemptId || pending.transaction_hash.toLowerCase() !== hash)) {
+        throw new Error('A different saved transaction report must be resolved first. Do not replace or send another transaction.');
+    }
+    if (!pending) recovery.remember(attemptId, hash);
+
+    return recovery.recover(post);
+}
+
 export async function sendEthereumSwap(wallet, post, payload, recovery) {
     if (recovery.pending()) throw new Error('Recover the previously broadcast transaction before starting a new swap.');
     if (recovery.sending || recovery.uncertain) throw new Error('Wallet submission outcome is pending or unknown. Check wallet transaction history before attempting another swap.');

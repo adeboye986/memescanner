@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createEthereumSwapRecovery, sendEthereumOpportunity } from './ethereum-wallet.js';
+import { createEthereumSwapRecovery, reportKnownEthereumTransaction, sendEthereumOpportunity } from './ethereum-wallet.js';
 import { mountEthereumOpportunity } from './ethereum-opportunity.js';
 
 const address = `0x${'1'.repeat(40)}`;
@@ -83,6 +83,41 @@ test('report timeout retains hash; retry and reload reuse it without signing or 
     assert.equal(f.posts.filter(p => p.step === 'confirm').length, 1);
     assert.equal(f.records.size, 0);
 });
+test('known transaction recovery validates and durably retries the exact hash without a wallet send', async () => {
+    const f = fixture();
+    const reports = [];
+    await assert.rejects(reportKnownEthereumTransaction(8, 'not-a-hash', f.recovery, async () => {
+        assert.fail('Invalid hashes must not be reported.');
+    }), /valid Ethereum transaction hash/);
+    assert.equal(f.recovery.pending(), null);
+
+    await assert.rejects(reportKnownEthereumTransaction(8, `  ${hash.toUpperCase()}  `, f.recovery, async (step, payload) => {
+        reports.push({ step, payload, stored: f.recovery.pending() });
+        throw Object.assign(Error('temporary RPC outage'), { status: 503 });
+    }), /reporting is unresolved/);
+    assert.deepEqual(reports[0], {
+        step: 'submitted',
+        payload: { attempt_id: 8, transaction_hash: hash },
+        stored: { user_id: '42', wallet_address: address, attempt_id: 8, transaction_hash: hash },
+    });
+
+    await reportKnownEthereumTransaction(8, hash, f.recovery, async (step, payload) => {
+        reports.push({ step, payload });
+        return acknowledged();
+    });
+    assert.deepEqual(reports[1], { step: 'submitted', payload: { attempt_id: 8, transaction_hash: hash } });
+    assert.equal(f.recovery.pending(), null);
+    assert.equal(f.calls.length, 0);
+});
+test('known transaction recovery never replaces a different unresolved report', async () => {
+    const f = fixture();
+    f.recovery.remember(8, hash);
+    let reports = 0;
+    await assert.rejects(reportKnownEthereumTransaction(8, `0x${'b'.repeat(64)}`, f.recovery, async () => { reports++; }), /different saved transaction/);
+    await assert.rejects(reportKnownEthereumTransaction(9, hash, f.recovery, async () => { reports++; }), /different saved transaction/);
+    assert.equal(reports, 0);
+    assert.equal(f.recovery.pending().transaction_hash, hash);
+});
 test('only explicit wallet rejection cancels; ambiguous errors keep signing blocked', async () => {
     for (const code of [4001, -32000]) {
         const f = fixture({ send: () => { throw Object.assign(Error('request rejected by transport'), { code }); } });
@@ -135,6 +170,31 @@ test('page mount does not request accounts or send; only explicit Confirm click 
     } finally { globalThis.fetch = oldFetch; globalThis.document = oldDocument; }
 });
 
+test('mounted armed recovery reports a pasted hash without accessing a wallet provider', async () => {
+    const listeners = new Map();
+    const feedback = {};
+    const knownHash = { value: `  ${hash.toUpperCase()}  ` };
+    const reportKnown = { addEventListener: (name, callback) => listeners.set(name, callback) };
+    const section = { dataset: { userId: '42', attemptId: '8', walletAddress: address, sellAmountWei: '1000', signingRequested: '1', submittedUrl: '/submitted' },
+        querySelector: selector => ({ '[data-opportunity-feedback]': feedback, '[data-opportunity-known-hash]': knownHash,
+            '[data-opportunity-report-known]': reportKnown }[selector] ?? null) };
+    const previous = { fetch: globalThis.fetch, document: globalThis.document };
+    const reports = [];
+    globalThis.document = { querySelector: () => null };
+    globalThis.fetch = async (url, request) => {
+        assert.equal(url, '/submitted');
+        reports.push(JSON.parse(request.body));
+        return { ok: true, json: async () => acknowledged() };
+    };
+    try {
+        mountEthereumOpportunity(section, {});
+        await listeners.get('click')();
+        assert.deepEqual(reports, [{ attempt_id: 8, transaction_hash: hash }]);
+        assert.equal(reportKnown.hidden, true);
+        assert.equal(knownHash.disabled, true);
+        assert.match(feedback.textContent, /report accepted/);
+    } finally { globalThis.fetch = previous.fetch; globalThis.document = previous.document; }
+});
 test('mounted reload, retry, and wallet reconnect report the saved attempt without sending', async () => {
     const f = fixture();
     f.recovery.remember(77, hash);

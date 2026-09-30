@@ -1,4 +1,4 @@
-import { createEthereumSwapRecovery, detectEthereumWallets, ethToWei, sendEthereumOpportunity } from './ethereum-wallet.js';
+import { createEthereumSwapRecovery, detectEthereumWallets, ethToWei, reportKnownEthereumTransaction, sendEthereumOpportunity } from './ethereum-wallet.js';
 
 export function mountEthereumOpportunity(section, browser = window) {
     if (!section) return;
@@ -21,12 +21,16 @@ export function mountEthereumOpportunity(section, browser = window) {
         return body;
     };
     const retry = section.querySelector('[data-opportunity-report]');
+    const knownHash = section.querySelector('[data-opportunity-known-hash]');
+    const reportKnown = section.querySelector('[data-opportunity-report-known]');
     const confirm = section.querySelector('[data-opportunity-confirm]');
     const prepare = section.querySelector('[data-opportunity-prepare]');
+    let reportingKnown = false;
     const refreshControls = () => {
         if (retry) retry.hidden = !recovery?.pending();
         if (confirm) confirm.disabled = !!(recovery?.pending() || recovery?.sending || recovery?.uncertain) || section.dataset.signingRequested === '1';
         if (prepare) prepare.disabled = !!(recovery?.pending() || recovery?.sending || recovery?.uncertain);
+        if (reportKnown) reportKnown.disabled = reportingKnown || !!recovery?.pending();
     };
     const recover = async () => {
         if (!recovery?.pending()) return;
@@ -35,10 +39,30 @@ export function mountEthereumOpportunity(section, browser = window) {
             await recovery.recover(post);
             say(attemptId === binding.attempt_id ? 'Transaction reported. Refresh to see blockchain confirmation status.' : 'Previous transaction reported. Refresh this opportunity before continuing.');
             if (confirm) confirm.hidden = true;
+            if (attemptId === binding.attempt_id) {
+                if (reportKnown) reportKnown.hidden = true;
+                if (knownHash) knownHash.disabled = true;
+            }
         } catch (error) { say(error.message); }
         finally { refreshControls(); }
     };
     retry?.addEventListener('click', recover);
+    reportKnown?.addEventListener('click', async () => {
+        if (reportingKnown) return;
+        reportingKnown = true;
+        refreshControls();
+        try {
+            await reportKnownEthereumTransaction(binding.attempt_id, knownHash?.value, recovery, post);
+            say('Transaction report accepted. Refresh to see authoritative blockchain confirmation status.');
+            reportKnown.hidden = true;
+            if (knownHash) knownHash.disabled = true;
+        } catch (error) {
+            say(error.message);
+        } finally {
+            reportingKnown = false;
+            refreshControls();
+        }
+    });
     const announced = [];
     const picker = section.querySelector('[data-opportunity-wallet]');
     let wallets = [];

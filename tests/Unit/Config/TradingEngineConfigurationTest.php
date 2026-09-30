@@ -33,6 +33,7 @@ class TradingEngineConfigurationTest extends TestCase
         $this->assertFalse($services['trading_engine']['paper_decision_integration_enabled']);
         $this->assertFalse($services['trading_engine']['live_decision_integration_enabled']);
         $this->assertFalse($services['trading_engine']['live_preparation_enabled']);
+        $this->assertFalse($services['trading_engine']['live_recovery_enabled']);
         $this->assertSame(100, $services['trading_engine']['projection_recovery_batch_size']);
         $this->assertSame(300, $services['trading_engine']['projection_recovery_stale_after_seconds']);
         $this->assertSame(120, $services['trading_engine']['projection_recovery_lease_seconds']);

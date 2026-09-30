@@ -48,6 +48,7 @@ class TradingEngineEthereumConfirmationHandoffTest extends TestCase
             'services.trading_engine.decision_boundary_enabled' => true,
             'services.trading_engine.live_decision_integration_enabled' => true,
             'services.trading_engine.live_preparation_enabled' => true,
+            'services.trading_engine.live_recovery_enabled' => true,
         ]);
         app(ApplicationSettingsService::class)->update([
             'risk.kill_switch' => false,
@@ -145,6 +146,52 @@ class TradingEngineEthereumConfirmationHandoffTest extends TestCase
         $this->assertNull($attempt->fresh()->transaction_hash);
         $this->assertNull($attempt->fresh()->submitted_at);
         $this->assertDatabaseCount('live_positions', 0);
+    }
+
+    public function test_armed_attempt_exposes_hash_only_recovery_without_payload_or_execution(): void
+    {
+        [$opportunity, $attempt] = $this->prepared();
+        $owner = $opportunity->user;
+
+        $this->actingAs($owner)
+            ->get(route('opportunities.show', $opportunity))
+            ->assertOk()
+            ->assertDontSee('Report known transaction')
+            ->assertDontSee('0x1234');
+
+        $claim = $this->postJson(route('opportunities.ethereum.confirm', $opportunity))
+            ->assertOk()
+            ->json('order.signing_claim_token');
+        $this->get(route('opportunities.show', $opportunity))
+            ->assertOk()
+            ->assertDontSee('Report known transaction')
+            ->assertDontSee('0x1234');
+
+        $this->postJson(route('opportunities.ethereum.signing', [$opportunity, 'arm']), [
+            'signing_claim_token' => $claim,
+        ])->assertOk();
+        config()->set('services.trading_engine.live_recovery_enabled', false);
+        $this->get(route('opportunities.show', $opportunity))
+            ->assertOk()
+            ->assertDontSee('Report known transaction');
+        config()->set('services.trading_engine.live_recovery_enabled', true);
+        $this->get(route('opportunities.show', $opportunity))
+            ->assertOk()
+            ->assertSee('Report known transaction')
+            ->assertSee('It never signs or sends a transaction')
+            ->assertSee("Attempt #{$attempt->id}")
+            ->assertDontSee('0x1234');
+
+        $hash = '0x'.str_repeat('a', 64);
+        $attempt->update(['status' => 'submitted', 'transaction_hash' => $hash, 'submitted_at' => now()]);
+        $this->get(route('opportunities.show', $opportunity))
+            ->assertOk()
+            ->assertSee($hash)
+            ->assertDontSee('Report known transaction')
+            ->assertDontSee('0x1234');
+
+        $this->assertDatabaseCount('live_positions', 0);
+        Http::assertNothingSent();
     }
 
     public function test_expiry_kill_switch_and_user_disable_fail_closed_without_repreparation(): void

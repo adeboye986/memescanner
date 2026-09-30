@@ -45,7 +45,25 @@
         <p>Preparation is unavailable or expired. Refresh the opportunity status.</p>
     @endif
     @if ($attempt)
-        <p class="break-all text-sm text-slate-400">Reserved wallet: {{ $attempt->wallet_address }}</p>
+        <div class="space-y-1 text-sm text-slate-400">
+            <p>Attempt #{{ $attempt->id }} · <span class="uppercase">{{ $attempt->status }}</span></p>
+            <p class="break-all">Reserved wallet: {{ $attempt->wallet_address }}</p>
+            @if ($attempt->transaction_hash)
+                <p class="break-all">Transaction: <a href="https://etherscan.io/tx/{{ $attempt->transaction_hash }}" target="_blank" rel="noopener noreferrer" class="text-violet-300 underline">{{ $attempt->transaction_hash }}</a></p>
+            @endif
+        </div>
+        @if (config('services.trading_engine.live_recovery_enabled') && $attempt->signing_armed_at && ! $attempt->transaction_hash && in_array($attempt->status, ['prepared', 'expired'], true))
+            <div class="space-y-3 rounded-xl border border-amber-400/30 bg-amber-400/5 p-4">
+                <p class="text-sm font-semibold text-amber-200">Recover a transaction already shown in your wallet history</p>
+                <p class="text-xs leading-5 text-slate-400">This only reports an existing transaction for verification. It never signs or sends a transaction. Paste only the exact hash from this attempt; do not create another transaction.</p>
+                <div class="flex flex-col gap-3 sm:flex-row">
+                    <label class="min-w-0 flex-1 text-xs text-slate-400">Ethereum transaction hash
+                        <input data-opportunity-known-hash type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="66" placeholder="0x…" class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-200">
+                    </label>
+                    <button data-opportunity-report-known type="button" class="self-end rounded-lg border border-amber-400/40 px-4 py-2 text-sm font-semibold text-amber-200">Report known transaction</button>
+                </div>
+            </div>
+        @endif
         <div class="flex flex-wrap gap-3">
             <select data-opportunity-wallet aria-label="Ethereum wallet" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2"></select>
             <button data-opportunity-connect type="button" class="rounded-lg border border-slate-700 px-3 py-2 text-sm">Connect wallet</button>
