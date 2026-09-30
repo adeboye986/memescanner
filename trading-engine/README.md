@@ -20,7 +20,7 @@ opens Laravel's SQLite database.
 
 ## Runtime and process model
 
-The workspace pins Node.js 24.21.0 and pnpm 12.6.0. The three entry points are
+The workspace pins Node.js 24.21.0 and pnpm 12.6.0. The standalone entry points are
 built and started independently:
 
 | Role | Development command | Production-style command |
@@ -32,6 +32,31 @@ built and started independently:
 All roles use URLs from the environment. Local Docker services can therefore be
 replaced later with external PostgreSQL and Redis without changing domain code.
 Hostinger is not used or modified by Phase 1.
+
+### Combined Hostinger process
+
+Hostinger Web App hosting can run all three roles in one Node process after a
+production build:
+
+```bash
+pnpm build
+pnpm start:hostinger
+```
+
+The Hostinger application entry file is
+`dist/apps/hostinger/src/main.js`. It runs database migrations once before
+starting the API, worker, and scheduler, owns one OpenTelemetry SDK, and
+coordinates one shutdown path. The standalone commands remain available for
+deployments that supervise the three roles separately.
+
+Hostinger must provide the same runtime configuration used by the standalone
+roles, including `NODE_ENV`, `HOST`, `PORT`, `DATABASE_URL`, `REDIS_URL`,
+`SERVICE_AUTH_ISSUER`, `SERVICE_AUTH_AUDIENCE`,
+`SERVICE_AUTH_PUBLIC_KEY_BASE64`, `LARAVEL_WEBHOOK_URL`, and
+`LARAVEL_WEBHOOK_HMAC_SECRET`. The optional tuning variables documented in
+`.env.example` remain supported. PostgreSQL and Redis are external managed
+services; the combined process does not install or embed either dependency.
+Never add actual credentials to the repository or Hostinger build logs.
 
 ## Docker Desktop or Colima on macOS
 
