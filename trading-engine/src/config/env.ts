@@ -12,6 +12,7 @@ export interface EngineConfig {
   readonly databaseUrl: string;
   readonly databaseMaxConnections: number;
   readonly databaseSsl: boolean;
+  readonly databaseCaCertificate: string | undefined;
   readonly redisUrl: string;
   readonly redisPrefix: string;
   readonly serviceAuthIssuer: string;
@@ -101,6 +102,33 @@ function boolean(env: NodeJS.ProcessEnv, key: string, defaultValue: boolean): bo
   throw new EnvironmentConfigurationError(`${key} must be true or false`);
 }
 
+function optionalBase64Text(
+  env: NodeJS.ProcessEnv,
+  key: string,
+): string | undefined {
+  const encoded = env[key]?.trim();
+
+  if (encoded === undefined || encoded === '') {
+    return undefined;
+  }
+
+  const isCanonicalBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+    encoded,
+  );
+
+  if (!isCanonicalBase64) {
+    throw new EnvironmentConfigurationError(`${key} must be valid Base64`);
+  }
+
+  const decoded = Buffer.from(encoded, 'base64');
+
+  if (decoded.toString('base64') !== encoded) {
+    throw new EnvironmentConfigurationError(`${key} must be valid Base64`);
+  }
+
+  return decoded.toString('utf8');
+}
+
 function nodeEnvironment(env: NodeJS.ProcessEnv): EngineConfig['nodeEnv'] {
   const value = env['NODE_ENV']?.trim() ?? 'development';
 
@@ -164,6 +192,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     databaseUrl: required(env, 'DATABASE_URL'),
     databaseMaxConnections: integer(env, 'DATABASE_MAX_CONNECTIONS', 10, 1, 100),
     databaseSsl: boolean(env, 'DATABASE_SSL', false),
+    databaseCaCertificate: optionalBase64Text(env, 'DATABASE_CA_CERT_BASE64'),
     redisUrl: required(env, 'REDIS_URL'),
     redisPrefix: optional(env, 'REDIS_PREFIX', 'meme-scanner:engine'),
     serviceAuthIssuer: required(env, 'SERVICE_AUTH_ISSUER'),

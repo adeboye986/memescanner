@@ -6,6 +6,14 @@ import {
   EnvironmentConfigurationError,
   loadConfig,
 } from '../../src/config/env.js';
+import { createDatabasePoolConfig } from '../../src/infrastructure/database/client.js';
+
+const databaseCaCertificate = [
+  '-----BEGIN CERTIFICATE-----',
+  'test-only-certificate',
+  '-----END CERTIFICATE-----',
+  '',
+].join('\n');
 
 function validEnvironment(): NodeJS.ProcessEnv {
   const { publicKey } = generateKeyPairSync('ed25519');
@@ -49,6 +57,81 @@ describe('environment configuration', () => {
     expect(() => loadConfig(environment)).toThrow(
       new EnvironmentConfigurationError('DATABASE_URL is required'),
     );
+  });
+
+  it('disables PostgreSQL TLS when database SSL is disabled', () => {
+    const config = loadConfig({
+      ...validEnvironment(),
+      DATABASE_SSL: 'false',
+    });
+
+    expect(config.databaseCaCertificate).toBeUndefined();
+    expect(createDatabasePoolConfig(config).ssl).toBeUndefined();
+  });
+
+  it('retains certificate verification without a custom CA', () => {
+    const config = loadConfig({
+      ...validEnvironment(),
+      DATABASE_SSL: 'true',
+    });
+
+    expect(config.databaseCaCertificate).toBeUndefined();
+    expect(createDatabasePoolConfig(config).ssl).toEqual({
+      rejectUnauthorized: true,
+    });
+  });
+
+  it('decodes a custom CA for verified PostgreSQL TLS', () => {
+    const encodedCertificate = Buffer.from(databaseCaCertificate).toString(
+      'base64',
+    );
+    const config = loadConfig({
+      ...validEnvironment(),
+      DATABASE_SSL: 'true',
+      DATABASE_CA_CERT_BASE64: encodedCertificate,
+    });
+
+    expect(config.databaseCaCertificate).toBe(databaseCaCertificate);
+    expect(createDatabasePoolConfig(config).ssl).toEqual({
+      rejectUnauthorized: true,
+      ca: databaseCaCertificate,
+    });
+  });
+
+  it('rejects a malformed database CA Base64 value', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment(),
+        DATABASE_CA_CERT_BASE64: 'not-valid-base64%%%',
+      }),
+    ).toThrow(
+      new EnvironmentConfigurationError(
+        'DATABASE_CA_CERT_BASE64 must be valid Base64',
+      ),
+    );
+  });
+
+  it('does not expose malformed database CA contents in configuration errors', () => {
+    const malformedCertificate = 'private-certificate-contents%%%';
+
+    try {
+      loadConfig({
+        ...validEnvironment(),
+        DATABASE_CA_CERT_BASE64: malformedCertificate,
+      });
+      expect.fail('Expected malformed database CA configuration to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(EnvironmentConfigurationError);
+
+      if (!(error instanceof Error)) {
+        expect.fail('Expected configuration failure to be an Error');
+      }
+
+      expect(error.message).toBe(
+        'DATABASE_CA_CERT_BASE64 must be valid Base64',
+      );
+      expect(error.message).not.toContain(malformedCertificate);
+    }
   });
 
   it('rejects a short webhook secret', () => {

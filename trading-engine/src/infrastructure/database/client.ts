@@ -1,5 +1,5 @@
 import { Kysely, PostgresDialect, sql, type ColumnType, type Generated } from 'kysely';
-import { Pool, types } from 'pg';
+import { Pool, types, type PoolConfig } from 'pg';
 
 import type { EngineConfig } from '../../config/env.js';
 import type { EventEnvelope } from '../../contracts/events/event-envelope.schema.js';
@@ -151,15 +151,28 @@ export interface Database {
   opportunity_evaluations: OpportunityEvaluationTable;
 }
 
+export function createDatabasePoolConfig(config: EngineConfig): PoolConfig {
+  const ssl = config.databaseSsl
+    ? {
+        rejectUnauthorized: true,
+        ...(config.databaseCaCertificate === undefined
+          ? {}
+          : { ca: config.databaseCaCertificate }),
+      }
+    : undefined;
+
+  return {
+    connectionString: config.databaseUrl,
+    max: config.databaseMaxConnections,
+    ssl,
+    application_name: config.serviceName,
+  };
+}
+
 export function createDatabase(config: EngineConfig): Kysely<Database> {
   return new Kysely<Database>({
     dialect: new PostgresDialect({
-      pool: new Pool({
-        connectionString: config.databaseUrl,
-        max: config.databaseMaxConnections,
-        ssl: config.databaseSsl ? { rejectUnauthorized: true } : undefined,
-        application_name: config.serviceName,
-      }),
+      pool: new Pool(createDatabasePoolConfig(config)),
     }),
   });
 }
