@@ -12,7 +12,7 @@ loadLocalEnvironment();
 const config = loadConfig();
 const logger = createLogger(config);
 
-try {
+async function bootstrapHostingerRuntime(): Promise<void> {
   const telemetry = startTelemetry(config);
 
   await runManagedProcess({
@@ -21,7 +21,9 @@ try {
     logger,
     start: () => startHostingerRuntime({ config, logger, telemetry }),
   });
-} catch (error) {
+}
+
+void bootstrapHostingerRuntime().catch((error: unknown): void => {
   logger.fatal({ err: error }, 'combined Hostinger runtime bootstrap failed');
   process.exitCode = 1;
-}
+});
