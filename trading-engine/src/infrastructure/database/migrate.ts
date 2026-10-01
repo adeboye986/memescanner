@@ -84,5 +84,12 @@ async function run(): Promise<void> {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await run();
+  void run().catch((error: unknown): void => {
+    const message = error instanceof Error
+      ? (error.stack ?? error.message)
+      : String(error);
+
+    process.stderr.write(message + '\n');
+    process.exitCode = 1;
+  });
 }
