@@ -6,3 +6,10 @@ allowBuilds:
   msgpackr-extract: true
   protobufjs: true
   ssh2: false
+onlyBuiltDependencies:
+  - esbuild
+  - msgpackr-extract
+  - protobufjs
+ignoredBuiltDependencies:
+  - cpu-features
+  - ssh2
