@@ -43,11 +43,6 @@ function dependencies(
     config,
     logger: pino({ level: 'silent' }),
     telemetry: telemetry(events),
-    migrate: vi.fn((): Promise<void> => {
-      events.push('migrate');
-
-      return Promise.resolve();
-    }),
     apiStarter: vi.fn((options: StartApiOptions): Promise<RuntimeHandle> => {
       events.push(`start:api:${String(options.runMigrations)}`);
 
@@ -68,13 +63,12 @@ function dependencies(
 }
 
 describe('combined Hostinger runtime', () => {
-  it('runs one migration before starting all roles without child migrations', async () => {
+  it('starts all roles in order without running application-startup migrations', async () => {
     const events: string[] = [];
 
     const runtime = await startHostingerRuntime(dependencies(events));
 
     expect(events).toEqual([
-      'migrate',
       'start:api:false',
       'start:worker:false',
       'start:scheduler',
@@ -97,7 +91,7 @@ describe('combined Hostinger runtime', () => {
     ]);
   });
 
-  it('cleans up previously started roles when later startup fails', async () => {
+  it('cleans up the worker, API, and telemetry when scheduler startup fails', async () => {
     const events: string[] = [];
     const startupError = new Error('synthetic scheduler startup failure');
     const configured = dependencies(events, {
@@ -111,11 +105,31 @@ describe('combined Hostinger runtime', () => {
     await expect(startHostingerRuntime(configured)).rejects.toBe(startupError);
 
     expect(events).toEqual([
-      'migrate',
       'start:api:false',
       'start:worker:false',
       'start:scheduler',
       'close:worker',
+      'close:api',
+      'close:telemetry',
+    ]);
+  });
+
+  it('cleans up the API and telemetry when worker startup fails', async () => {
+    const events: string[] = [];
+    const startupError = new Error('synthetic worker startup failure');
+    const configured = dependencies(events, {
+      workerStarter: vi.fn((): Promise<RuntimeHandle> => {
+        events.push('start:worker:false');
+
+        return Promise.reject(startupError);
+      }),
+    });
+
+    await expect(startHostingerRuntime(configured)).rejects.toBe(startupError);
+
+    expect(events).toEqual([
+      'start:api:false',
+      'start:worker:false',
       'close:api',
       'close:telemetry',
     ]);

@@ -13,8 +13,6 @@ import {
   type StartWorkerOptions,
 } from '../../worker/src/runtime.js';
 import type { EngineConfig } from '../../../src/config/env.js';
-import { createDatabase } from '../../../src/infrastructure/database/client.js';
-import { migrateDatabase } from '../../../src/infrastructure/database/migrate.js';
 import {
   closeInOrder,
   idempotentClose,
@@ -27,7 +25,6 @@ export interface HostingerRuntimeDependencies {
   readonly config: EngineConfig;
   readonly logger: Logger;
   readonly telemetry: Telemetry;
-  readonly migrate?: (config: EngineConfig) => Promise<void>;
   readonly apiStarter?: (options: StartApiOptions) => Promise<RuntimeHandle>;
   readonly workerStarter?: (options: StartWorkerOptions) => Promise<RuntimeHandle>;
   readonly schedulerStarter?: (
@@ -40,27 +37,15 @@ interface StartedComponent {
   readonly handle: RuntimeHandle;
 }
 
-async function migrateForCombinedRuntime(config: EngineConfig): Promise<void> {
-  const database = createDatabase(config);
-
-  try {
-    await migrateDatabase(database);
-  } finally {
-    await database.destroy();
-  }
-}
-
 export async function startHostingerRuntime(
   dependencies: HostingerRuntimeDependencies,
 ): Promise<RuntimeHandle> {
-  const migrate = dependencies.migrate ?? migrateForCombinedRuntime;
   const apiStarter = dependencies.apiStarter ?? startApi;
   const workerStarter = dependencies.workerStarter ?? startWorker;
   const schedulerStarter = dependencies.schedulerStarter ?? startScheduler;
   const started: StartedComponent[] = [];
 
   try {
-    await migrate(dependencies.config);
     const api = await apiStarter({
       config: dependencies.config,
       logger: dependencies.logger,
