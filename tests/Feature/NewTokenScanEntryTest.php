@@ -2,17 +2,26 @@
 
 namespace Tests\Feature;
 
+use App\Enums\EntryMode;
+use App\Enums\ExecutionMode;
+use App\Enums\TradeOpportunityStatus;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
 use App\Models\TokenScan;
 use App\Models\TradeOpportunity;
+use App\Models\User;
+use App\Models\UserTradingPreference;
 use App\Services\BirdeyeService;
 use App\Services\DexScreenerService;
+use App\Services\EthereumScannerService;
 use App\Services\GoPlusService;
 use App\Services\PaperTradeEntryService;
 use App\Services\TelegramService;
+use App\Services\Trading\LiveTradeExecutor;
+use App\Services\UserTelegramNotificationService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
@@ -114,7 +123,153 @@ class NewTokenScanEntryTest extends TestCase
         $this->assertSame('passed', $strongOpportunity->security_data['status']);
         $this->assertSame('GoPlus', $strongOpportunity->security_data['provider']);
         $this->assertTrue($strongOpportunity->security_data['passed']);
+        $this->assertSame(2, TradeOpportunity::query()->count());
         $this->assertEqualsWithDelta(4.8, (float) PaperWallet::query()->sole()->available_balance_sol, 0.000001);
+    }
+
+    public function test_max_qualified_stops_before_a_second_qualified_opportunity_is_created(): void
+    {
+        $user = User::factory()->create();
+        $this->mockQualifiedListings(['first-qualified', 'second-qualified'], ['first-qualified']);
+        $this->expectUserCandidateAlerts(1);
+
+        $this->artisan('tokens:scan', [
+            '--user' => (string) $user->getKey(),
+            '--max-qualified' => '1',
+        ])
+            ->expectsOutputToContain('Qualified opportunity limit reached (1); stopping scan.')
+            ->assertSuccessful();
+
+        $this->assertDatabaseCount('trade_opportunities', 1);
+        $this->assertDatabaseHas('trade_opportunities', [
+            'user_id' => $user->getKey(),
+            'address' => 'first-qualified',
+        ]);
+        $this->assertDatabaseMissing('trade_opportunities', ['address' => 'second-qualified']);
+        $this->assertDatabaseMissing('token_scans', ['address' => 'second-qualified']);
+    }
+
+    public function test_rejected_listings_do_not_consume_the_max_qualified_limit(): void
+    {
+        $user = User::factory()->create();
+        $birdeye = $this->mock(BirdeyeService::class);
+        $birdeye->shouldReceive('newListings')->once()->andReturn(['data' => ['items' => [
+            ['address' => 'rejected-low-liquidity', 'symbol' => 'REJECTED', 'name' => 'Rejected', 'liquidity' => 50],
+            ['address' => 'qualified-after-rejection', 'symbol' => 'QUALIFIED', 'name' => 'Qualified', 'liquidity' => 1_000],
+        ]]]);
+        $birdeye->shouldReceive('tokenOverview')->with('qualified-after-rejection')->twice()->andReturn([
+            'data' => $this->token('QUALIFIED', 5_000, 50, 9, 1, 30, 10),
+        ]);
+        $this->mock(GoPlusService::class)
+            ->shouldReceive('evaluateToken')
+            ->with('qualified-after-rejection')
+            ->once()
+            ->andReturn(['passed' => true, 'score' => 100, 'risks' => []]);
+        $this->mock(DexScreenerService::class)
+            ->shouldReceive('analyzeToken')
+            ->with('qualified-after-rejection')
+            ->once()
+            ->andReturn($this->dexData('qualified-after-rejection'));
+        $this->expectUserCandidateAlerts(1);
+
+        $this->artisan('tokens:scan', [
+            '--user' => (string) $user->getKey(),
+            '--max-qualified' => '1',
+        ])->assertSuccessful();
+
+        $this->assertDatabaseCount('trade_opportunities', 1);
+        $this->assertDatabaseHas('trade_opportunities', [
+            'user_id' => $user->getKey(),
+            'address' => 'qualified-after-rejection',
+        ]);
+        $this->assertDatabaseMissing('trade_opportunities', ['address' => 'rejected-low-liquidity']);
+    }
+
+    #[DataProvider('invalidMaxQualifiedProvider')]
+    public function test_invalid_max_qualified_values_fail_before_fetching_listings(string $invalidValue): void
+    {
+        $this->mock(BirdeyeService::class)->shouldNotReceive('newListings');
+
+        $this->artisan('tokens:scan', ['--max-qualified' => $invalidValue])
+            ->expectsOutputToContain('The --max-qualified option must be a positive integer.')
+            ->assertFailed();
+
+        $this->assertDatabaseCount('token_scans', 0);
+        $this->assertDatabaseCount('trade_opportunities', 0);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function invalidMaxQualifiedProvider(): array
+    {
+        return [
+            'empty' => [''],
+            'zero' => ['0'],
+            'negative' => ['-1'],
+            'decimal' => ['1.5'],
+            'text' => ['one'],
+            'overflow' => ['999999999999999999999999999999999999999'],
+        ];
+    }
+
+    public function test_max_qualified_fails_closed_for_the_unsupported_ethereum_path(): void
+    {
+        $this->mock(EthereumScannerService::class)->shouldNotReceive('scan');
+
+        $this->artisan('tokens:scan', [
+            '--chain' => 'ethereum',
+            '--max-qualified' => '1',
+        ])
+            ->expectsOutputToContain('The --max-qualified option is currently supported only for Solana scans.')
+            ->assertFailed();
+    }
+
+    public function test_user_scope_still_limits_the_qualified_opportunity_to_the_requested_user(): void
+    {
+        $requestedUser = User::factory()->create();
+        $otherUser = User::factory()->create();
+        $this->mockQualifiedListings(['user-scoped']);
+        $this->expectUserCandidateAlerts(1);
+
+        $this->artisan('tokens:scan', [
+            '--user' => (string) $requestedUser->getKey(),
+            '--max-qualified' => '1',
+        ])->assertSuccessful();
+
+        $this->assertDatabaseCount('trade_opportunities', 1);
+        $this->assertDatabaseHas('trade_opportunities', [
+            'user_id' => $requestedUser->getKey(),
+            'address' => 'user-scoped',
+        ]);
+        $this->assertDatabaseMissing('trade_opportunities', [
+            'user_id' => $otherUser->getKey(),
+            'address' => 'user-scoped',
+        ]);
+    }
+
+    public function test_max_qualified_does_not_cross_the_existing_live_confirmation_boundary(): void
+    {
+        config()->set('services.trading_engine.live_decision_integration_enabled', false);
+        $user = User::factory()->create();
+        UserTradingPreference::factory()->for($user)->create([
+            'execution_mode' => ExecutionMode::Live,
+            'entry_mode' => EntryMode::Confirm,
+            'trading_enabled' => true,
+        ]);
+        $this->mock(LiveTradeExecutor::class)->shouldNotReceive('execute');
+        $this->mockQualifiedListings(['live-confirm-only']);
+        $this->expectUserCandidateAlerts(1);
+
+        $this->artisan('tokens:scan', [
+            '--user' => (string) $user->getKey(),
+            '--max-qualified' => '1',
+        ])->assertSuccessful();
+
+        $opportunity = TradeOpportunity::query()->sole();
+        $this->assertSame($user->getKey(), $opportunity->user_id);
+        $this->assertSame(ExecutionMode::Live, $opportunity->execution_mode);
+        $this->assertSame(EntryMode::Confirm, $opportunity->entry_mode);
+        $this->assertSame(TradeOpportunityStatus::PendingConfirmation, $opportunity->status);
+        $this->assertDatabaseCount('paper_positions', 0);
     }
 
     public function test_historical_raw_data_remains_a_readable_array_without_double_encoding(): void
@@ -160,6 +315,45 @@ class NewTokenScanEntryTest extends TestCase
 
         $this->assertCount(1, $messages);
         $this->assertSame(1, PaperPosition::query()->count());
+    }
+
+    /**
+     * @param  list<string>  $listingAddresses
+     * @param  list<string>|null  $processedAddresses
+     */
+    private function mockQualifiedListings(array $listingAddresses, ?array $processedAddresses = null): void
+    {
+        $birdeye = $this->mock(BirdeyeService::class);
+        $birdeye->shouldReceive('newListings')->once()->andReturn(['data' => ['items' => array_map(
+            fn (string $address): array => [
+                'address' => $address,
+                'symbol' => strtoupper($address),
+                'name' => ucfirst($address),
+                'liquidity' => 1_000,
+            ],
+            $listingAddresses,
+        )]]);
+
+        $goplus = $this->mock(GoPlusService::class);
+        $dex = $this->mock(DexScreenerService::class);
+
+        foreach ($processedAddresses ?? $listingAddresses as $address) {
+            $birdeye->shouldReceive('tokenOverview')->with($address)->twice()->andReturn([
+                'data' => $this->token(strtoupper($address), 5_000, 50, 9, 1, 30, 10),
+            ]);
+            $goplus->shouldReceive('evaluateToken')->with($address)->once()->andReturn([
+                'passed' => true,
+                'score' => 100,
+                'risks' => [],
+            ]);
+            $dex->shouldReceive('analyzeToken')->with($address)->once()->andReturn($this->dexData($address));
+        }
+    }
+
+    private function expectUserCandidateAlerts(int $count): void
+    {
+        $this->mock(TelegramService::class)->shouldNotReceive('send');
+        $this->mock(UserTelegramNotificationService::class)->shouldReceive('send')->times($count);
     }
 
     /** @return array<string, mixed> */

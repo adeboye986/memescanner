@@ -24,7 +24,7 @@ use Throwable;
 
 class ScanNewTokens extends Command
 {
-    protected $signature = 'tokens:scan {--chain=solana : Blockchain to scan (solana or ethereum)} {--user= : Limit opportunity distribution to one user ID}';
+    protected $signature = 'tokens:scan {--chain=solana : Blockchain to scan (solana or ethereum)} {--user= : Limit opportunity distribution to one user ID} {--max-qualified= : Stop after this many qualified Solana listings enter opportunity handling}';
 
     protected $description = 'Scan newly listed tokens on a supported blockchain';
 
@@ -32,9 +32,16 @@ class ScanNewTokens extends Command
     {
         try {
             $chain = Chain::fromInput($this->option('chain'));
+            $maxQualified = $this->maxQualified();
             $requestingUser = $this->option('user') ? User::query()->findOrFail($this->option('user')) : null;
         } catch (InvalidArgumentException $exception) {
             $this->error($exception->getMessage());
+
+            return self::FAILURE;
+        }
+
+        if ($chain !== Chain::Solana && $maxQualified !== null) {
+            $this->error('The --max-qualified option is currently supported only for Solana scans.');
 
             return self::FAILURE;
         }
@@ -75,8 +82,15 @@ class ScanNewTokens extends Command
         $this->info('Found '.count($items).' listings.');
 
         $seenAddresses = [];
+        $qualifiedOpportunityCount = 0;
 
         foreach ($items as $listing) {
+            if ($maxQualified !== null && $qualifiedOpportunityCount >= $maxQualified) {
+                $this->info("Qualified opportunity limit reached ({$maxQualified}); stopping scan.");
+
+                break;
+            }
+
             $address = $listing['address'] ?? null;
 
             if (! $address || isset($seenAddresses[$address])) {
@@ -546,6 +560,8 @@ class ScanNewTokens extends Command
                     }
 
                     if ($paperEntryDecision['paper_entry_reason'] === 'Entry checks passed.') {
+                        $qualifiedOpportunityCount++;
+
                         try {
                             $execution = $opportunities->qualify([
                                 'chain' => $chain->value,
@@ -710,6 +726,29 @@ class ScanNewTokens extends Command
         $this->info('Scan finished.');
 
         return self::SUCCESS;
+    }
+
+    private function maxQualified(): ?int
+    {
+        $option = $this->option('max-qualified');
+
+        if ($option === null) {
+            return null;
+        }
+
+        if (! is_string($option) || preg_match('/^[1-9][0-9]*$/D', $option) !== 1) {
+            throw new InvalidArgumentException('The --max-qualified option must be a positive integer.');
+        }
+
+        $maximum = filter_var($option, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1],
+        ]);
+
+        if ($maximum === false) {
+            throw new InvalidArgumentException('The --max-qualified option must be a positive integer.');
+        }
+
+        return $maximum;
     }
 
     private function calculateScore(array $token): int
