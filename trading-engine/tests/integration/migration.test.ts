@@ -5,8 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDatabase, type Database } from '../../src/infrastructure/database/client.js';
 import { migrateDatabase } from '../../src/infrastructure/database/migrate.js';
 import {
-  assertDedicatedTestDatabase,
   createTestIdentity,
+  resetDatabaseSchema,
   startTestEnvironment,
   stopTestEnvironment,
   type TestEnvironment,
@@ -27,21 +27,11 @@ describe('foundation migration and infrastructure connectivity', () => {
   });
 
   it('applies all migrations to an empty PostgreSQL database and reruns safely', async () => {
-    await assertDedicatedTestDatabase(database);
-    await database.schema.dropTable('opportunity_evaluations').ifExists().cascade().execute();
-    await database.schema.dropTable('opportunity_evaluation_tasks').ifExists().cascade().execute();
-    await database.schema.dropTable('evaluation_policies').ifExists().cascade().execute();
-    await sql`drop function if exists reject_opportunity_evaluation_mutation()`.execute(database);
-    await database.schema.dropTable('opportunities').ifExists().cascade().execute();
-    await database.schema.dropTable('event_delivery_attempts').ifExists().cascade().execute();
-    await database.schema.dropTable('event_outbox').ifExists().cascade().execute();
-    await database.schema.dropTable('command_inbox').ifExists().cascade().execute();
-    await database.schema.dropTable('kysely_migration').ifExists().cascade().execute();
-    await database.schema.dropTable('kysely_migration_lock').ifExists().cascade().execute();
+    await resetDatabaseSchema(database);
 
     const first = await migrateDatabase(database);
     const second = await migrateDatabase(database);
-    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities', 'evaluation_policies', 'opportunity_evaluation_tasks', 'opportunity_evaluations') order by table_name").execute(database);
+    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities', 'evaluation_policies', 'opportunity_evaluation_tasks', 'opportunity_evaluations', 'paper_position_lifecycles', 'paper_position_lifecycle_decisions') order by table_name").execute(database);
 
     expect(first.error).toBeUndefined();
     expect(first.results).toEqual([
@@ -57,6 +47,10 @@ describe('foundation migration and infrastructure connectivity', () => {
         migrationName: '003_opportunity_evaluations',
         status: 'Success',
       }),
+      expect.objectContaining({
+        migrationName: '004_paper_position_lifecycle',
+        status: 'Success',
+      }),
     ]);
     expect(second.error).toBeUndefined();
     expect(second.results).toEqual([]);
@@ -68,6 +62,8 @@ describe('foundation migration and infrastructure connectivity', () => {
       'opportunities',
       'opportunity_evaluation_tasks',
       'opportunity_evaluations',
+      'paper_position_lifecycle_decisions',
+      'paper_position_lifecycles',
     ]);
   });
 

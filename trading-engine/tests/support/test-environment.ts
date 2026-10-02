@@ -196,6 +196,11 @@ export async function assertDedicatedTestDatabase(
 }
 
 export async function resetDatabase(database: Kysely<Database>): Promise<void> {
+  await resetDatabaseSchema(database);
+  await migrateDatabase(database);
+}
+
+export async function resetDatabaseSchema(database: Kysely<Database>): Promise<void> {
   await assertDedicatedTestDatabase(database);
   await sql`
     drop table if exists paper_position_lifecycle_decisions cascade;
@@ -212,7 +217,6 @@ export async function resetDatabase(database: Kysely<Database>): Promise<void> {
     drop table if exists kysely_migration cascade;
     drop table if exists kysely_migration_lock cascade;
   `.execute(database);
-  await migrateDatabase(database);
 }
 
 export async function resetRedis(redisUrl: string): Promise<void> {
