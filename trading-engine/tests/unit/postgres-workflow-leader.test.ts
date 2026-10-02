@@ -83,16 +83,25 @@ function startRuntime(
   identity: symbol,
   retryIntervalMs = 1_000,
 ): RuntimeFixture {
-  const outbox = vi.fn<WorkflowDispatcher['dispatchBatch']>(() => Promise.resolve());
-  const evaluation = vi.fn<WorkflowDispatcher['dispatchBatch']>(() => Promise.resolve());
-  const outboxShutdown = vi.fn<WorkflowDispatcher['shutdown']>(() => Promise.resolve());
-  const evaluationShutdown = vi.fn<WorkflowDispatcher['shutdown']>(() => Promise.resolve());
+  const outbox = vi.fn<WorkflowDispatcher['dispatchBatch']>(() =>
+    Promise.resolve({ didWork: false }),
+  );
+  const evaluation = vi.fn<WorkflowDispatcher['dispatchBatch']>(() =>
+    Promise.resolve({ didWork: false }),
+  );
+  const outboxShutdown = vi.fn<WorkflowDispatcher['shutdown']>(() =>
+    Promise.resolve(),
+  );
+  const evaluationShutdown = vi.fn<WorkflowDispatcher['shutdown']>(() =>
+    Promise.resolve(),
+  );
   const runtime = startPostgresWorkflowLeader({
     backend: leadership.backend(identity),
     retryIntervalMs,
     logger: pino({ level: 'silent' }),
     startPoller: ({ beforeCycle }): WorkflowPollerHandle => startWorkflowPoller({
       intervalMs: 100,
+      idleMaxIntervalMs: 400,
       logger: pino({ level: 'silent' }),
       beforeCycle,
       outboxDispatcher: { dispatchBatch: outbox, shutdown: outboxShutdown },

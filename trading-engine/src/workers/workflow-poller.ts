@@ -6,13 +6,18 @@ import {
   type RuntimeHandle,
 } from '../infrastructure/runtime/process-lifecycle.js';
 
+export interface WorkflowDispatchResult {
+  readonly didWork: boolean;
+}
+
 export interface WorkflowDispatcher {
-  dispatchBatch(): Promise<unknown>;
+  dispatchBatch(): Promise<WorkflowDispatchResult>;
   shutdown(): Promise<void>;
 }
 
 export interface WorkflowPollerOptions {
   readonly intervalMs: number;
+  readonly idleMaxIntervalMs: number;
   readonly logger: Logger;
   readonly outboxDispatcher: WorkflowDispatcher;
   readonly evaluationDispatcher: WorkflowDispatcher;
@@ -23,14 +28,17 @@ export interface WorkflowPollerHandle extends RuntimeHandle {
   readonly completed: Promise<void>;
 }
 
+type DispatchOutcome = 'active' | 'idle' | 'unknown';
+
 export function startWorkflowPoller(
   options: WorkflowPollerOptions,
 ): WorkflowPollerHandle {
   let stopping = false;
+  let idleIntervalMs = options.intervalMs;
   let timer: NodeJS.Timeout | undefined;
   let releaseWait: (() => void) | undefined;
 
-  const waitForNextCycle = (): Promise<void> => new Promise((resolve) => {
+  const waitForNextCycle = (delayMs: number): Promise<void> => new Promise((resolve) => {
     const complete = (): void => {
       if (timer !== undefined) {
         clearTimeout(timer);
@@ -41,27 +49,60 @@ export function startWorkflowPoller(
       resolve();
     };
 
-    timer = setTimeout(complete, options.intervalMs);
+    timer = setTimeout(complete, delayMs);
     releaseWait = complete;
   });
 
   const dispatch = async (
     workflow: string,
     dispatcher: WorkflowDispatcher,
-  ): Promise<void> => {
+  ): Promise<DispatchOutcome> => {
     try {
-      await dispatcher.dispatchBatch();
+      const result = await dispatcher.dispatchBatch();
+
+      return result.didWork ? 'active' : 'idle';
     } catch (error) {
       options.logger.error(
         { err: error, workflow },
         'PostgreSQL workflow polling cycle failed',
       );
+
+      return 'unknown';
     }
   };
 
-  const runCycle = async (): Promise<void> => {
-    await dispatch('outbox', options.outboxDispatcher);
-    await dispatch('opportunity-evaluation', options.evaluationDispatcher);
+  const runCycle = async (): Promise<DispatchOutcome> => {
+    const outbox = await dispatch('outbox', options.outboxDispatcher);
+    const evaluation = await dispatch(
+      'opportunity-evaluation',
+      options.evaluationDispatcher,
+    );
+
+    if (outbox === 'active' || evaluation === 'active') {
+      return 'active';
+    }
+
+    if (outbox === 'unknown' || evaluation === 'unknown') {
+      return 'unknown';
+    }
+
+    return 'idle';
+  };
+
+  const nextDelay = (outcome: DispatchOutcome): number => {
+    if (outcome !== 'idle') {
+      idleIntervalMs = options.intervalMs;
+
+      return options.intervalMs;
+    }
+
+    const delayMs = idleIntervalMs;
+    idleIntervalMs = Math.min(
+      options.idleMaxIntervalMs,
+      idleIntervalMs * 2,
+    );
+
+    return delayMs;
   };
 
   const isRunning = (): boolean => !stopping;
@@ -82,10 +123,10 @@ export function startWorkflowPoller(
         }
       }
 
-      await runCycle();
+      const outcome = await runCycle();
 
       if (isRunning()) {
-        await waitForNextCycle();
+        await waitForNextCycle(nextDelay(outcome));
       }
     }
   };

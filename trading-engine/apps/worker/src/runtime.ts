@@ -76,6 +76,7 @@ export async function startWorker(
 
         return pollerStarter({
           intervalMs: options.config.outboxPollIntervalMs,
+          idleMaxIntervalMs: options.config.workflowIdleMaxIntervalMs,
           logger: options.logger,
           beforeCycle,
           outboxDispatcher: new OutboxDispatcher(
@@ -112,6 +113,7 @@ export async function startWorker(
   options.logger.info(
     {
       intervalMs: options.config.outboxPollIntervalMs,
+      idleMaxIntervalMs: options.config.workflowIdleMaxIntervalMs,
       leaderRetryIntervalMs: options.config.workflowLeaderRetryIntervalMs,
     },
     'PostgreSQL workflow worker started',

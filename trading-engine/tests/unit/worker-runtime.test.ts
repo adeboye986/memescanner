@@ -60,6 +60,7 @@ describe('PostgreSQL workflow worker runtime', () => {
     expect(pollerStarter).toHaveBeenCalledOnce();
     expect(pollerStarter.mock.calls[0]?.[0]).toMatchObject({
       intervalMs: identity.config.outboxPollIntervalMs,
+      idleMaxIntervalMs: identity.config.workflowIdleMaxIntervalMs,
       beforeCycle,
     });
 

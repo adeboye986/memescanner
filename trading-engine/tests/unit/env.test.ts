@@ -48,7 +48,43 @@ describe('environment configuration', () => {
     expect(config.port).toBe(3200);
     expect(config.evaluationBatchSize).toBe(25);
     expect(config.evaluationClaimTtlMs).toBe(30_000);
+    expect(config.workflowIdleMaxIntervalMs).toBe(20_000);
     expect(config.workflowLeaderRetryIntervalMs).toBe(10_000);
+  });
+
+  it('defaults the workflow idle maximum to the active interval when it exceeds twenty seconds', () => {
+    const config = loadConfig({
+      ...validEnvironment(),
+      OUTBOX_POLL_INTERVAL_MS: '30000',
+    });
+
+    expect(config.outboxPollIntervalMs).toBe(30_000);
+    expect(config.workflowIdleMaxIntervalMs).toBe(30_000);
+  });
+
+  it('rejects a workflow idle maximum below the active interval', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment(),
+        OUTBOX_POLL_INTERVAL_MS: '5000',
+        WORKFLOW_IDLE_MAX_INTERVAL_MS: '4999',
+      }),
+    ).toThrow(/WORKFLOW_IDLE_MAX_INTERVAL_MS must be between 5000 and 60000/);
+  });
+
+  it('accepts the maximum workflow idle interval and rejects values above it', () => {
+    const config = loadConfig({
+      ...validEnvironment(),
+      WORKFLOW_IDLE_MAX_INTERVAL_MS: '60000',
+    });
+
+    expect(config.workflowIdleMaxIntervalMs).toBe(60_000);
+    expect(() =>
+      loadConfig({
+        ...validEnvironment(),
+        WORKFLOW_IDLE_MAX_INTERVAL_MS: '60001',
+      }),
+    ).toThrow(/WORKFLOW_IDLE_MAX_INTERVAL_MS must be between 1000 and 60000/);
   });
 
   it('rejects an aggressive workflow leadership retry interval', () => {

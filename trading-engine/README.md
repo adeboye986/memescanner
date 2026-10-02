@@ -289,9 +289,13 @@ no-op.
 
 - PostgreSQL is authoritative for command idempotency and outbox state.
 - The workflow worker polls PostgreSQL directly and processes outbox delivery
-  followed by opportunity evaluation in non-overlapping cycles.
-- Redis remains a readiness dependency and reserved coordination service, but
-  these periodic workflows do not create or consume BullMQ jobs.
+  followed by opportunity evaluation in non-overlapping cycles. Idle cycles back
+  off exponentially from `OUTBOX_POLL_INTERVAL_MS` to
+  `WORKFLOW_IDLE_MAX_INTERVAL_MS`; any discovered or claimed work resets the
+  active interval.
+- Redis remains configured as reserved infrastructure for future capabilities,
+  but the current runtime does not instantiate it and reports it as
+  `not_required`; these workflows do not create or consume BullMQ jobs.
 - Dispatchers claim work using PostgreSQL row locks and claim leases.
 - Failed deliveries are persisted and retried with bounded exponential delay.
 - Expired claims are recoverable after a worker crash.

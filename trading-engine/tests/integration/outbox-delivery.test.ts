@@ -86,8 +86,27 @@ describe('transactional outbox delivery', () => {
       .orderBy('attempt_number')
       .execute();
 
-    expect(first).toEqual({ claimed: 1, published: 0, failed: 1 });
-    expect(second).toEqual({ claimed: 1, published: 1, failed: 0 });
+    expect(first).toEqual({
+      didWork: true,
+      claimed: 1,
+      published: 0,
+      failed: 1,
+    });
+    expect(second).toEqual({
+      didWork: true,
+      claimed: 1,
+      published: 1,
+      failed: 0,
+    });
+
+    const idle = await dispatcher.dispatchBatch();
+
+    expect(idle).toEqual({
+      didWork: false,
+      claimed: 0,
+      published: 0,
+      failed: 0,
+    });
     expect(publishedEvent.status).toBe('published');
     expect(publishedEvent.attempt_count).toBe(2);
     expect(attempts.map((attempt) => attempt.outcome)).toEqual([
@@ -146,7 +165,12 @@ describe('transactional outbox delivery', () => {
       .executeTakeFirstOrThrow();
 
     expect(claimed).toHaveLength(1);
-    expect(result).toEqual({ claimed: 1, published: 1, failed: 0 });
+    expect(result).toEqual({
+      didWork: true,
+      claimed: 1,
+      published: 1,
+      failed: 0,
+    });
     expect(event.status).toBe('published');
     expect(receiver.requests).toHaveLength(1);
     await receiver.stop();

@@ -15,6 +15,7 @@ import type { OutboxRepository } from '../infrastructure/database/repositories/o
 import { newEngineId } from '../shared/ids/id.js';
 
 export interface OpportunityEvaluationDispatchSummary {
+  readonly didWork: boolean;
   readonly discovered: number;
   readonly claimed: number;
   readonly evaluated: number;
@@ -85,6 +86,7 @@ export class OpportunityEvaluationDispatcher {
     }
 
     return {
+      didWork: discovered > 0 || tasks.length > 0,
       discovered,
       claimed: tasks.length,
       evaluated,

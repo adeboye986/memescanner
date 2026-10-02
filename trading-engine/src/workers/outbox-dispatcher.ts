@@ -8,6 +8,7 @@ import type { LaravelWebhookClient } from '../infrastructure/http/laravel-webhoo
 import { newEngineId } from '../shared/ids/id.js';
 
 export interface DispatchSummary {
+  readonly didWork: boolean;
   readonly claimed: number;
   readonly published: number;
   readonly failed: number;
@@ -70,6 +71,7 @@ export class OutboxDispatcher {
     }
 
     return {
+      didWork: events.length > 0,
       claimed: events.length,
       published,
       failed,

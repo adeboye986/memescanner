@@ -25,6 +25,7 @@ export interface EngineConfig {
   readonly laravelWebhookTimeoutMs: number;
   readonly outboxBatchSize: number;
   readonly outboxPollIntervalMs: number;
+  readonly workflowIdleMaxIntervalMs: number;
   readonly outboxClaimTtlMs: number;
   readonly evaluationBatchSize: number;
   readonly evaluationClaimTtlMs: number;
@@ -183,6 +184,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     );
   }
 
+  const outboxPollIntervalMs = integer(
+    env,
+    'OUTBOX_POLL_INTERVAL_MS',
+    1_000,
+    100,
+    60_000,
+  );
+  const workflowIdleMaxIntervalMs = integer(
+    env,
+    'WORKFLOW_IDLE_MAX_INTERVAL_MS',
+    Math.max(20_000, outboxPollIntervalMs),
+    outboxPollIntervalMs,
+    60_000,
+  );
+
   return {
     nodeEnv: nodeEnvironment(env),
     serviceName: optional(env, 'SERVICE_NAME', 'meme-scanner-trading-engine'),
@@ -217,7 +233,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     laravelWebhookHmacSecret: webhookSecret,
     laravelWebhookTimeoutMs: integer(env, 'LARAVEL_WEBHOOK_TIMEOUT_MS', 5_000, 100, 30_000),
     outboxBatchSize: integer(env, 'OUTBOX_BATCH_SIZE', 25, 1, 500),
-    outboxPollIntervalMs: integer(env, 'OUTBOX_POLL_INTERVAL_MS', 1_000, 100, 60_000),
+    outboxPollIntervalMs,
+    workflowIdleMaxIntervalMs,
     outboxClaimTtlMs: integer(env, 'OUTBOX_CLAIM_TTL_MS', 30_000, 1_000, 600_000),
     evaluationBatchSize: integer(env, 'EVALUATION_BATCH_SIZE', 25, 1, 500),
     evaluationClaimTtlMs: integer(

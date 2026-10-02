@@ -79,6 +79,7 @@ describe('durable opportunity snapshot evaluation workflow', () => {
       .executeTakeFirstOrThrow();
 
     expect(first).toEqual({
+      didWork: true,
       discovered: 1,
       claimed: 1,
       evaluated: 0,
@@ -103,8 +104,19 @@ describe('durable opportunity snapshot evaluation workflow', () => {
     const second = await dispatcher().dispatchBatch();
     const third = await dispatcher().dispatchBatch();
 
-    expect(second).toMatchObject({ claimed: 1, evaluated: 1, failed: 0 });
-    expect(third).toMatchObject({ claimed: 0, evaluated: 0, duplicates: 0, failed: 0 });
+    expect(second).toMatchObject({
+      didWork: true,
+      claimed: 1,
+      evaluated: 1,
+      failed: 0,
+    });
+    expect(third).toMatchObject({
+      didWork: false,
+      claimed: 0,
+      evaluated: 0,
+      duplicates: 0,
+      failed: 0,
+    });
     expect(await count('opportunity_evaluations')).toBe(1);
     expect(await countEvaluatedEvents()).toBe(1);
     expect(await opportunityState(recorded.opportunityId)).toEqual(before);

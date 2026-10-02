@@ -12,7 +12,11 @@ import {
 import {
   startWorkflowPoller,
   type WorkflowDispatcher,
+  type WorkflowDispatchResult,
 } from '../../src/workers/workflow-poller.js';
+
+const idleResult: WorkflowDispatchResult = { didWork: false };
+const activeResult: WorkflowDispatchResult = { didWork: true };
 
 interface TestDispatcher {
   readonly dispatcher: WorkflowDispatcher;
@@ -22,7 +26,7 @@ interface TestDispatcher {
 
 function testDispatcher(
   implementation: WorkflowDispatcher['dispatchBatch'] = () =>
-    Promise.resolve(undefined),
+    Promise.resolve(idleResult),
 ): TestDispatcher {
   const dispatchBatch = vi.fn(implementation);
   const shutdown = vi.fn((): Promise<void> => Promise.resolve());
@@ -64,18 +68,19 @@ describe('PostgreSQL workflow poller', () => {
 
   it('runs an immediate sequential sweep of both dispatchers', async () => {
     const events: string[] = [];
-    const outbox = testDispatcher((): Promise<void> => {
+    const outbox = testDispatcher((): Promise<WorkflowDispatchResult> => {
       events.push('outbox');
 
-      return Promise.resolve();
+      return Promise.resolve(idleResult);
     });
-    const evaluation = testDispatcher((): Promise<void> => {
+    const evaluation = testDispatcher((): Promise<WorkflowDispatchResult> => {
       events.push('evaluation');
 
-      return Promise.resolve();
+      return Promise.resolve(idleResult);
     });
     const poller = startWorkflowPoller({
       intervalMs: 1_000,
+      idleMaxIntervalMs: 4_000,
       logger: pino({ level: 'silent' }),
       outboxDispatcher: outbox.dispatcher,
       evaluationDispatcher: evaluation.dispatcher,
@@ -87,12 +92,135 @@ describe('PostgreSQL workflow poller', () => {
     await poller.close();
   });
 
-  it('never overlaps polling cycles', async () => {
-    const activeOutbox = deferredVoid();
-    const outbox = testDispatcher((): Promise<void> => activeOutbox.promise);
+  it('keeps the active interval while work continues', async () => {
+    const outbox = testDispatcher(() => Promise.resolve(activeResult));
     const evaluation = testDispatcher();
     const poller = startWorkflowPoller({
       intervalMs: 1_000,
+      idleMaxIntervalMs: 4_000,
+      logger: pino({ level: 'silent' }),
+      outboxDispatcher: outbox.dispatcher,
+      evaluationDispatcher: evaluation.dispatcher,
+    });
+
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(outbox.dispatchBatch).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(3);
+    await poller.close();
+  });
+
+  it('backs off consecutive idle cycles and caps the delay', async () => {
+    const outbox = testDispatcher();
+    const evaluation = testDispatcher();
+    const poller = startWorkflowPoller({
+      intervalMs: 1_000,
+      idleMaxIntervalMs: 4_000,
+      logger: pino({ level: 'silent' }),
+      outboxDispatcher: outbox.dispatcher,
+      evaluationDispatcher: evaluation.dispatcher,
+    });
+
+    await flushMicrotasks();
+    expect(outbox.dispatchBatch).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(4);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(5);
+    await poller.close();
+  });
+
+  it('resets immediately to the active interval when work follows idle cycles', async () => {
+    let attempts = 0;
+    const outbox = testDispatcher((): Promise<WorkflowDispatchResult> => {
+      attempts += 1;
+
+      return Promise.resolve(attempts === 3 ? activeResult : idleResult);
+    });
+    const evaluation = testDispatcher();
+    const poller = startWorkflowPoller({
+      intervalMs: 1_000,
+      idleMaxIntervalMs: 4_000,
+      logger: pino({ level: 'silent' }),
+      outboxDispatcher: outbox.dispatcher,
+      evaluationDispatcher: evaluation.dispatcher,
+    });
+
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(4);
+    await poller.close();
+  });
+
+  it('uses the active interval after an unexpected dispatcher failure', async () => {
+    let outboxAttempts = 0;
+    const outbox = testDispatcher((): Promise<WorkflowDispatchResult> => {
+      outboxAttempts += 1;
+
+      return outboxAttempts === 1
+        ? Promise.reject(new Error('synthetic cycle failure'))
+        : Promise.resolve(idleResult);
+    });
+    const evaluation = testDispatcher();
+    const logger = pino({ level: 'silent' });
+    const logError = vi.spyOn(logger, 'error');
+    const poller = startWorkflowPoller({
+      intervalMs: 1_000,
+      idleMaxIntervalMs: 4_000,
+      logger,
+      outboxDispatcher: outbox.dispatcher,
+      evaluationDispatcher: evaluation.dispatcher,
+    });
+
+    await flushMicrotasks();
+
+    expect(outbox.dispatchBatch).toHaveBeenCalledOnce();
+    expect(evaluation.dispatchBatch).toHaveBeenCalledOnce();
+    expect(logError).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(outbox.dispatchBatch).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(2);
+    expect(evaluation.dispatchBatch).toHaveBeenCalledTimes(2);
+    await poller.close();
+  });
+
+  it('never overlaps polling cycles', async () => {
+    const activeOutbox = deferredVoid();
+    const outbox = testDispatcher(async (): Promise<WorkflowDispatchResult> => {
+      await activeOutbox.promise;
+
+      return idleResult;
+    });
+    const evaluation = testDispatcher();
+    const poller = startWorkflowPoller({
+      intervalMs: 1_000,
+      idleMaxIntervalMs: 4_000,
       logger: pino({ level: 'silent' }),
       outboxDispatcher: outbox.dispatcher,
       evaluationDispatcher: evaluation.dispatcher,
@@ -111,58 +239,27 @@ describe('PostgreSQL workflow poller', () => {
     await poller.close();
   });
 
-  it('waits before continuing after an unexpected cycle failure', async () => {
-    let outboxAttempts = 0;
-    const outbox = testDispatcher((): Promise<void> => {
-      outboxAttempts += 1;
-
-      return outboxAttempts === 1
-        ? Promise.reject(new Error('synthetic cycle failure'))
-        : Promise.resolve();
-    });
-    const evaluation = testDispatcher();
-    const logger = pino({ level: 'silent' });
-    const logError = vi.spyOn(logger, 'error');
-    const poller = startWorkflowPoller({
-      intervalMs: 1_000,
-      logger,
-      outboxDispatcher: outbox.dispatcher,
-      evaluationDispatcher: evaluation.dispatcher,
-    });
-
-    await flushMicrotasks();
-
-    expect(outbox.dispatchBatch).toHaveBeenCalledOnce();
-    expect(evaluation.dispatchBatch).toHaveBeenCalledOnce();
-    expect(logError).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(999);
-    expect(outbox.dispatchBatch).toHaveBeenCalledOnce();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await flushMicrotasks();
-
-    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(2);
-    expect(evaluation.dispatchBatch).toHaveBeenCalledTimes(2);
-    await poller.close();
-  });
-
-  it('stops future cycles and shuts down dispatchers exactly once', async () => {
+  it('interrupts an adaptive wait and shuts down dispatchers exactly once', async () => {
     const outbox = testDispatcher();
     const evaluation = testDispatcher();
     const poller = startWorkflowPoller({
       intervalMs: 1_000,
+      idleMaxIntervalMs: 4_000,
       logger: pino({ level: 'silent' }),
       outboxDispatcher: outbox.dispatcher,
       evaluationDispatcher: evaluation.dispatcher,
     });
 
     await flushMicrotasks();
-    await Promise.all([poller.close(), poller.close()]);
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(3);
 
-    expect(outbox.dispatchBatch).toHaveBeenCalledOnce();
-    expect(evaluation.dispatchBatch).toHaveBeenCalledOnce();
+    await Promise.all([poller.close(), poller.close()]);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(outbox.dispatchBatch).toHaveBeenCalledTimes(3);
+    expect(evaluation.dispatchBatch).toHaveBeenCalledTimes(3);
     expect(outbox.shutdown).toHaveBeenCalledOnce();
     expect(evaluation.shutdown).toHaveBeenCalledOnce();
   });
@@ -171,18 +268,22 @@ describe('PostgreSQL workflow poller', () => {
     const activeOutbox = deferredVoid();
     const activeEvaluation = deferredVoid();
     const events: string[] = [];
-    const outbox = testDispatcher(async (): Promise<void> => {
+    const outbox = testDispatcher(async (): Promise<WorkflowDispatchResult> => {
       await activeOutbox.promise;
       events.push('outbox completed');
+
+      return idleResult;
     });
     outbox.shutdown.mockImplementation((): Promise<void> => {
       events.push('outbox shutdown');
 
       return Promise.resolve();
     });
-    const evaluation = testDispatcher(async (): Promise<void> => {
+    const evaluation = testDispatcher(async (): Promise<WorkflowDispatchResult> => {
       await activeEvaluation.promise;
       events.push('evaluation completed');
+
+      return idleResult;
     });
     evaluation.shutdown.mockImplementation((): Promise<void> => {
       events.push('evaluation shutdown');
@@ -191,6 +292,7 @@ describe('PostgreSQL workflow poller', () => {
     });
     const poller = startWorkflowPoller({
       intervalMs: 1_000,
+      idleMaxIntervalMs: 4_000,
       logger: pino({ level: 'silent' }),
       outboxDispatcher: outbox.dispatcher,
       evaluationDispatcher: evaluation.dispatcher,
@@ -225,6 +327,7 @@ describe('PostgreSQL workflow poller', () => {
     const evaluation = testDispatcher();
     const poller = startWorkflowPoller({
       intervalMs: 1_000,
+      idleMaxIntervalMs: 4_000,
       logger: pino({ level: 'silent' }),
       beforeCycle: (): Promise<boolean> => Promise.resolve(false),
       outboxDispatcher: outbox.dispatcher,
