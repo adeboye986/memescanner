@@ -6,9 +6,9 @@ This directory contains the local, non-trading TypeScript foundation approved in
 Phase 1 contains infrastructure only:
 
 - a Fastify API;
-- independent BullMQ worker and scheduler processes;
+- independent PostgreSQL workflow worker and scheduler-compatible entry points;
 - dedicated PostgreSQL migrations and command/outbox persistence;
-- externalizable Redis coordination;
+- externalizable Redis readiness and reserved coordination infrastructure;
 - Ed25519 service-assertion verification;
 - signed synthetic webhook delivery;
 - structured redacted logs and trace/correlation propagation;
@@ -35,8 +35,8 @@ Hostinger is not used or modified by Phase 1.
 
 ### Combined Hostinger process
 
-Hostinger Web App hosting can run all three roles in one Node process after a
-production build:
+Hostinger Web App hosting can run the API and workflow poller in one Node
+process after a production build:
 
 ```bash
 pnpm build
@@ -44,10 +44,12 @@ pnpm start:hostinger
 ```
 
 The Hostinger application entry file is
-`dist/apps/hostinger/src/main.js`. It runs database migrations once before
-starting the API, worker, and scheduler, owns one OpenTelemetry SDK, and
-coordinates one shutdown path. The standalone commands remain available for
-deployments that supervise the three roles separately.
+`dist/apps/hostinger/src/main.js`. Deployment runs database migrations before
+application startup; the process starts the API before the PostgreSQL workflow
+worker, owns one OpenTelemetry SDK, and coordinates one shutdown path. The
+standalone commands remain available for deployments that supervise roles
+separately. Do not run the worker and scheduler entry points together because
+both perform the same PostgreSQL workflow polling.
 
 Hostinger must provide the same runtime configuration used by the standalone
 roles, including `NODE_ENV`, `HOST`, `PORT`, `DATABASE_URL`, `REDIS_URL`,
@@ -182,10 +184,10 @@ containers through Testcontainers. The fallback uses the same dedicated
 PostgreSQL database name and Redis database index; Docker is required only for
 this fallback.
 
-Start all three process roles after the checks pass:
+Start the API and workflow worker after the checks pass:
 
 ```bash
-docker compose up --build api worker scheduler
+docker compose up --build api worker
 ```
 
 Stop the stack without deleting data:
@@ -280,13 +282,15 @@ no-op.
 ## Operational behavior
 
 - PostgreSQL is authoritative for command idempotency and outbox state.
-- Redis/BullMQ coordinates dispatch work but is never financial truth.
-- The scheduler creates deduplicated dispatch jobs.
-- The worker claims outbox rows using PostgreSQL row locks and a claim lease.
+- The workflow worker polls PostgreSQL directly and processes outbox delivery
+  followed by opportunity evaluation in non-overlapping cycles.
+- Redis remains a readiness dependency and reserved coordination service, but
+  these periodic workflows do not create or consume BullMQ jobs.
+- Dispatchers claim work using PostgreSQL row locks and claim leases.
 - Failed deliveries are persisted and retried with bounded exponential delay.
 - Expired claims are recoverable after a worker crash.
-- SIGINT/SIGTERM stop intake, close BullMQ, release owned outbox claims, close
-  clients, and shut down telemetry before the configured deadline.
+- SIGINT/SIGTERM stop new polling cycles, await an active cycle, release owned
+  claims, close clients, and shut down telemetry before the configured deadline.
 - Logs redact authorization, cookies, passwords, secrets, private keys, and seed
   phrases.
 - OpenTelemetry exporters default to `none` locally so a missing collector cannot block shutdown. Set the standard `OTEL_*_EXPORTER` and endpoint variables to use console or OTLP exporters later.

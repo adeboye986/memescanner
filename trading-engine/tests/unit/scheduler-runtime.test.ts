@@ -1,45 +1,36 @@
+import pino from 'pino';
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  scheduleWorkflows,
-  type WorkflowQueue,
-} from '../../apps/scheduler/src/runtime.js';
-import {
-  OPPORTUNITY_EVALUATION_JOB,
-  OUTBOX_DISPATCH_JOB,
-} from '../../src/infrastructure/queue/names.js';
+import { startScheduler } from '../../apps/scheduler/src/runtime.js';
+import type { StartWorkerOptions } from '../../apps/worker/src/runtime.js';
+import type { RuntimeHandle } from '../../src/infrastructure/runtime/process-lifecycle.js';
+import { createTestIdentity } from '../support/test-environment.js';
 
 describe('scheduler runtime', () => {
-  it('preserves deterministic workflow jobs and retry retention options', async () => {
-    const add = vi.fn<WorkflowQueue['add']>().mockResolvedValue(undefined);
-    const now = new Date('2026-09-30T12:00:00.500Z');
-
-    await scheduleWorkflows({ add }, 1_000, now);
-
-    expect(add).toHaveBeenCalledTimes(2);
-    expect(add).toHaveBeenNthCalledWith(
-      1,
-      OUTBOX_DISPATCH_JOB,
-      { scheduledAt: '2026-09-30T12:00:00.500Z' },
-      {
-        removeOnComplete: { age: 3_600, count: 1_000 },
-        removeOnFail: { age: 86_400, count: 1_000 },
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 500 },
-        jobId: 'outbox-dispatch-1790769600',
-      },
+  it('starts PostgreSQL workflow processing without child migrations', async () => {
+    const runtime: RuntimeHandle = {
+      close: vi.fn((): Promise<void> => Promise.resolve()),
+    };
+    const workflowStarter = vi.fn<
+      (options: StartWorkerOptions) => Promise<RuntimeHandle>
+    >(
+      (): Promise<RuntimeHandle> => Promise.resolve(runtime),
     );
-    expect(add).toHaveBeenNthCalledWith(
-      2,
-      OPPORTUNITY_EVALUATION_JOB,
-      { scheduledAt: '2026-09-30T12:00:00.500Z' },
-      {
-        removeOnComplete: { age: 3_600, count: 1_000 },
-        removeOnFail: { age: 86_400, count: 1_000 },
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 500 },
-        jobId: 'opportunity-evaluation-1790769600',
-      },
-    );
+    const identity = createTestIdentity();
+    const logger = pino({ level: 'silent' });
+
+    const started = await startScheduler({
+      config: identity.config,
+      logger,
+      workflowStarter,
+    });
+
+    expect(started).toBe(runtime);
+    expect(workflowStarter).toHaveBeenCalledOnce();
+    expect(workflowStarter).toHaveBeenCalledWith({
+      config: identity.config,
+      logger,
+      runMigrations: false,
+    });
   });
 });

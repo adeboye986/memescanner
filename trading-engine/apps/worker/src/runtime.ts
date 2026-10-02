@@ -1,5 +1,3 @@
-import { Worker } from 'bullmq';
-import type { Redis } from 'ioredis';
 import type { Logger } from 'pino';
 
 import type { EngineConfig } from '../../../src/config/env.js';
@@ -9,21 +7,16 @@ import { OpportunityEvaluationRepository } from '../../../src/infrastructure/dat
 import { OutboxRepository } from '../../../src/infrastructure/database/repositories/outbox-repository.js';
 import { LaravelWebhookClient } from '../../../src/infrastructure/http/laravel-webhook-client.js';
 import {
-  closeRedis,
-  createRedisConnection,
-} from '../../../src/infrastructure/queue/connection.js';
-import {
-  OPPORTUNITY_EVALUATION_JOB,
-  OUTBOX_DISPATCH_JOB,
-  OUTBOX_QUEUE_NAME,
-} from '../../../src/infrastructure/queue/names.js';
-import {
   closeInOrder,
   idempotentClose,
   type RuntimeHandle,
 } from '../../../src/infrastructure/runtime/process-lifecycle.js';
 import { OpportunityEvaluationDispatcher } from '../../../src/workers/opportunity-evaluation-dispatcher.js';
 import { OutboxDispatcher } from '../../../src/workers/outbox-dispatcher.js';
+import {
+  startWorkflowPoller,
+  type WorkflowPollerOptions,
+} from '../../../src/workers/workflow-poller.js';
 
 export interface StartWorkerOptions {
   readonly config: EngineConfig;
@@ -31,44 +24,28 @@ export interface StartWorkerOptions {
   readonly runMigrations?: boolean;
 }
 
+export interface StartWorkerDependencies {
+  readonly databaseFactory?: typeof createDatabase;
+  readonly pollerStarter?: (options: WorkflowPollerOptions) => RuntimeHandle;
+}
+
 export async function startWorker(
   options: StartWorkerOptions,
+  dependencies: StartWorkerDependencies = {},
 ): Promise<RuntimeHandle> {
-  const database = createDatabase(options.config);
-  let redis: Redis | undefined;
-  let worker: Worker | undefined;
-  let outboxDispatcher: OutboxDispatcher | undefined;
-  let evaluationDispatcher: OpportunityEvaluationDispatcher | undefined;
+  const databaseFactory = dependencies.databaseFactory ?? createDatabase;
+  const pollerStarter = dependencies.pollerStarter ?? startWorkflowPoller;
+  const database = databaseFactory(options.config);
+  let poller: RuntimeHandle | undefined;
   const close = idempotentClose(async (): Promise<void> => {
-    const currentWorker = worker;
-    const currentOutboxDispatcher = outboxDispatcher;
-    const currentEvaluationDispatcher = evaluationDispatcher;
-    const currentRedis = redis;
+    const currentPoller = poller;
 
     await closeInOrder('worker resource shutdown', [
-      ...(currentWorker === undefined
+      ...(currentPoller === undefined
         ? []
         : [{
-            name: 'worker',
-            close: (): Promise<void> => currentWorker.close(),
-          }]),
-      ...(currentOutboxDispatcher === undefined
-        ? []
-        : [{
-            name: 'outbox dispatcher',
-            close: (): Promise<void> => currentOutboxDispatcher.shutdown(),
-          }]),
-      ...(currentEvaluationDispatcher === undefined
-        ? []
-        : [{
-            name: 'evaluation dispatcher',
-            close: (): Promise<void> => currentEvaluationDispatcher.shutdown(),
-          }]),
-      ...(currentRedis === undefined
-        ? []
-        : [{
-            name: 'redis',
-            close: (): Promise<void> => closeRedis(currentRedis),
+            name: 'workflow poller',
+            close: (): Promise<void> => currentPoller.close(),
           }]),
       {
         name: 'database',
@@ -82,7 +59,6 @@ export async function startWorker(
       await migrateDatabase(database);
     }
 
-    redis = createRedisConnection(options.config);
     const outbox = new OutboxRepository();
     const configuredOutboxDispatcher = new OutboxDispatcher(
       options.config,
@@ -98,42 +74,11 @@ export async function startWorker(
       outbox,
       options.logger,
     );
-    outboxDispatcher = configuredOutboxDispatcher;
-    evaluationDispatcher = configuredEvaluationDispatcher;
-    worker = new Worker(
-      OUTBOX_QUEUE_NAME,
-      async (job) => {
-        if (job.name === OUTBOX_DISPATCH_JOB) {
-          return configuredOutboxDispatcher.dispatchBatch();
-        }
-
-        if (job.name === OPPORTUNITY_EVALUATION_JOB) {
-          return configuredEvaluationDispatcher.dispatchBatch();
-        }
-
-        throw new Error(`Unsupported worker job: ${job.name}`);
-      },
-      {
-        connection: redis,
-        concurrency: 1,
-        prefix: options.config.redisPrefix,
-      },
-    );
-
-    worker.on('completed', (job, result) => {
-      options.logger.debug(
-        { jobId: job.id, result },
-        'engine workflow job completed',
-      );
-    });
-    worker.on('failed', (job, error) => {
-      options.logger.error(
-        { jobId: job?.id, err: error },
-        'engine workflow job failed',
-      );
-    });
-    worker.on('error', (error) => {
-      options.logger.error({ err: error }, 'bullmq worker error');
+    poller = pollerStarter({
+      intervalMs: options.config.outboxPollIntervalMs,
+      logger: options.logger,
+      outboxDispatcher: configuredOutboxDispatcher,
+      evaluationDispatcher: configuredEvaluationDispatcher,
     });
   } catch (error) {
     try {
@@ -151,10 +96,9 @@ export async function startWorker(
 
   options.logger.info(
     {
-      queue: OUTBOX_QUEUE_NAME,
-      concurrency: 1,
+      intervalMs: options.config.outboxPollIntervalMs,
     },
-    'worker started',
+    'PostgreSQL workflow worker started',
   );
 
   return { close };

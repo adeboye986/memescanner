@@ -5,10 +5,6 @@ import {
   type StartApiOptions,
 } from '../../api/src/runtime.js';
 import {
-  startScheduler,
-  type StartSchedulerOptions,
-} from '../../scheduler/src/runtime.js';
-import {
   startWorker,
   type StartWorkerOptions,
 } from '../../worker/src/runtime.js';
@@ -27,9 +23,6 @@ export interface HostingerRuntimeDependencies {
   readonly telemetry: Telemetry;
   readonly apiStarter?: (options: StartApiOptions) => Promise<RuntimeHandle>;
   readonly workerStarter?: (options: StartWorkerOptions) => Promise<RuntimeHandle>;
-  readonly schedulerStarter?: (
-    options: StartSchedulerOptions,
-  ) => Promise<RuntimeHandle>;
 }
 
 interface StartedComponent {
@@ -42,7 +35,6 @@ export async function startHostingerRuntime(
 ): Promise<RuntimeHandle> {
   const apiStarter = dependencies.apiStarter ?? startApi;
   const workerStarter = dependencies.workerStarter ?? startWorker;
-  const schedulerStarter = dependencies.schedulerStarter ?? startScheduler;
   const started: StartedComponent[] = [];
 
   try {
@@ -58,15 +50,9 @@ export async function startHostingerRuntime(
       runMigrations: false,
     });
     started.push({ name: 'worker', handle: worker });
-    const scheduler = await schedulerStarter({
-      config: dependencies.config,
-      logger: dependencies.logger,
-    });
-    started.push({ name: 'scheduler', handle: scheduler });
 
     const close = idempotentClose(async (): Promise<void> => {
       await closeInOrder('combined runtime shutdown', [
-        { name: 'scheduler', close: (): Promise<void> => scheduler.close() },
         { name: 'api', close: (): Promise<void> => api.close() },
         { name: 'worker', close: (): Promise<void> => worker.close() },
         {
@@ -77,7 +63,7 @@ export async function startHostingerRuntime(
     });
 
     dependencies.logger.info(
-      { roles: ['api', 'worker', 'scheduler'] },
+      { roles: ['api', 'worker'] },
       'combined Hostinger runtime started',
     );
 

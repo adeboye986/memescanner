@@ -53,17 +53,12 @@ function dependencies(
 
       return Promise.resolve(runtimeHandle('worker', events));
     }),
-    schedulerStarter: vi.fn((): Promise<RuntimeHandle> => {
-      events.push('start:scheduler');
-
-      return Promise.resolve(runtimeHandle('scheduler', events));
-    }),
     ...overrides,
   };
 }
 
 describe('combined Hostinger runtime', () => {
-  it('starts all roles in order without running application-startup migrations', async () => {
+  it('starts the API and PostgreSQL workflow worker without a queue scheduler', async () => {
     const events: string[] = [];
 
     const runtime = await startHostingerRuntime(dependencies(events));
@@ -71,7 +66,6 @@ describe('combined Hostinger runtime', () => {
     expect(events).toEqual([
       'start:api:false',
       'start:worker:false',
-      'start:scheduler',
     ]);
     await runtime.close();
   });
@@ -84,32 +78,8 @@ describe('combined Hostinger runtime', () => {
     await Promise.all([runtime.close(), runtime.close()]);
 
     expect(events).toEqual([
-      'close:scheduler',
       'close:api',
       'close:worker',
-      'close:telemetry',
-    ]);
-  });
-
-  it('cleans up the worker, API, and telemetry when scheduler startup fails', async () => {
-    const events: string[] = [];
-    const startupError = new Error('synthetic scheduler startup failure');
-    const configured = dependencies(events, {
-      schedulerStarter: vi.fn((): Promise<RuntimeHandle> => {
-        events.push('start:scheduler');
-
-        return Promise.reject(startupError);
-      }),
-    });
-
-    await expect(startHostingerRuntime(configured)).rejects.toBe(startupError);
-
-    expect(events).toEqual([
-      'start:api:false',
-      'start:worker:false',
-      'start:scheduler',
-      'close:worker',
-      'close:api',
       'close:telemetry',
     ]);
   });
@@ -138,9 +108,9 @@ describe('combined Hostinger runtime', () => {
   it('continues closing remaining owners after one shutdown step fails', async () => {
     const events: string[] = [];
     const configured = dependencies(events, {
-      schedulerStarter: vi.fn((): Promise<RuntimeHandle> => Promise.resolve({
+      apiStarter: vi.fn((): Promise<RuntimeHandle> => Promise.resolve({
         close: vi.fn((): Promise<void> => {
-          events.push('close:scheduler');
+          events.push('close:api');
 
           return Promise.reject(new Error('synthetic close failure'));
         }),
@@ -152,7 +122,6 @@ describe('combined Hostinger runtime', () => {
     await expect(runtime.close()).rejects.toThrow('combined runtime shutdown failed');
 
     expect(events).toEqual([
-      'close:scheduler',
       'close:api',
       'close:worker',
       'close:telemetry',
