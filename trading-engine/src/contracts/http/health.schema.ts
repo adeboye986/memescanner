@@ -10,7 +10,11 @@ export const HealthStatusSchema = Type.Object(
       Type.Object(
         {
           postgres: Type.Union([Type.Literal('up'), Type.Literal('down')]),
-          redis: Type.Union([Type.Literal('up'), Type.Literal('down')]),
+          redis: Type.Union([
+            Type.Literal('up'),
+            Type.Literal('down'),
+            Type.Literal('not_required'),
+          ]),
         },
         { additionalProperties: false },
       ),

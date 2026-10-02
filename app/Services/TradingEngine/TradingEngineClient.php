@@ -348,7 +348,7 @@ class TradingEngineClient
             && is_array($result['dependencies'])
             && $this->hasExactKeys($result['dependencies'], ['postgres', 'redis'])
             && in_array($result['dependencies']['postgres'], ['up', 'down'], true)
-            && in_array($result['dependencies']['redis'], ['up', 'down'], true);
+            && in_array($result['dependencies']['redis'], ['up', 'down', 'not_required'], true);
     }
 
     private function validEngineId(mixed $value): bool

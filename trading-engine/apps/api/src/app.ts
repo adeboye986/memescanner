@@ -13,13 +13,13 @@ import type { Database } from '../../../src/infrastructure/database/client.js';
 import { ApplicationError } from '../../../src/shared/errors/application-error.js';
 import {
   registerHealthRoutes,
+  type DatabasePing,
   type EngineFastifyInstance,
   type RequireServiceAuth,
   type ServiceClaims,
 } from '../../../src/interfaces/http/health-routes.js';
 import { registerNoopCommandRoutes } from '../../../src/interfaces/http/noop-command-routes.js';
 import { registerOpportunityCommandRoutes } from '../../../src/interfaces/http/opportunity-command-routes.js';
-import type { Redis } from 'ioredis';
 import type { Kysely } from 'kysely';
 
 const correlationIdPattern = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -28,7 +28,7 @@ const traceparentPattern = /^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/;
 export interface AppDependencies {
   readonly config: EngineConfig;
   readonly database: Kysely<Database>;
-  readonly redis: Redis;
+  readonly databasePing?: DatabasePing;
   readonly noopHandler: AcceptNoopCommandHandler;
   readonly opportunityHandler: RecordOpportunityCommandHandler;
   readonly logger?: Logger;
@@ -157,7 +157,9 @@ export function buildApp(
   registerHealthRoutes(app, {
     config: dependencies.config,
     database: dependencies.database,
-    redis: dependencies.redis,
+    ...(dependencies.databasePing === undefined
+      ? {}
+      : { databasePing: dependencies.databasePing }),
     requireServiceAuth,
   });
   registerNoopCommandRoutes(app, {

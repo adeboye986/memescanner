@@ -31,9 +31,15 @@ class VerifyTradingEngineTest extends TestCase
         $client->shouldNotReceive('noop');
 
         $this->artisan('trading-engine:verify')
-            ->expectsOutputToContain('Liveness')
-            ->expectsOutputToContain('Readiness')
-            ->expectsOutputToContain('meme-scanner-trading-engine')
+            ->expectsTable([], [
+                ['Liveness', 'OK'],
+                ['Readiness', 'OK'],
+                ['PostgreSQL', 'UP'],
+                ['Redis', 'NOT_REQUIRED'],
+                ['Service', 'meme-scanner-trading-engine'],
+                ['Version', '0.1.0'],
+                ['Node', 'v24.21.0'],
+            ])
             ->assertSuccessful();
     }
 
@@ -168,7 +174,7 @@ class VerifyTradingEngineTest extends TestCase
             ...$this->liveness(),
             'dependencies' => [
                 'postgres' => 'up',
-                'redis' => 'up',
+                'redis' => 'not_required',
             ],
         ];
     }

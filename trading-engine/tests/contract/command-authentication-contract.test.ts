@@ -1,4 +1,3 @@
-import type { Redis } from 'ioredis';
 import type { Kysely } from 'kysely';
 import { describe, expect, it } from 'vitest';
 
@@ -120,7 +119,6 @@ function createApp(): {
 } {
   const identity = createTestIdentity();
   const database = {} as Kysely<Database>;
-  const redis = {} as Redis;
   const commandInbox = new CommandInboxRepository();
   const outbox = new OutboxRepository();
 
@@ -129,7 +127,6 @@ function createApp(): {
     app: buildApp({
       config: identity.config,
       database,
-      redis,
       noopHandler: new AcceptNoopCommandHandler(database, commandInbox, outbox),
       opportunityHandler: new RecordOpportunityCommandHandler(
         database,

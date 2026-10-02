@@ -2,7 +2,6 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Logger } from 'pino';
-import type { Redis } from 'ioredis';
 import type { Kysely } from 'kysely';
 
 import type { EngineConfig } from '../../config/env.js';
@@ -12,7 +11,6 @@ import {
   type HealthStatus,
 } from '../../contracts/http/health.schema.js';
 import { pingDatabase, type Database } from '../../infrastructure/database/client.js';
-import { pingRedis } from '../../infrastructure/queue/connection.js';
 
 export type EngineFastifyInstance = FastifyInstance<
   Server,
@@ -31,6 +29,10 @@ export type RequireServiceAuth = (
   request: FastifyRequest,
   requiredScope: string,
 ) => Promise<ServiceClaims>;
+
+export type DatabasePing = (
+  database: Kysely<Database>,
+) => Promise<void>;
 
 export interface PreValidationServiceAuth {
   readonly preValidation: (request: FastifyRequest) => Promise<void>;
@@ -65,7 +67,7 @@ export function createPreValidationServiceAuth(
 export interface HealthRouteDependencies {
   readonly config: EngineConfig;
   readonly database: Kysely<Database>;
-  readonly redis: Redis;
+  readonly databasePing?: DatabasePing;
   readonly requireServiceAuth: RequireServiceAuth;
 }
 
@@ -107,11 +109,11 @@ export function registerHealthRoutes(
     async (request, reply): Promise<HealthStatus> => {
       await dependencies.requireServiceAuth(request, 'health:read');
 
-      const [postgres, redis] = await Promise.allSettled([
-        pingDatabase(dependencies.database),
-        pingRedis(dependencies.redis),
+      const databasePing = dependencies.databasePing ?? pingDatabase;
+      const [postgres] = await Promise.allSettled([
+        databasePing(dependencies.database),
       ]);
-      const ready = postgres.status === 'fulfilled' && redis.status === 'fulfilled';
+      const ready = postgres.status === 'fulfilled';
       const status: HealthStatus = {
         status: ready ? 'ok' : 'unavailable',
         service: dependencies.config.serviceName,
@@ -119,7 +121,7 @@ export function registerHealthRoutes(
         timestamp: new Date().toISOString(),
         dependencies: {
           postgres: postgres.status === 'fulfilled' ? 'up' : 'down',
-          redis: redis.status === 'fulfilled' ? 'up' : 'down',
+          redis: 'not_required',
         },
       };
 

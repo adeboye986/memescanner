@@ -1,4 +1,3 @@
-import type { Redis } from 'ioredis';
 import { sql, type Kysely } from 'kysely';
 import {
   afterAll,
@@ -24,14 +23,9 @@ import { CommandInboxRepository } from '../../src/infrastructure/database/reposi
 import { OpportunityRepository } from '../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../src/infrastructure/database/repositories/outbox-repository.js';
 import {
-  closeRedis,
-  createRedisConnection,
-} from '../../src/infrastructure/queue/connection.js';
-import {
   createServiceToken,
   createTestIdentity,
   resetDatabase,
-  resetRedis,
   startTestEnvironment,
   stopTestEnvironment,
   type TestEnvironment,
@@ -51,15 +45,15 @@ describe('opportunity record command', () => {
   let environment: TestEnvironment;
   let identity: TestIdentity;
   let database: Kysely<Database>;
-  let redis: Redis;
   let handler: RecordOpportunityCommandHandler;
   let app: Awaited<ReturnType<typeof buildApp>>;
 
   beforeAll(async () => {
     environment = await startTestEnvironment();
-    identity = createTestIdentity(environment);
+    identity = createTestIdentity(environment, {
+      REDIS_URL: 'redis://127.0.0.1:1/15',
+    });
     database = createDatabase(identity.config);
-    redis = createRedisConnection(identity.config);
     const commandInbox = new CommandInboxRepository();
     const outbox = new OutboxRepository();
     handler = new RecordOpportunityCommandHandler(
@@ -71,7 +65,6 @@ describe('opportunity record command', () => {
     app = buildApp({
       config: identity.config,
       database,
-      redis,
       noopHandler: new AcceptNoopCommandHandler(database, commandInbox, outbox),
       opportunityHandler: handler,
     });
@@ -79,12 +72,10 @@ describe('opportunity record command', () => {
 
   beforeEach(async () => {
     await resetDatabase(database);
-    await resetRedis(environment.redisUrl);
   });
 
   afterAll(async () => {
     await app.close();
-    await closeRedis(redis);
     await database.destroy();
     await stopTestEnvironment(environment);
   });

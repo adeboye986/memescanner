@@ -9,10 +9,6 @@ import { CommandInboxRepository } from '../../../src/infrastructure/database/rep
 import { OpportunityRepository } from '../../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../../src/infrastructure/database/repositories/outbox-repository.js';
 import {
-  closeRedis,
-  createRedisConnection,
-} from '../../../src/infrastructure/queue/connection.js';
-import {
   closeInOrder,
   idempotentClose,
   type RuntimeHandle,
@@ -25,11 +21,18 @@ export interface StartApiOptions {
   readonly runMigrations?: boolean;
 }
 
+export interface StartApiDependencies {
+  readonly databaseFactory?: typeof createDatabase;
+  readonly appBuilder?: typeof buildApp;
+}
+
 export async function startApi(
   options: StartApiOptions,
+  dependencies: StartApiDependencies = {},
 ): Promise<RuntimeHandle> {
-  const database = createDatabase(options.config);
-  const redis = createRedisConnection(options.config);
+  const databaseFactory = dependencies.databaseFactory ?? createDatabase;
+  const appBuilder = dependencies.appBuilder ?? buildApp;
+  const database = databaseFactory(options.config);
   const commandInbox = new CommandInboxRepository();
   const outbox = new OutboxRepository();
   const opportunities = new OpportunityRepository();
@@ -44,10 +47,9 @@ export async function startApi(
     opportunities,
     outbox,
   );
-  const app = buildApp({
+  const app = appBuilder({
     config: options.config,
     database,
-    redis,
     noopHandler,
     opportunityHandler,
     logger: options.logger,
@@ -55,7 +57,6 @@ export async function startApi(
   const close = idempotentClose(async (): Promise<void> => {
     await closeInOrder('api resource shutdown', [
       { name: 'fastify', close: (): Promise<void> => app.close() },
-      { name: 'redis', close: (): Promise<void> => closeRedis(redis) },
       { name: 'database', close: (): Promise<void> => database.destroy() },
     ]);
   });

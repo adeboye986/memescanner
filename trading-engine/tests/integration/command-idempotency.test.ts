@@ -1,4 +1,3 @@
-import type { Redis } from 'ioredis';
 import { sql, type Kysely } from 'kysely';
 import {
   afterAll,
@@ -17,14 +16,9 @@ import { CommandInboxRepository } from '../../src/infrastructure/database/reposi
 import { OpportunityRepository } from '../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../src/infrastructure/database/repositories/outbox-repository.js';
 import {
-  closeRedis,
-  createRedisConnection,
-} from '../../src/infrastructure/queue/connection.js';
-import {
   createServiceToken,
   createTestIdentity,
   resetDatabase,
-  resetRedis,
   startTestEnvironment,
   stopTestEnvironment,
   type TestEnvironment,
@@ -35,15 +29,15 @@ describe('idempotent no-op command', () => {
   let environment: TestEnvironment;
   let identity: TestIdentity;
   let database: Kysely<Database>;
-  let redis: Redis;
   let handler: AcceptNoopCommandHandler;
   let app: Awaited<ReturnType<typeof buildApp>>;
 
   beforeAll(async () => {
     environment = await startTestEnvironment();
-    identity = createTestIdentity(environment);
+    identity = createTestIdentity(environment, {
+      REDIS_URL: 'redis://127.0.0.1:1/15',
+    });
     database = createDatabase(identity.config);
-    redis = createRedisConnection(identity.config);
     handler = new AcceptNoopCommandHandler(
       database,
       new CommandInboxRepository(),
@@ -52,7 +46,6 @@ describe('idempotent no-op command', () => {
     app = buildApp({
       config: identity.config,
       database,
-      redis,
       noopHandler: handler,
       opportunityHandler: new RecordOpportunityCommandHandler(
         database,
@@ -65,12 +58,10 @@ describe('idempotent no-op command', () => {
 
   beforeEach(async () => {
     await resetDatabase(database);
-    await resetRedis(environment.redisUrl);
   });
 
   afterAll(async () => {
     await app.close();
-    await closeRedis(redis);
     await database.destroy();
     await stopTestEnvironment(environment);
   });
@@ -172,7 +163,7 @@ describe('idempotent no-op command', () => {
     expect(event.envelope.traceparent).toBe(traceparent);
   });
 
-  it('reports authenticated PostgreSQL and Redis readiness', async () => {
+  it('reports authenticated PostgreSQL readiness with Redis not required', async () => {
     const token = await createServiceToken(identity, {
       scopes: ['health:read'],
       jti: 'http-health-jti-1',
@@ -191,7 +182,7 @@ describe('idempotent no-op command', () => {
       status: 'ok',
       dependencies: {
         postgres: 'up',
-        redis: 'up',
+        redis: 'not_required',
       },
     });
   });

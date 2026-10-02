@@ -90,13 +90,30 @@ class TradingEngineClientTest extends TestCase
         });
     }
 
+    public function test_readiness_accepts_healthy_postgresql_with_redis_not_required(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://engine.test/v1/health/ready' => fn (Request $request): PromiseInterface => $this->responseFor(
+                $request,
+                $this->readiness(),
+            ),
+        ]);
+
+        $result = app(TradingEngineClient::class)->readiness(self::CORRELATION_ID, self::TRACEPARENT);
+
+        $this->assertSame('ok', $result['status']);
+        $this->assertSame('up', $result['dependencies']['postgres']);
+        $this->assertSame('not_required', $result['dependencies']['redis']);
+    }
+
     public function test_readiness_accepts_the_typed_dependency_unavailable_contract(): void
     {
         Http::preventStrayRequests();
         Http::fake([
             'https://engine.test/v1/health/ready' => fn (Request $request): PromiseInterface => $this->responseFor(
                 $request,
-                $this->readiness('unavailable', 'down', 'up'),
+                $this->readiness('unavailable', 'down', 'not_required'),
                 503,
             ),
         ]);
@@ -105,7 +122,7 @@ class TradingEngineClientTest extends TestCase
 
         $this->assertSame('unavailable', $result['status']);
         $this->assertSame('down', $result['dependencies']['postgres']);
-        $this->assertSame('up', $result['dependencies']['redis']);
+        $this->assertSame('not_required', $result['dependencies']['redis']);
     }
 
     public function test_version_validates_and_returns_the_exact_contract(): void
@@ -355,7 +372,7 @@ class TradingEngineClientTest extends TestCase
     }
 
     /** @return array<string, mixed> */
-    private function readiness(string $status = 'ok', string $postgres = 'up', string $redis = 'up'): array
+    private function readiness(string $status = 'ok', string $postgres = 'up', string $redis = 'not_required'): array
     {
         return [
             ...$this->liveHealth(),

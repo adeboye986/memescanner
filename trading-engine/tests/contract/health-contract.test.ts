@@ -1,8 +1,7 @@
 import { Writable } from 'node:stream';
 
 import type { Kysely } from 'kysely';
-import type { Redis } from 'ioredis';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { AcceptNoopCommandHandler } from '../../src/application/handlers/accept-noop-command-handler.js';
 import { RecordOpportunityCommandHandler } from '../../src/application/handlers/record-opportunity-command-handler.js';
@@ -21,7 +20,6 @@ import {
 
 function inertDependencies(): {
   readonly database: Kysely<Database>;
-  readonly redis: Redis;
   readonly handler: AcceptNoopCommandHandler;
   readonly opportunityHandler: RecordOpportunityCommandHandler;
 } {
@@ -31,7 +29,6 @@ function inertDependencies(): {
 
   return {
     database,
-    redis: {} as Redis,
     handler: new AcceptNoopCommandHandler(
       database,
       commandInbox,
@@ -53,7 +50,6 @@ describe('health and version contracts', () => {
     const app = buildApp({
       config: identity.config,
       database: dependencies.database,
-      redis: dependencies.redis,
       noopHandler: dependencies.handler,
       opportunityHandler: dependencies.opportunityHandler,
     });
@@ -79,7 +75,6 @@ describe('health and version contracts', () => {
     const app = buildApp({
       config: identity.config,
       database: dependencies.database,
-      redis: dependencies.redis,
       noopHandler: dependencies.handler,
       opportunityHandler: dependencies.opportunityHandler,
     });
@@ -113,7 +108,6 @@ describe('health and version contracts', () => {
     const app = buildApp({
       config: identity.config,
       database: dependencies.database,
-      redis: dependencies.redis,
       noopHandler: dependencies.handler,
       opportunityHandler: dependencies.opportunityHandler,
     });
@@ -138,13 +132,84 @@ describe('health and version contracts', () => {
     await app.close();
   });
 
+  it('reports readiness when PostgreSQL is healthy and Redis is not required', async () => {
+    const identity = createTestIdentity();
+    const dependencies = inertDependencies();
+    const databasePing = vi.fn((): Promise<void> => Promise.resolve());
+    const app = buildApp({
+      config: identity.config,
+      database: dependencies.database,
+      databasePing,
+      noopHandler: dependencies.handler,
+      opportunityHandler: dependencies.opportunityHandler,
+    });
+    const token = await createServiceToken(identity, {
+      scopes: ['health:read'],
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/health/ready',
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: 'ok',
+      dependencies: {
+        postgres: 'up',
+        redis: 'not_required',
+      },
+    });
+    expect(databasePing).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it('reports unavailable when PostgreSQL is down while Redis remains not required', async () => {
+    const identity = createTestIdentity();
+    const dependencies = inertDependencies();
+    const databasePing = vi.fn(
+      (): Promise<void> => Promise.reject(new Error('synthetic PostgreSQL failure')),
+    );
+    const app = buildApp({
+      config: identity.config,
+      database: dependencies.database,
+      databasePing,
+      noopHandler: dependencies.handler,
+      opportunityHandler: dependencies.opportunityHandler,
+    });
+    const token = await createServiceToken(identity, {
+      scopes: ['health:read'],
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/health/ready',
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      status: 'unavailable',
+      dependencies: {
+        postgres: 'down',
+        redis: 'not_required',
+      },
+    });
+    expect(databasePing).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
   it('returns authenticated liveness and version metadata without secrets', async () => {
     const identity = createTestIdentity();
     const dependencies = inertDependencies();
     const app = buildApp({
       config: identity.config,
       database: dependencies.database,
-      redis: dependencies.redis,
       noopHandler: dependencies.handler,
       opportunityHandler: dependencies.opportunityHandler,
     });
