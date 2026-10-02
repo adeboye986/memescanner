@@ -14,7 +14,13 @@ import {
 import { OpportunityEvaluationDispatcher } from '../../../src/workers/opportunity-evaluation-dispatcher.js';
 import { OutboxDispatcher } from '../../../src/workers/outbox-dispatcher.js';
 import {
+  PostgresWorkflowLeadershipBackend,
+  startPostgresWorkflowLeader,
+  type PostgresWorkflowLeaderOptions,
+} from '../../../src/workers/postgres-workflow-leader.js';
+import {
   startWorkflowPoller,
+  type WorkflowPollerHandle,
   type WorkflowPollerOptions,
 } from '../../../src/workers/workflow-poller.js';
 
@@ -26,7 +32,8 @@ export interface StartWorkerOptions {
 
 export interface StartWorkerDependencies {
   readonly databaseFactory?: typeof createDatabase;
-  readonly pollerStarter?: (options: WorkflowPollerOptions) => RuntimeHandle;
+  readonly leadershipStarter?: (options: PostgresWorkflowLeaderOptions) => RuntimeHandle;
+  readonly pollerStarter?: (options: WorkflowPollerOptions) => WorkflowPollerHandle;
 }
 
 export async function startWorker(
@@ -34,18 +41,19 @@ export async function startWorker(
   dependencies: StartWorkerDependencies = {},
 ): Promise<RuntimeHandle> {
   const databaseFactory = dependencies.databaseFactory ?? createDatabase;
+  const leadershipStarter = dependencies.leadershipStarter ?? startPostgresWorkflowLeader;
   const pollerStarter = dependencies.pollerStarter ?? startWorkflowPoller;
   const database = databaseFactory(options.config);
-  let poller: RuntimeHandle | undefined;
+  let leadership: RuntimeHandle | undefined;
   const close = idempotentClose(async (): Promise<void> => {
-    const currentPoller = poller;
+    const currentLeadership = leadership;
 
     await closeInOrder('worker resource shutdown', [
-      ...(currentPoller === undefined
+      ...(currentLeadership === undefined
         ? []
         : [{
-            name: 'workflow poller',
-            close: (): Promise<void> => currentPoller.close(),
+            name: 'workflow leadership',
+            close: (): Promise<void> => currentLeadership.close(),
           }]),
       {
         name: 'database',
@@ -59,26 +67,33 @@ export async function startWorker(
       await migrateDatabase(database);
     }
 
-    const outbox = new OutboxRepository();
-    const configuredOutboxDispatcher = new OutboxDispatcher(
-      options.config,
-      database,
-      outbox,
-      new LaravelWebhookClient(options.config),
-      options.logger,
-    );
-    const configuredEvaluationDispatcher = new OpportunityEvaluationDispatcher(
-      options.config,
-      database,
-      new OpportunityEvaluationRepository(),
-      outbox,
-      options.logger,
-    );
-    poller = pollerStarter({
-      intervalMs: options.config.outboxPollIntervalMs,
+    leadership = leadershipStarter({
+      backend: new PostgresWorkflowLeadershipBackend(database),
+      retryIntervalMs: options.config.workflowLeaderRetryIntervalMs,
       logger: options.logger,
-      outboxDispatcher: configuredOutboxDispatcher,
-      evaluationDispatcher: configuredEvaluationDispatcher,
+      startPoller: ({ database: leadershipDatabase, beforeCycle }) => {
+        const outbox = new OutboxRepository();
+
+        return pollerStarter({
+          intervalMs: options.config.outboxPollIntervalMs,
+          logger: options.logger,
+          beforeCycle,
+          outboxDispatcher: new OutboxDispatcher(
+            options.config,
+            leadershipDatabase,
+            outbox,
+            new LaravelWebhookClient(options.config),
+            options.logger,
+          ),
+          evaluationDispatcher: new OpportunityEvaluationDispatcher(
+            options.config,
+            leadershipDatabase,
+            new OpportunityEvaluationRepository(),
+            outbox,
+            options.logger,
+          ),
+        });
+      },
     });
   } catch (error) {
     try {
@@ -97,6 +112,7 @@ export async function startWorker(
   options.logger.info(
     {
       intervalMs: options.config.outboxPollIntervalMs,
+      leaderRetryIntervalMs: options.config.workflowLeaderRetryIntervalMs,
     },
     'PostgreSQL workflow worker started',
   );

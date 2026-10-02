@@ -28,6 +28,7 @@ export interface EngineConfig {
   readonly outboxClaimTtlMs: number;
   readonly evaluationBatchSize: number;
   readonly evaluationClaimTtlMs: number;
+  readonly workflowLeaderRetryIntervalMs: number;
   readonly shutdownTimeoutMs: number;
 }
 
@@ -225,6 +226,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       30_000,
       1_000,
       600_000,
+    ),
+    workflowLeaderRetryIntervalMs: integer(
+      env,
+      'WORKFLOW_LEADER_RETRY_INTERVAL_MS',
+      10_000,
+      5_000,
+      60_000,
     ),
     shutdownTimeoutMs: integer(env, 'SHUTDOWN_TIMEOUT_MS', 15_000, 1_000, 60_000),
   };

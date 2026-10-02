@@ -219,4 +219,24 @@ describe('PostgreSQL workflow poller', () => {
       'evaluation shutdown',
     ]);
   });
+
+  it('does not dispatch after its leadership guard fails', async () => {
+    const outbox = testDispatcher();
+    const evaluation = testDispatcher();
+    const poller = startWorkflowPoller({
+      intervalMs: 1_000,
+      logger: pino({ level: 'silent' }),
+      beforeCycle: (): Promise<boolean> => Promise.resolve(false),
+      outboxDispatcher: outbox.dispatcher,
+      evaluationDispatcher: evaluation.dispatcher,
+    });
+
+    await poller.completed;
+    await poller.close();
+
+    expect(outbox.dispatchBatch).not.toHaveBeenCalled();
+    expect(evaluation.dispatchBatch).not.toHaveBeenCalled();
+    expect(outbox.shutdown).toHaveBeenCalledOnce();
+    expect(evaluation.shutdown).toHaveBeenCalledOnce();
+  });
 });

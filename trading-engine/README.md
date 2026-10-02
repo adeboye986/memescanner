@@ -48,8 +48,14 @@ The Hostinger application entry file is
 application startup; the process starts the API before the PostgreSQL workflow
 worker, owns one OpenTelemetry SDK, and coordinates one shutdown path. The
 standalone commands remain available for deployments that supervise roles
-separately. Do not run the worker and scheduler entry points together because
-both perform the same PostgreSQL workflow polling.
+separately. All workflow-capable roles compete for one session-scoped PostgreSQL
+advisory lock, so only the elected leader polls. Avoid deliberately running
+redundant roles because standbys still perform bounded leadership probes.
+
+The workflow advisory lock is session-scoped. `DATABASE_URL` must therefore use a
+direct PostgreSQL connection or a session-affine pooler endpoint; transaction-mode
+pooling is not a supported workflow-leadership transport. The leader reserves one
+connection from its configured PostgreSQL pool for the duration of leadership.
 
 Hostinger must provide the same runtime configuration used by the standalone
 roles, including `NODE_ENV`, `HOST`, `PORT`, `DATABASE_URL`, `REDIS_URL`,

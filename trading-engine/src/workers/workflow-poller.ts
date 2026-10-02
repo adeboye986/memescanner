@@ -16,11 +16,16 @@ export interface WorkflowPollerOptions {
   readonly logger: Logger;
   readonly outboxDispatcher: WorkflowDispatcher;
   readonly evaluationDispatcher: WorkflowDispatcher;
+  readonly beforeCycle?: () => Promise<boolean>;
+}
+
+export interface WorkflowPollerHandle extends RuntimeHandle {
+  readonly completed: Promise<void>;
 }
 
 export function startWorkflowPoller(
   options: WorkflowPollerOptions,
-): RuntimeHandle {
+): WorkflowPollerHandle {
   let stopping = false;
   let timer: NodeJS.Timeout | undefined;
   let releaseWait: (() => void) | undefined;
@@ -62,6 +67,21 @@ export function startWorkflowPoller(
   const isRunning = (): boolean => !stopping;
   const run = async (): Promise<void> => {
     while (isRunning()) {
+      if (options.beforeCycle !== undefined) {
+        try {
+          if (!await options.beforeCycle()) {
+            options.logger.warn('PostgreSQL workflow leadership was lost');
+            break;
+          }
+        } catch (error) {
+          options.logger.error(
+            { err: error },
+            'PostgreSQL workflow leadership check failed',
+          );
+          break;
+        }
+      }
+
       await runCycle();
 
       if (isRunning()) {
@@ -87,5 +107,5 @@ export function startWorkflowPoller(
     ]);
   });
 
-  return { close };
+  return { close, completed: runPromise };
 }

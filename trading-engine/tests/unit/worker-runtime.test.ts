@@ -6,23 +6,39 @@ import { describe, expect, it, vi } from 'vitest';
 import { startWorker } from '../../apps/worker/src/runtime.js';
 import { createDatabase } from '../../src/infrastructure/database/client.js';
 import type { RuntimeHandle } from '../../src/infrastructure/runtime/process-lifecycle.js';
-import type { WorkflowPollerOptions } from '../../src/workers/workflow-poller.js';
+import type { PostgresWorkflowLeaderOptions } from '../../src/workers/postgres-workflow-leader.js';
+import type {
+  WorkflowPollerHandle,
+  WorkflowPollerOptions,
+} from '../../src/workers/workflow-poller.js';
 import { createTestIdentity } from '../support/test-environment.js';
 
 describe('PostgreSQL workflow worker runtime', () => {
-  it('starts the poller and destroys resources exactly once', async () => {
+  it('starts leadership-safe polling and destroys resources exactly once', async () => {
     const identity = createTestIdentity();
     const database = createDatabase(identity.config);
     const destroyDatabase = vi
       .spyOn(database, 'destroy')
       .mockResolvedValue(undefined);
     const closePoller = vi.fn((): Promise<void> => Promise.resolve());
-    const poller: RuntimeHandle = { close: closePoller };
+    const poller: WorkflowPollerHandle = {
+      close: closePoller,
+      completed: Promise.resolve(),
+    };
     const pollerStarter = vi.fn<
-      (options: WorkflowPollerOptions) => RuntimeHandle
-    >(
-      (): RuntimeHandle => poller,
-    );
+      (options: WorkflowPollerOptions) => WorkflowPollerHandle
+    >((): WorkflowPollerHandle => poller);
+    const beforeCycle = (): Promise<boolean> => Promise.resolve(true);
+    const closeLeadership = vi.fn(async (): Promise<void> => {
+      await poller.close();
+    });
+    const leadership: RuntimeHandle = { close: closeLeadership };
+    const leadershipStarter = vi.fn<
+      (options: PostgresWorkflowLeaderOptions) => RuntimeHandle
+    >((options): RuntimeHandle => {
+      options.startPoller({ database, beforeCycle });
+      return leadership;
+    });
 
     const runtime = await startWorker(
       {
@@ -32,17 +48,24 @@ describe('PostgreSQL workflow worker runtime', () => {
       },
       {
         databaseFactory: () => database,
+        leadershipStarter,
         pollerStarter,
       },
     );
 
+    expect(leadershipStarter).toHaveBeenCalledOnce();
+    expect(leadershipStarter.mock.calls[0]?.[0]).toMatchObject({
+      retryIntervalMs: identity.config.workflowLeaderRetryIntervalMs,
+    });
     expect(pollerStarter).toHaveBeenCalledOnce();
     expect(pollerStarter.mock.calls[0]?.[0]).toMatchObject({
       intervalMs: identity.config.outboxPollIntervalMs,
+      beforeCycle,
     });
 
     await Promise.all([runtime.close(), runtime.close()]);
 
+    expect(closeLeadership).toHaveBeenCalledOnce();
     expect(closePoller).toHaveBeenCalledOnce();
     expect(destroyDatabase).toHaveBeenCalledOnce();
   });
@@ -52,6 +75,7 @@ describe('PostgreSQL workflow worker runtime', () => {
       fs.readFile('apps/hostinger/src/runtime.ts', 'utf8'),
       fs.readFile('apps/worker/src/runtime.ts', 'utf8'),
       fs.readFile('apps/scheduler/src/runtime.ts', 'utf8'),
+      fs.readFile('src/workers/postgres-workflow-leader.ts', 'utf8'),
       fs.readFile('src/workers/workflow-poller.ts', 'utf8'),
     ]);
     const productionPath = sources.join('\n');

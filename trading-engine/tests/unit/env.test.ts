@@ -48,6 +48,16 @@ describe('environment configuration', () => {
     expect(config.port).toBe(3200);
     expect(config.evaluationBatchSize).toBe(25);
     expect(config.evaluationClaimTtlMs).toBe(30_000);
+    expect(config.workflowLeaderRetryIntervalMs).toBe(10_000);
+  });
+
+  it('rejects an aggressive workflow leadership retry interval', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment(),
+        WORKFLOW_LEADER_RETRY_INTERVAL_MS: '4999',
+      }),
+    ).toThrow(/WORKFLOW_LEADER_RETRY_INTERVAL_MS must be between 5000 and 60000/);
   });
 
   it('rejects a missing database URL', () => {
