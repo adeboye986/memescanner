@@ -15,6 +15,7 @@ use App\Services\TradingEngine\TradingEngineEvaluationConsumptionDecision;
 use App\Services\TradingEngine\TradingEngineEvaluationConsumptionPolicy;
 use App\Services\UserTelegramNotificationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Queue;
@@ -265,6 +266,35 @@ class TradingEngineEvaluationConsumptionPolicyTest extends TestCase
             'evaluation retryable' => ['evaluation', TradingEngineEvent::STATUS_RETRYABLE],
             'evaluation failed' => ['evaluation', TradingEngineEvent::STATUS_FAILED],
         ];
+    }
+
+    public function test_fractional_event_timestamps_match_whole_second_projection_timestamps(): void
+    {
+        $chain = $this->chain(90);
+        DB::table('trading_engine_event_inbox')
+            ->where('event_id', $chain['recorded']->event_id)
+            ->update(['occurred_at' => '2026-09-29T15:00:00.755Z']);
+        DB::table('trading_engine_event_inbox')
+            ->where('event_id', $chain['evaluation_event']->event_id)
+            ->update(['occurred_at' => '2026-09-29T15:00:00.987Z']);
+
+        $decision = $this->assess($chain);
+
+        $this->assertTrue($decision->eligible);
+        $this->assertSame(TradingEngineEvaluationConsumptionDecision::ELIGIBLE, $decision->decisionCode);
+        $this->assertSame([], $decision->reasonCodes);
+    }
+
+    public function test_different_whole_second_projection_timestamp_fails_closed(): void
+    {
+        $chain = $this->chain(91);
+        DB::table('trading_engine_event_inbox')
+            ->where('event_id', $chain['evaluation_event']->event_id)
+            ->update(['occurred_at' => '2026-09-29T15:00:01.000Z']);
+
+        $decision = $this->assess($chain);
+
+        $this->assertDecision($decision, false, 'PROJECTION_TIMESTAMP_MISMATCH');
     }
 
     public function test_projection_payload_mismatch_fails_closed(): void

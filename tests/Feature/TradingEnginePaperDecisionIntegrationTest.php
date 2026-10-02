@@ -26,6 +26,7 @@ use App\Services\TradingEngine\TradingEnginePaperDecisionIntegration;
 use App\Services\UserTelegramNotificationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Testing\TestResponse;
 use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
@@ -34,6 +35,10 @@ use Tests\TestCase;
 class TradingEnginePaperDecisionIntegrationTest extends TestCase
 {
     use RefreshDatabase;
+
+    private const PATH = '/internal/trading-engine/events';
+
+    private const SECRET = 'test-only-webhook-secret-32-bytes-long';
 
     private const TRACEPARENT = '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01';
 
@@ -49,6 +54,9 @@ class TradingEnginePaperDecisionIntegrationTest extends TestCase
             'services.trading_engine.evaluation_consumption_enabled' => true,
             'services.trading_engine.decision_boundary_enabled' => true,
             'services.trading_engine.paper_decision_integration_enabled' => true,
+            'services.trading_engine.webhook_secret' => self::SECRET,
+            'services.trading_engine.webhook_timestamp_tolerance_seconds' => 60,
+            'services.trading_engine.webhook_body_max_bytes' => 262144,
         ]);
     }
 
@@ -272,6 +280,66 @@ class TradingEnginePaperDecisionIntegrationTest extends TestCase
         $this->assertDatabaseCount('trading_engine_opportunity_links', 1);
         $this->assertDatabaseCount('trading_engine_opportunity_evaluations', 1);
         $this->assertDatabaseCount('paper_positions', 1);
+        $this->assertNoLiveOrWalletSideEffects();
+    }
+
+    public function test_signed_fractional_events_execute_one_idempotent_paper_entry(): void
+    {
+        $this->travelTo('2026-10-02 18:05:15');
+        $opportunity = $this->opportunity(92, [
+            'address' => 'So11111111111111111111111111111111111111112',
+        ]);
+        $eventData = $this->eventData($opportunity, 92, []);
+        $recordedEvent = $this->webhookEnvelope($eventData['recorded'], '2026-10-02T18:05:14.755Z');
+        $evaluatedEvent = $this->webhookEnvelope($eventData['evaluated'], '2026-10-02T18:05:14.987Z');
+
+        $this->sendSigned($recordedEvent)
+            ->assertAccepted();
+        $this->assertDatabaseCount('paper_positions', 0);
+
+        $this->sendSigned($evaluatedEvent)
+            ->assertAccepted();
+
+        $opportunity->refresh();
+        $wallet = PaperWallet::query()
+            ->where('user_id', $opportunity->user_id)
+            ->where('chain', Chain::Solana->value)
+            ->sole();
+        $position = PaperPosition::query()->sole();
+
+        $this->assertSame(TradeOpportunityStatus::Executed, $opportunity->status);
+        $this->assertSame($position->getKey(), $opportunity->paper_position_id);
+        $this->assertSame($opportunity->getKey(), data_get($position->meta, 'trade_opportunity_id'));
+        $this->assertDatabaseCount('trading_engine_opportunity_links', 1);
+        $this->assertDatabaseCount('trading_engine_opportunity_evaluations', 1);
+        $this->assertEqualsWithDelta(
+            4.9,
+            (float) $wallet->available_balance_sol,
+            0.000001,
+        );
+        $this->assertEqualsWithDelta(
+            0.1,
+            (float) $wallet->invested_balance_sol,
+            0.000001,
+        );
+
+        $this->sendSigned($evaluatedEvent)
+            ->assertOk()
+            ->assertJsonPath('duplicate', true);
+
+        $wallet->refresh();
+        $this->assertDatabaseCount('paper_positions', 1);
+        $this->assertSame($position->getKey(), $opportunity->fresh()->paper_position_id);
+        $this->assertEqualsWithDelta(
+            4.9,
+            (float) $wallet->available_balance_sol,
+            0.000001,
+        );
+        $this->assertEqualsWithDelta(
+            0.1,
+            (float) $wallet->invested_balance_sol,
+            0.000001,
+        );
         $this->assertNoLiveOrWalletSideEffects();
     }
 
@@ -557,6 +625,50 @@ class TradingEnginePaperDecisionIntegrationTest extends TestCase
             ],
             'evaluation_record' => $evaluationRecord,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $event
+     * @return array<string, mixed>
+     */
+    private function webhookEnvelope(array $event, string $occurredAt): array
+    {
+        $payload = $event['payload'];
+
+        return [
+            'event_id' => $event['event_id'],
+            'event_type' => $event['event_type'],
+            'schema_version' => 1,
+            'occurred_at' => $occurredAt,
+            'producer' => 'trading-engine',
+            'aggregate_type' => $event['aggregate_type'],
+            'aggregate_id' => $event['aggregate_id'],
+            'aggregate_version' => 1,
+            'correlation_id' => $event['correlation_id'] ?? 'correlation-'.$event['aggregate_id'],
+            'causation_id' => $event['causation_id'],
+            'idempotency_key' => $event['idempotency_key'],
+            'traceparent' => self::TRACEPARENT,
+            'payload' => $payload,
+            'payload_sha256' => $this->canonicalHash($payload),
+        ];
+    }
+
+    /** @param array<string, mixed> $event */
+    private function sendSigned(array $event): TestResponse
+    {
+        $rawBody = json_encode($event, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        $timestamp = (string) now()->timestamp;
+        $signature = hash_hmac('sha256', $timestamp.'.POST.'.self::PATH.'.'.$rawBody, self::SECRET);
+
+        return $this->call('POST', self::PATH, [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+            'HTTP_X_ENGINE_TIMESTAMP' => $timestamp,
+            'HTTP_X_ENGINE_SIGNATURE' => 'v1='.$signature,
+            'HTTP_X_ENGINE_EVENT_ID' => $event['event_id'],
+            'HTTP_X_CORRELATION_ID' => $event['correlation_id'],
+            'HTTP_TRACEPARENT' => $event['traceparent'],
+        ], $rawBody);
     }
 
     /** @param array<string, mixed> $overrides */

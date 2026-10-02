@@ -25,6 +25,8 @@ class TradingEngineProjectionReconciler
     /** @var array<int, array{code: string, event_id: string|null, projection_id: int|null, related_event_id: string|null}> */
     private array $issues = [];
 
+    public function __construct(private TradingEngineProjectionTimestamp $timestamps) {}
+
     /**
      * @return array{
      *   counts: array<string, int>,
@@ -254,8 +256,8 @@ class TradingEngineProjectionReconciler
             $this->issue('EVALUATION_CORRELATION_MISMATCH', $event->event_id, $projectionId);
         }
 
-        if (! $evaluation->evaluated_at->equalTo($event->occurred_at)
-            || ! $evaluation->event_received_at->equalTo($event->received_at)) {
+        if (! $this->timestamps->representsSameStoredInstant($evaluation->evaluated_at, $event->occurred_at)
+            || ! $this->timestamps->representsSameStoredInstant($evaluation->event_received_at, $event->received_at)) {
             $this->issue('EVALUATION_TIMESTAMP_MISMATCH', $event->event_id, $projectionId);
         }
     }
@@ -407,7 +409,7 @@ class TradingEngineProjectionReconciler
             && $link->scanner === ($source['scanner'] ?? null)
             && $link->network_id === ($network['id'] ?? null)
             && $link->asset_address === ($asset['address'] ?? null)
-            && $link->recorded_at->equalTo($event->occurred_at);
+            && $this->timestamps->representsSameStoredInstant($link->recorded_at, $event->occurred_at);
     }
 
     /** @param array<string, mixed> $payload */

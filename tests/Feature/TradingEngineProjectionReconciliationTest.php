@@ -76,6 +76,24 @@ class TradingEngineProjectionReconciliationTest extends TestCase
         $this->assertSame(TradingEngineEvent::STATUS_PROJECTED, $chain['evaluation']->fresh()->handling_status);
     }
 
+    public function test_fractional_event_timestamps_match_whole_second_projection_timestamps(): void
+    {
+        $chain = $this->cleanChain();
+        DB::table('trading_engine_event_inbox')
+            ->where('event_id', $chain['recorded']->event_id)
+            ->update(['occurred_at' => '2026-09-29T12:00:00.755Z']);
+        DB::table('trading_engine_event_inbox')
+            ->where('event_id', $chain['evaluation']->event_id)
+            ->update(['occurred_at' => '2026-09-29T12:00:00.987Z']);
+
+        $result = app(TradingEngineProjectionReconciler::class)->reconcile();
+        $codes = array_column($result['issues'], 'code');
+
+        $this->assertSame(0, $result['issue_count']);
+        $this->assertNotContains('OPPORTUNITY_LINK_IDENTITY_MISMATCH', $codes);
+        $this->assertNotContains('EVALUATION_TIMESTAMP_MISMATCH', $codes);
+    }
+
     public function test_projected_recorded_event_without_link_is_detected(): void
     {
         $opportunity = $this->opportunity();

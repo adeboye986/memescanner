@@ -26,6 +26,8 @@ class TradingEngineEvaluationConsumptionPolicy
 
     private const SOLANA_MAINNET_ID = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 
+    public function __construct(private TradingEngineProjectionTimestamp $timestamps) {}
+
     public function assess(
         TradeOpportunity $opportunity,
         ?TradingEngineOpportunityLink $link,
@@ -160,9 +162,9 @@ class TradingEngineEvaluationConsumptionPolicy
             return $this->ineligible('EVALUATION_CORRELATION_MISMATCH');
         }
 
-        if (! $link->recorded_at->equalTo($recordedEvent->occurred_at)
-            || ! $evaluation->evaluated_at->equalTo($evaluationEvent->occurred_at)
-            || ! $evaluation->event_received_at->equalTo($evaluationEvent->received_at)) {
+        if (! $this->timestamps->representsSameStoredInstant($link->recorded_at, $recordedEvent->occurred_at)
+            || ! $this->timestamps->representsSameStoredInstant($evaluation->evaluated_at, $evaluationEvent->occurred_at)
+            || ! $this->timestamps->representsSameStoredInstant($evaluation->event_received_at, $evaluationEvent->received_at)) {
             return $this->ineligible('PROJECTION_TIMESTAMP_MISMATCH');
         }
 
