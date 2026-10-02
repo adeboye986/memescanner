@@ -18,6 +18,7 @@ use App\Services\TradingEngine\TradingEngineCanonicalJson;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
 use App\Services\TradingEngine\TradingEnginePaperLifecycleEnrollment;
 use App\Services\TradingEngine\TradingEnginePaperLifecycleIntegration;
+use App\Services\UserTelegramNotificationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -74,6 +75,50 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
         $this->assertDatabaseCount('trading_engine_paper_position_links', 0);
     }
 
+    public function test_enrollment_eligibility_requires_engine_gates_canary_solana_new_position_and_matching_user(): void
+    {
+        [$position, $opportunity] = $this->positionAndOpportunity();
+        $enrollment = app(TradingEnginePaperLifecycleEnrollment::class);
+        config()->set([
+            'services.trading_engine.enabled' => true,
+            'services.trading_engine.paper_lifecycle_integration_enabled' => true,
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+            'services.trading_engine.paper_lifecycle_canary_user_ids' => (string) $position->user_id,
+        ]);
+
+        config()->set('services.trading_engine.enabled', false);
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+
+        config()->set([
+            'services.trading_engine.enabled' => true,
+            'services.trading_engine.paper_lifecycle_integration_enabled' => false,
+        ]);
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+
+        config()->set([
+            'services.trading_engine.paper_lifecycle_integration_enabled' => true,
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => false,
+        ]);
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+
+        config()->set([
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+            'services.trading_engine.paper_lifecycle_canary_user_ids' => '',
+        ]);
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+
+        config()->set('services.trading_engine.paper_lifecycle_canary_user_ids', (string) $position->user_id);
+        $this->assertTrue($enrollment->eligible($position, $opportunity));
+        $this->assertFalse($enrollment->eligible($position->fresh(), $opportunity));
+
+        $position->setAttribute('chain', Chain::Ethereum);
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+        $position->setAttribute('chain', Chain::Solana);
+
+        $opportunity->setAttribute('user_id', User::factory()->create()->getKey());
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+    }
+
     public function test_engine_owned_position_bypasses_local_stop_loss_and_queues_validated_observation(): void
     {
         [$position, $opportunity, $wallet] = $this->positionAndOpportunity();
@@ -81,6 +126,30 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
         config()->set([
             'services.trading_engine.paper_lifecycle_integration_enabled' => true,
             'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+        ]);
+        $position->refresh();
+        $positionState = $position->only([
+            'status',
+            'remaining_investment_sol',
+            'remaining_fraction',
+            'realized_value_multiple',
+            'strategy_value_multiple',
+            'strategy_return_percent',
+            'peak_market_cap',
+            'peak_multiple',
+            'max_drawdown_percent',
+            'tp_50_hit',
+            'tp_2x_hit',
+            'stop_loss_hit',
+            'trailing_stop_hit',
+            'exit_events',
+            'realized_sol',
+            'trade_pnl_sol',
+        ]);
+        $walletState = $wallet->only([
+            'available_balance_sol',
+            'invested_balance_sol',
+            'realized_pnl_sol',
         ]);
         Http::fake([
             'api.dexscreener.com/tokens/v1/solana/*' => Http::response([[
@@ -99,10 +168,103 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
 
         $this->artisan('tokens:paper-track')->assertSuccessful();
 
-        $this->assertSame('open', $position->fresh()->status);
-        $this->assertSame([], $position->fresh()->exit_events);
-        $this->assertEqualsWithDelta(4.9, (float) $wallet->fresh()->available_balance_sol, 0.000001);
+        $this->assertSame($positionState, $position->fresh()->only(array_keys($positionState)));
+        $this->assertSame($walletState, $wallet->fresh()->only(array_keys($walletState)));
         $this->assertDatabaseCount('trading_engine_paper_observations', 1);
+        $observation = TradingEnginePaperObservation::query()->sole();
+        $this->assertSame($position->getKey(), $observation->paper_position_id);
+        $this->assertSame('pending', $observation->status);
+        $this->assertDatabaseCount('paper_position_snapshots', 0);
+        $this->assertDatabaseCount('trading_engine_paper_lifecycle_decisions', 0);
+        $this->assertDatabaseCount('trading_engine_paper_exit_settlements', 0);
+        Queue::assertPushed(SubmitTradingEnginePaperObservation::class, 1);
+    }
+
+    public function test_legacy_position_without_lifecycle_link_keeps_existing_stop_loss_behavior(): void
+    {
+        [$position, , $wallet] = $this->positionAndOpportunity();
+        config()->set([
+            'services.trading_engine.paper_lifecycle_integration_enabled' => true,
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+        ]);
+        $this->mock(UserTelegramNotificationService::class)
+            ->shouldReceive('send')
+            ->once();
+        Http::fake([
+            'api.dexscreener.com/tokens/v1/solana/*' => Http::response([[
+                'chainId' => 'solana',
+                'dexId' => 'raydium',
+                'pairAddress' => 'legacy-paper-pair',
+                'baseToken' => ['address' => $position->address, 'symbol' => $position->symbol],
+                'quoteToken' => ['address' => 'So11111111111111111111111111111111111111112', 'symbol' => 'SOL'],
+                'priceUsd' => '0.00085',
+                'marketCap' => 8500,
+                'liquidity' => ['usd' => 50000],
+                'txns' => ['m5' => ['buys' => 1, 'sells' => 1]],
+                'volume' => ['m5' => 1000],
+            ]]),
+        ]);
+
+        $this->artisan('tokens:paper-track')->assertSuccessful();
+
+        $position->refresh();
+        $wallet->refresh();
+        $this->assertSame('closed', $position->status);
+        $this->assertCount(1, $position->exit_events);
+        $this->assertSame('stop_loss', $position->exit_events[0]['type']);
+        $this->assertEqualsWithDelta(4.985, (float) $wallet->available_balance_sol, 0.000001);
+        $this->assertEqualsWithDelta(0, (float) $wallet->invested_balance_sol, 0.000001);
+        $this->assertEqualsWithDelta(-0.015, (float) $wallet->realized_pnl_sol, 0.000001);
+        $this->assertDatabaseCount('trading_engine_paper_position_links', 0);
+        $this->assertDatabaseCount('trading_engine_paper_observations', 0);
+        Queue::assertNotPushed(SubmitTradingEnginePaperObservation::class);
+    }
+
+    public function test_engine_owned_non_simulatable_observation_stays_unverified_without_submission_or_settlement(): void
+    {
+        [$position, $opportunity, $wallet] = $this->positionAndOpportunity();
+        $this->registeredLink($position, $opportunity);
+        config()->set([
+            'services.trading_engine.paper_lifecycle_integration_enabled' => true,
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+        ]);
+        $walletState = $wallet->only([
+            'available_balance_sol',
+            'invested_balance_sol',
+            'realized_pnl_sol',
+        ]);
+        Http::fake([
+            'api.dexscreener.com/tokens/v1/solana/*' => Http::response([[
+                'chainId' => 'solana',
+                'dexId' => 'raydium',
+                'pairAddress' => 'unverified-paper-lifecycle-pair',
+                'baseToken' => ['address' => $position->address, 'symbol' => $position->symbol],
+                'quoteToken' => ['address' => 'So11111111111111111111111111111111111111112', 'symbol' => 'SOL'],
+                'priceUsd' => null,
+                'marketCap' => null,
+                'liquidity' => ['usd' => 50000],
+                'txns' => ['m5' => ['buys' => 1, 'sells' => 1]],
+                'volume' => ['m5' => 1000],
+            ]]),
+        ]);
+
+        $this->artisan('tokens:paper-track')->assertSuccessful();
+
+        $position->refresh();
+        $this->assertSame('open', $position->status);
+        $this->assertSame([], $position->exit_events);
+        $this->assertFalse($position->stop_loss_hit);
+        $this->assertFalse($position->tp_50_hit);
+        $this->assertFalse($position->tp_2x_hit);
+        $this->assertFalse($position->trailing_stop_hit);
+        $this->assertSame('unverified', data_get($position->meta, 'market_observation.status'));
+        $this->assertContains('invalid_valuation', data_get($position->meta, 'market_observation.reasons'));
+        $this->assertSame($walletState, $wallet->fresh()->only(array_keys($walletState)));
+        $this->assertSame(1, $position->snapshots()->where('snapshot_type', 'unverified')->count());
+        $this->assertDatabaseCount('trading_engine_paper_observations', 0);
+        $this->assertDatabaseCount('trading_engine_paper_lifecycle_decisions', 0);
+        $this->assertDatabaseCount('trading_engine_paper_exit_settlements', 0);
+        Queue::assertNotPushed(SubmitTradingEnginePaperObservation::class);
     }
 
     public function test_validated_market_cap_only_observation_is_exported_without_inventing_price_or_liquidity(): void
@@ -177,6 +339,7 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
         $this->assertEqualsWithDelta(4.985, (float) $wallet->available_balance_sol, 0.000001);
         $this->assertEqualsWithDelta(0, (float) $wallet->invested_balance_sol, 0.000001);
         $this->assertEqualsWithDelta(-0.015, (float) $wallet->realized_pnl_sol, 0.000001);
+        $this->assertCount(1, $position->exit_events);
         $this->assertEqualsWithDelta(5, (float) $otherWallet->fresh()->available_balance_sol, 0.000001);
         $this->assertDatabaseCount('trading_engine_paper_exit_settlements', 1);
         $this->assertDatabaseCount('trading_engine_paper_lifecycle_decisions', 1);
