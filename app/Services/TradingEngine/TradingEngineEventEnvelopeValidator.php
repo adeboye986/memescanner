@@ -15,6 +15,7 @@ class TradingEngineEventEnvelopeValidator
     public function __construct(
         private TradingEngineOpportunityPayloadValidator $opportunityPayloads,
         private TradingEngineOpportunityEvaluationPayloadValidator $opportunityEvaluations,
+        private TradingEnginePaperLifecyclePayloadValidator $paperLifecycle,
     ) {}
 
     private const REQUIRED_KEYS = [
@@ -102,6 +103,15 @@ class TradingEngineEventEnvelopeValidator
             $handlingStatus = TradingEngineEvent::STATUS_STORED;
         }
 
+        if (in_array($envelope['event_type'], [
+            'paper.position.recorded.v1',
+            'paper.position.evaluated.v1',
+            'paper.exit.requested.v1',
+        ], true)) {
+            $this->validatePaperLifecycleEvent($envelope);
+            $handlingStatus = TradingEngineEvent::STATUS_STORED;
+        }
+
         return [
             'envelope' => $envelope,
             'handling_status' => $handlingStatus,
@@ -155,6 +165,26 @@ class TradingEngineEventEnvelopeValidator
             || $envelope['aggregate_type'] !== 'opportunity_evaluation'
             || $envelope['aggregate_version'] !== 1
             || $payload['evaluation_id'] !== $envelope['aggregate_id']) {
+            $this->rejectEnvelope();
+        }
+    }
+
+    /** @param array<string, mixed> $envelope */
+    private function validatePaperLifecycleEvent(array $envelope): void
+    {
+        $payload = $envelope['payload'];
+        $valid = is_array($payload) && match ($envelope['event_type']) {
+            'paper.position.recorded.v1' => $this->paperLifecycle->isValidRecorded($payload),
+            'paper.position.evaluated.v1' => $this->paperLifecycle->isValidEvaluated($payload),
+            'paper.exit.requested.v1' => $this->paperLifecycle->isValidExit($payload),
+            default => false,
+        };
+
+        if (! $valid
+            || $envelope['schema_version'] !== 1
+            || $envelope['aggregate_type'] !== 'paper_position'
+            || $payload['position_id'] !== $envelope['aggregate_id']
+            || ($payload['lifecycle_version'] ?? $envelope['aggregate_version']) !== $envelope['aggregate_version']) {
             $this->rejectEnvelope();
         }
     }

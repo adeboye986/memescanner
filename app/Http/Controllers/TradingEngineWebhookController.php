@@ -14,9 +14,6 @@ use Throwable;
 
 class TradingEngineWebhookController extends Controller
 {
-    /**
-     * Handle the incoming request.
-     */
     public function __invoke(
         Request $request,
         TradingEngineWebhookAuthenticator $authenticator,
@@ -50,11 +47,21 @@ class TradingEngineWebhookController extends Controller
             );
         }
 
-        if (config('services.trading_engine.opportunity_projection_enabled', false) === true
-            && in_array($validated['envelope']['event_type'], [
+        $eventType = $validated['envelope']['event_type'];
+        $opportunityProjection = config('services.trading_engine.opportunity_projection_enabled', false) === true
+            && in_array($eventType, [
                 'opportunity.recorded.v1',
                 'opportunity.evaluated.v1',
-            ], true)) {
+            ], true);
+        $paperLifecycleProjection = config('services.trading_engine.paper_lifecycle_integration_enabled', false) === true
+            && config('services.trading_engine.paper_lifecycle_authoritative_enabled', false) === true
+            && in_array($eventType, [
+                'paper.position.recorded.v1',
+                'paper.position.evaluated.v1',
+                'paper.exit.requested.v1',
+            ], true);
+
+        if ($opportunityProjection || $paperLifecycleProjection) {
             try {
                 ProjectTradingEngineEvent::dispatch($validated['envelope']['event_id']);
             } catch (Throwable) {

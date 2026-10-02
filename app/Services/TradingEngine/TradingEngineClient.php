@@ -179,6 +179,71 @@ class TradingEngineClient
     }
 
     /**
+     * @param  array<string, mixed>  $payload
+     * @return array{operationId: string, positionId: string, eventId: string, status: string, duplicate: bool}
+     */
+    public function recordPaperPosition(string $idempotencyKey, array $payload): array
+    {
+        $this->ensurePaperLifecycleEnabled();
+
+        [$response, $correlationId, $traceparent] = $this->request(
+            'POST',
+            '/v1/commands/paper-positions',
+            'commands:paper-positions:create',
+            $payload,
+            ['Idempotency-Key' => $idempotencyKey],
+        );
+        $this->requireStatus($response, [202]);
+        $this->requireResponseContext($response, $correlationId, $traceparent);
+        $result = $response->json();
+
+        if (! is_array($result)
+            || ! $this->hasExactKeys($result, ['operationId', 'positionId', 'eventId', 'status', 'duplicate'])
+            || ! $this->validEngineId($result['operationId'] ?? null)
+            || ! $this->validEngineId($result['positionId'] ?? null)
+            || ! $this->validEngineId($result['eventId'] ?? null)
+            || $result['status'] !== 'accepted'
+            || ! is_bool($result['duplicate'])) {
+            throw $this->invalidResponse();
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{operationId: string, positionId: string, decisionId: string, eventId: string, decision: string, duplicate: bool}
+     */
+    public function observePaperPosition(string $idempotencyKey, array $payload): array
+    {
+        $this->ensurePaperLifecycleEnabled();
+
+        [$response, $correlationId, $traceparent] = $this->request(
+            'POST',
+            '/v1/commands/paper-positions/observations',
+            'commands:paper-positions:observe',
+            $payload,
+            ['Idempotency-Key' => $idempotencyKey],
+        );
+        $this->requireStatus($response, [202]);
+        $this->requireResponseContext($response, $correlationId, $traceparent);
+        $result = $response->json();
+
+        if (! is_array($result)
+            || ! $this->hasExactKeys($result, ['operationId', 'positionId', 'decisionId', 'eventId', 'decision', 'duplicate'])
+            || ! $this->validEngineId($result['operationId'] ?? null)
+            || ! $this->validEngineId($result['positionId'] ?? null)
+            || ! $this->validEngineId($result['decisionId'] ?? null)
+            || ! $this->validEngineId($result['eventId'] ?? null)
+            || ! in_array($result['decision'], ['HOLD', 'EXIT'], true)
+            || ! is_bool($result['duplicate'])) {
+            throw $this->invalidResponse();
+        }
+
+        return $result;
+    }
+
+    /**
      * @param  array<string, mixed>  $body
      * @param  array<string, string>  $headers
      * @return array{Response, string, string}
@@ -247,6 +312,14 @@ class TradingEngineClient
     {
         if (! (bool) config('services.trading_engine.enabled', false)) {
             throw new TradingEngineException('INTEGRATION_DISABLED', 'Trading engine integration is disabled.');
+        }
+    }
+
+    private function ensurePaperLifecycleEnabled(): void
+    {
+        if (config('services.trading_engine.paper_lifecycle_integration_enabled', false) !== true
+            || config('services.trading_engine.paper_lifecycle_authoritative_enabled', false) !== true) {
+            throw new TradingEngineException('INTEGRATION_DISABLED', 'Trading engine PAPER lifecycle integration is disabled.');
         }
     }
 

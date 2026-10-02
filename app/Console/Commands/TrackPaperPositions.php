@@ -13,6 +13,7 @@ use App\Services\PaperStrategyService;
 use App\Services\PaperTrackerHealthService;
 use App\Services\PaperWalletService;
 use App\Services\TelegramService;
+use App\Services\TradingEngine\TradingEnginePaperLifecycleIntegration;
 use App\Services\UserTelegramNotificationService;
 use Closure;
 use Illuminate\Console\Command;
@@ -212,6 +213,16 @@ class TrackPaperPositions extends Command
         if ($observation['diagnostics'] !== []) {
             $this->cycleMetrics['at_risk_positions']++;
         }
+        $lifecycle = app(TradingEnginePaperLifecycleIntegration::class);
+        $lifecycleLink = $lifecycle->linkFor($position);
+
+        if ($lifecycleLink !== null) {
+            $lifecycle->submitValidated($position, $lifecycleLink, $observation);
+            $this->info("PAPER ENGINE: {$position->symbol} | validated observation queued");
+
+            return true;
+        }
+
         $marketCap = $observation['market_cap'];
         $price = $observation['price_usd'];
         $liquidity = $observation['liquidity_usd'];

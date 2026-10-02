@@ -141,6 +141,71 @@ export interface OpportunityEvaluationTable {
   created_at: ColumnType<Date, Date | string | undefined, never>;
 }
 
+export interface PaperPositionLifecycleTable {
+  id: string;
+  source_position_id: string;
+  source_opportunity_id: string;
+  opportunity_id: string;
+  control_plane_user_id: string;
+  network_id: string;
+  asset_address: string;
+  symbol: string | null;
+  initial_investment_native: string;
+  entry_market_cap_usd: string;
+  entry_price_usd: string | null;
+  entry_liquidity_usd: string | null;
+  strategy_snapshot: JsonValue;
+  strategy_sha256: string;
+  policy_key: string;
+  policy_version: number;
+  lifecycle_version: number;
+  last_observation_id: string | null;
+  last_observation_sequence: number;
+  last_market_cap_usd: string | null;
+  last_price_usd: string | null;
+  last_liquidity_usd: string | null;
+  peak_market_cap_usd: string;
+  peak_multiple: string;
+  max_drawdown_percent: string;
+  protection_state: 'none' | 'level_1' | 'level_2';
+  state: 'open' | 'terminal';
+  registered_at: ColumnType<Date, Date | string, never>;
+  last_observed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  terminal_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+export interface PaperPositionLifecycleDecisionTable {
+  id: string;
+  position_id: string;
+  observation_id: string;
+  observation_sequence: number;
+  lifecycle_version: number;
+  request_sha256: string;
+  result_sha256: string;
+  evaluated_event_id: string;
+  exit_event_id: string | null;
+  decision: 'HOLD' | 'EXIT';
+  exit_type: 'stop_loss' | 'protected_floor_exit' | null;
+  observed_market_cap_usd: string;
+  observed_price_usd: string | null;
+  observed_liquidity_usd: string | null;
+  observed_multiple: string;
+  trigger_multiple: string | null;
+  peak_market_cap_usd: string;
+  peak_multiple: string;
+  drawdown_percent: string;
+  protection_before: 'none' | 'level_1' | 'level_2';
+  protection_after: 'none' | 'level_1' | 'level_2';
+  transitions: JsonValue;
+  evidence: JsonValue;
+  correlation_id: string;
+  traceparent: string;
+  observed_at: ColumnType<Date, Date | string, never>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
 export interface Database {
   command_inbox: CommandInboxTable;
   event_outbox: EventOutboxTable;
@@ -149,6 +214,8 @@ export interface Database {
   evaluation_policies: EvaluationPolicyTable;
   opportunity_evaluation_tasks: OpportunityEvaluationTaskTable;
   opportunity_evaluations: OpportunityEvaluationTable;
+  paper_position_lifecycles: PaperPositionLifecycleTable;
+  paper_position_lifecycle_decisions: PaperPositionLifecycleDecisionTable;
 }
 
 export function createDatabasePoolConfig(config: EngineConfig): PoolConfig {

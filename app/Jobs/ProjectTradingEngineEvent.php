@@ -36,7 +36,9 @@ class ProjectTradingEngineEvent implements ShouldQueue
         ?TradingEngineSolanaLivePreparationIntegration $solanaLivePreparationIntegration = null,
     ): void {
         if (config('services.trading_engine.enabled', false) !== true
-            || config('services.trading_engine.opportunity_projection_enabled', false) !== true) {
+            || (config('services.trading_engine.opportunity_projection_enabled', false) !== true
+                && ! (config('services.trading_engine.paper_lifecycle_integration_enabled', false) === true
+                    && config('services.trading_engine.paper_lifecycle_authoritative_enabled', false) === true))) {
             return;
         }
 

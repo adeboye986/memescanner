@@ -5,14 +5,18 @@ namespace App\Services\Trading;
 use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Services\PaperTradeEntryService;
+use App\Services\TradingEngine\TradingEnginePaperLifecycleEnrollment;
 
 class PaperTradeExecutor implements TradeExecutor
 {
-    public function __construct(private PaperTradeEntryService $entries) {}
+    public function __construct(
+        private PaperTradeEntryService $entries,
+        private TradingEnginePaperLifecycleEnrollment $lifecycleEnrollment,
+    ) {}
 
     public function execute(TradeOpportunity $opportunity, bool $sendNotification = true): PaperPosition
     {
-        return $this->entries->buy([
+        $position = $this->entries->buy([
             'user_id' => $opportunity->user_id,
             'chain' => $opportunity->chain->value,
             'address' => $opportunity->address,
@@ -30,6 +34,10 @@ class PaperTradeExecutor implements TradeExecutor
                 'trade_opportunity_id' => $opportunity->id,
             ],
         ]);
+
+        $this->lifecycleEnrollment->enroll($position, $opportunity);
+
+        return $position;
     }
 
     public function sendNotification(PaperPosition $position): void

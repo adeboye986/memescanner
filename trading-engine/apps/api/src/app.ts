@@ -7,7 +7,9 @@ import { jwtVerify } from 'jose';
 import pino, { type DestinationStream, type Logger } from 'pino';
 
 import type { AcceptNoopCommandHandler } from '../../../src/application/handlers/accept-noop-command-handler.js';
+import type { ObservePaperPositionCommandHandler } from '../../../src/application/handlers/observe-paper-position-command-handler.js';
 import type { RecordOpportunityCommandHandler } from '../../../src/application/handlers/record-opportunity-command-handler.js';
+import type { RecordPaperPositionCommandHandler } from '../../../src/application/handlers/record-paper-position-command-handler.js';
 import type { EngineConfig } from '../../../src/config/env.js';
 import type { Database } from '../../../src/infrastructure/database/client.js';
 import { ApplicationError } from '../../../src/shared/errors/application-error.js';
@@ -20,6 +22,7 @@ import {
 } from '../../../src/interfaces/http/health-routes.js';
 import { registerNoopCommandRoutes } from '../../../src/interfaces/http/noop-command-routes.js';
 import { registerOpportunityCommandRoutes } from '../../../src/interfaces/http/opportunity-command-routes.js';
+import { registerPaperPositionCommandRoutes } from '../../../src/interfaces/http/paper-position-command-routes.js';
 import type { Kysely } from 'kysely';
 
 const correlationIdPattern = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -31,6 +34,8 @@ export interface AppDependencies {
   readonly databasePing?: DatabasePing;
   readonly noopHandler: AcceptNoopCommandHandler;
   readonly opportunityHandler: RecordOpportunityCommandHandler;
+  readonly paperPositionRegistrationHandler?: RecordPaperPositionCommandHandler;
+  readonly paperPositionObservationHandler?: ObservePaperPositionCommandHandler;
   readonly logger?: Logger;
 }
 
@@ -170,6 +175,14 @@ export function buildApp(
     handler: dependencies.opportunityHandler,
     requireServiceAuth,
   });
+  if (dependencies.paperPositionRegistrationHandler !== undefined
+    && dependencies.paperPositionObservationHandler !== undefined) {
+    registerPaperPositionCommandRoutes(app, {
+      registrationHandler: dependencies.paperPositionRegistrationHandler,
+      observationHandler: dependencies.paperPositionObservationHandler,
+      requireServiceAuth,
+    });
+  }
 
   return app;
 }

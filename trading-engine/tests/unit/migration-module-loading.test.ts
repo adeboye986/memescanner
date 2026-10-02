@@ -5,7 +5,7 @@ import { FileMigrationProvider } from 'kysely/migration';
 import { describe, expect, it } from 'vitest';
 
 describe('source migration module loading', () => {
-  it('loads migration 003 through the production file migration provider', async () => {
+  it('loads all migrations through the production file migration provider', async () => {
     const provider = new FileMigrationProvider({
       fs,
       path,
@@ -18,10 +18,14 @@ describe('source migration module loading', () => {
       '001_foundation',
       '002_opportunities',
       '003_opportunity_evaluations',
+      '004_paper_position_lifecycle',
     ]);
     const migration = migrations['003_opportunity_evaluations'];
+    const paperLifecycleMigration = migrations['004_paper_position_lifecycle'];
 
     expect(typeof migration?.up).toBe('function');
     expect(typeof migration?.down).toBe('function');
+    expect(typeof paperLifecycleMigration?.up).toBe('function');
+    expect(typeof paperLifecycleMigration?.down).toBe('function');
   });
 });

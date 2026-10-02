@@ -18,6 +18,9 @@ class TradingEngineProjectionEligibility
     public const PROJECTABLE_EVENT_TYPES = [
         'opportunity.recorded.v1',
         'opportunity.evaluated.v1',
+        'paper.position.recorded.v1',
+        'paper.position.evaluated.v1',
+        'paper.exit.requested.v1',
     ];
 
     public const OUTSTANDING_STATUSES = [
@@ -29,7 +32,9 @@ class TradingEngineProjectionEligibility
     public function enabled(): bool
     {
         return config('services.trading_engine.enabled', false) === true
-            && config('services.trading_engine.opportunity_projection_enabled', false) === true;
+            && (config('services.trading_engine.opportunity_projection_enabled', false) === true
+                || (config('services.trading_engine.paper_lifecycle_integration_enabled', false) === true
+                    && config('services.trading_engine.paper_lifecycle_authoritative_enabled', false) === true));
     }
 
     public function batchSize(): int
@@ -124,14 +129,34 @@ class TradingEngineProjectionEligibility
             ->where('handling_status', TradingEngineEvent::STATUS_DEFERRED)
             ->whereNotNull('next_handling_at')
             ->where('next_handling_at', '<=', $now)
-            ->whereExists(function ($link): void {
-                $link
-                    ->selectRaw('1')
-                    ->from('trading_engine_opportunity_links')
-                    ->whereColumn(
-                        'trading_engine_opportunity_links.recorded_event_id',
-                        'trading_engine_event_inbox.causation_id',
-                    );
+            ->where(function (Builder $causal): void {
+                $causal
+                    ->where(function (Builder $opportunity): void {
+                        $opportunity
+                            ->where('event_type', 'opportunity.evaluated.v1')
+                            ->whereExists(function ($link): void {
+                                $link
+                                    ->selectRaw('1')
+                                    ->from('trading_engine_opportunity_links')
+                                    ->whereColumn(
+                                        'trading_engine_opportunity_links.recorded_event_id',
+                                        'trading_engine_event_inbox.causation_id',
+                                    );
+                            });
+                    })
+                    ->orWhere(function (Builder $paperExit): void {
+                        $paperExit
+                            ->where('event_type', 'paper.exit.requested.v1')
+                            ->whereExists(function ($decision): void {
+                                $decision
+                                    ->selectRaw('1')
+                                    ->from('trading_engine_paper_lifecycle_decisions')
+                                    ->whereColumn(
+                                        'trading_engine_paper_lifecycle_decisions.event_id',
+                                        'trading_engine_event_inbox.causation_id',
+                                    );
+                            });
+                    });
             });
     }
 
@@ -146,13 +171,19 @@ class TradingEngineProjectionEligibility
 
     public function causalDependencySatisfied(TradingEngineEvent $event): ?bool
     {
-        if ($event->event_type !== 'opportunity.evaluated.v1') {
-            return null;
+        if ($event->event_type === 'opportunity.evaluated.v1') {
+            return DB::table('trading_engine_opportunity_links')
+                ->where('recorded_event_id', $event->causation_id)
+                ->exists();
         }
 
-        return DB::table('trading_engine_opportunity_links')
-            ->where('recorded_event_id', $event->causation_id)
-            ->exists();
+        if ($event->event_type === 'paper.exit.requested.v1') {
+            return DB::table('trading_engine_paper_lifecycle_decisions')
+                ->where('event_id', $event->causation_id)
+                ->exists();
+        }
+
+        return null;
     }
 
     public function automaticRecoveryEligible(TradingEngineEvent $event, Carbon $now): bool
@@ -185,7 +216,10 @@ class TradingEngineProjectionEligibility
             return 'PROJECTION_STATUS_UNSUPPORTED';
         }
 
-        if ($event->event_type === 'opportunity.evaluated.v1'
+        if (in_array($event->event_type, [
+            'opportunity.evaluated.v1',
+            'paper.exit.requested.v1',
+        ], true)
             && $event->handling_status === TradingEngineEvent::STATUS_DEFERRED
             && $this->causalDependencySatisfied($event) !== true) {
             return 'PROJECTION_CAUSAL_DEPENDENCY_MISSING';

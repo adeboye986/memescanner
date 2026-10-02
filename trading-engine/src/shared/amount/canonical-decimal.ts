@@ -72,6 +72,75 @@ export function compareCanonicalDecimals(left: string, right: string): -1 | 0 | 
     : magnitude;
 }
 
+export function multiplyCanonicalDecimals(left: string, right: string): string {
+  const leftParts = scaledInteger(left);
+  const rightParts = scaledInteger(right);
+
+  return canonicalFromScaled(
+    leftParts.value * rightParts.value,
+    leftParts.scale + rightParts.scale,
+  );
+}
+
+export function divideCanonicalDecimals(
+  numerator: string,
+  denominator: string,
+  precision = 18,
+): string {
+  const left = scaledInteger(numerator);
+  const right = scaledInteger(denominator);
+
+  if (right.value === 0n) {
+    throw new Error("Decimal division by zero");
+  }
+
+  const scaledNumerator = left.value * (10n ** BigInt(precision + right.scale));
+  const scaledDenominator = right.value * (10n ** BigInt(left.scale));
+
+  return canonicalFromScaled(scaledNumerator / scaledDenominator, precision);
+}
+
+export function subtractCanonicalDecimals(left: string, right: string): string {
+  const leftParts = scaledInteger(left);
+  const rightParts = scaledInteger(right);
+  const scale = Math.max(leftParts.scale, rightParts.scale);
+  const leftValue = leftParts.value * (10n ** BigInt(scale - leftParts.scale));
+  const rightValue = rightParts.value * (10n ** BigInt(scale - rightParts.scale));
+
+  return canonicalFromScaled(leftValue - rightValue, scale);
+}
+
+interface ScaledInteger {
+  readonly value: bigint;
+  readonly scale: number;
+}
+
+function scaledInteger(value: string): ScaledInteger {
+  if (!isCanonicalSignedDecimal(value)) {
+    throw new Error("Decimal arithmetic requires canonical decimal strings");
+  }
+
+  const negative = value.startsWith("-");
+  const unsigned = negative ? value.slice(1) : value;
+  const [integer = "0", fraction = ""] = unsigned.split(".", 2);
+  const magnitude = BigInt(`${integer}${fraction}`);
+
+  return {
+    value: negative ? -magnitude : magnitude,
+    scale: fraction.length,
+  };
+}
+
+function canonicalFromScaled(value: bigint, scale: number): string {
+  const negative = value < 0n;
+  const digits = (negative ? -value : value).toString().padStart(scale + 1, "0");
+  const raw = scale === 0
+    ? digits
+    : `${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
+
+  return canonicalizeDatabaseDecimal(negative ? `-${raw}` : raw);
+}
+
 interface DecimalParts {
   readonly negative: boolean;
   readonly integer: string;
