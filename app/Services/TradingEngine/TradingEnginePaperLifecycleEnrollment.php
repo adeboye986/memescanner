@@ -81,7 +81,9 @@ class TradingEnginePaperLifecycleEnrollment
             && $position->chain === Chain::Solana
             && $position->user_id !== null
             && $opportunity->user_id === $position->user_id
-            && in_array((string) $position->user_id, $this->canaryUserIds(), true);
+            && (config('services.trading_engine.paper_lifecycle_general_rollout_enabled', false) === true
+                || in_array((string) $position->user_id, $this->canaryUserIds(), true)
+            );
     }
 
     /** @return array<int, string> */

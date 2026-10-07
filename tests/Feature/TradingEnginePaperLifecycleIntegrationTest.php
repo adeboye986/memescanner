@@ -38,6 +38,7 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
             'services.trading_engine.enabled' => true,
             'services.trading_engine.paper_lifecycle_integration_enabled' => false,
             'services.trading_engine.paper_lifecycle_authoritative_enabled' => false,
+            'services.trading_engine.paper_lifecycle_general_rollout_enabled' => false,
             'services.trading_engine.paper_lifecycle_canary_user_ids' => '',
         ]);
     }
@@ -83,6 +84,7 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
             'services.trading_engine.enabled' => true,
             'services.trading_engine.paper_lifecycle_integration_enabled' => true,
             'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+            'services.trading_engine.paper_lifecycle_general_rollout_enabled' => false,
             'services.trading_engine.paper_lifecycle_canary_user_ids' => (string) $position->user_id,
         ]);
 
@@ -107,6 +109,9 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
         ]);
         $this->assertFalse($enrollment->eligible($position, $opportunity));
 
+        config()->set('services.trading_engine.paper_lifecycle_canary_user_ids', '999999');
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+
         config()->set('services.trading_engine.paper_lifecycle_canary_user_ids', (string) $position->user_id);
         $this->assertTrue($enrollment->eligible($position, $opportunity));
         $this->assertFalse($enrollment->eligible($position->fresh(), $opportunity));
@@ -117,6 +122,58 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
 
         $opportunity->setAttribute('user_id', User::factory()->create()->getKey());
         $this->assertFalse($enrollment->eligible($position, $opportunity));
+    }
+
+    public function test_general_rollout_enrolls_only_new_owned_solana_positions(): void
+    {
+        [$position, $opportunity] = $this->positionAndOpportunity();
+        $enrollment = app(TradingEnginePaperLifecycleEnrollment::class);
+        config()->set([
+            'services.trading_engine.enabled' => true,
+            'services.trading_engine.paper_lifecycle_integration_enabled' => true,
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+            'services.trading_engine.paper_lifecycle_general_rollout_enabled' => true,
+            'services.trading_engine.paper_lifecycle_canary_user_ids' => '',
+        ]);
+
+        $this->assertTrue($enrollment->eligible($position, $opportunity));
+        $this->assertFalse($enrollment->eligible($position->fresh(), $opportunity));
+
+        $position->setAttribute('chain', Chain::Ethereum);
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+        $position->setAttribute('chain', Chain::Solana);
+
+        $position->setAttribute('user_id', null);
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+        $position->setAttribute('user_id', $opportunity->user_id);
+
+        $opportunity->setAttribute('user_id', User::factory()->create()->getKey());
+        $this->assertFalse($enrollment->eligible($position, $opportunity));
+    }
+
+    public function test_general_rollout_never_bypasses_engine_lifecycle_or_authority_gates(): void
+    {
+        [$position, $opportunity] = $this->positionAndOpportunity();
+        $enrollment = app(TradingEnginePaperLifecycleEnrollment::class);
+        config()->set([
+            'services.trading_engine.enabled' => true,
+            'services.trading_engine.paper_lifecycle_integration_enabled' => true,
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+            'services.trading_engine.paper_lifecycle_general_rollout_enabled' => true,
+            'services.trading_engine.paper_lifecycle_canary_user_ids' => '',
+        ]);
+
+        foreach ([
+            'services.trading_engine.enabled',
+            'services.trading_engine.paper_lifecycle_integration_enabled',
+            'services.trading_engine.paper_lifecycle_authoritative_enabled',
+        ] as $gate) {
+            config()->set($gate, false);
+
+            $this->assertFalse($enrollment->eligible($position, $opportunity));
+
+            config()->set($gate, true);
+        }
     }
 
     public function test_engine_owned_position_bypasses_local_stop_loss_and_queues_validated_observation(): void
