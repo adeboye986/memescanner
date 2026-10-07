@@ -35,7 +35,7 @@ class TradingEngineClient
         $result = $response->json();
 
         if (! $this->validLiveHealth($result)) {
-            throw $this->invalidResponse();
+            throw $this->invalidResponse($response->status());
         }
 
         return $result;
@@ -57,7 +57,7 @@ class TradingEngineClient
         $result = $response->json();
 
         if (! $this->validReadiness($result, $response->status())) {
-            throw $this->invalidResponse();
+            throw $this->invalidResponse($response->status());
         }
 
         return $result;
@@ -83,7 +83,7 @@ class TradingEngineClient
             || ! $this->nonEmptyString($result['service'])
             || ! $this->nonEmptyString($result['version'])
             || ! $this->nonEmptyString($result['node'])) {
-            throw $this->invalidResponse();
+            throw $this->invalidResponse($response->status());
         }
 
         return $result;
@@ -127,7 +127,7 @@ class TradingEngineClient
             || mb_strlen($result['eventId']) !== 26
             || $result['status'] !== 'accepted'
             || ! is_bool($result['duplicate'])) {
-            throw $this->invalidResponse();
+            throw $this->invalidResponse($response->status());
         }
 
         return $result;
@@ -172,7 +172,7 @@ class TradingEngineClient
             || ! $this->validEngineId($result['eventId'] ?? null)
             || $result['status'] !== 'accepted'
             || ! is_bool($result['duplicate'])) {
-            throw $this->invalidResponse();
+            throw $this->invalidResponse($response->status());
         }
 
         return $result;
@@ -204,7 +204,7 @@ class TradingEngineClient
             || ! $this->validEngineId($result['eventId'] ?? null)
             || $result['status'] !== 'accepted'
             || ! is_bool($result['duplicate'])) {
-            throw $this->invalidResponse();
+            throw $this->invalidResponse($response->status());
         }
 
         return $result;
@@ -214,8 +214,12 @@ class TradingEngineClient
      * @param  array<string, mixed>  $payload
      * @return array{operationId: string, positionId: string, decisionId: string, eventId: string, decision: string, duplicate: bool}
      */
-    public function observePaperPosition(string $idempotencyKey, array $payload): array
-    {
+    public function observePaperPosition(
+        string $idempotencyKey,
+        array $payload,
+        ?string $correlationId = null,
+        ?string $traceparent = null,
+    ): array {
         $this->ensurePaperLifecycleEnabled();
 
         [$response, $correlationId, $traceparent] = $this->request(
@@ -224,6 +228,8 @@ class TradingEngineClient
             'commands:paper-positions:observe',
             $payload,
             ['Idempotency-Key' => $idempotencyKey],
+            $correlationId,
+            $traceparent,
         );
         $this->requireStatus($response, [202]);
         $this->requireResponseContext($response, $correlationId, $traceparent);
@@ -237,7 +243,7 @@ class TradingEngineClient
             || ! $this->validEngineId($result['eventId'] ?? null)
             || ! in_array($result['decision'], ['HOLD', 'EXIT'], true)
             || ! is_bool($result['duplicate'])) {
-            throw $this->invalidResponse();
+            throw $this->invalidResponse($response->status());
         }
 
         return $result;
@@ -360,26 +366,26 @@ class TradingEngineClient
         }
 
         $body = $response->json();
-        $engineCode = is_array($body) ? data_get($body, 'error.code') : null;
+        $engineCode = $this->safeEngineErrorCode(is_array($body) ? data_get($body, 'error.code') : null);
         $retryable = is_array($body) && is_bool(data_get($body, 'error.retryable'))
             ? (bool) data_get($body, 'error.retryable')
             : $response->serverError() || $response->status() === 429;
 
         if (in_array($engineCode, ['AUTH_REQUIRED', 'AUTH_INVALID', 'AUTH_SCOPE_DENIED', 'AUTH_REPLAYED'], true)
             || in_array($response->status(), [401, 403], true)) {
-            throw new TradingEngineException('AUTHENTICATION_FAILED', 'Trading engine authentication failed.', false, $response->status());
+            throw new TradingEngineException('AUTHENTICATION_FAILED', 'Trading engine authentication failed.', false, $response->status(), $engineCode);
         }
 
         if ($engineCode === 'VALIDATION_FAILED' || in_array($response->status(), [400, 422], true)) {
-            throw new TradingEngineException('VALIDATION_FAILED', 'The trading engine rejected the request.', false, $response->status());
+            throw new TradingEngineException('VALIDATION_FAILED', 'The trading engine rejected the request.', false, $response->status(), $engineCode);
         }
 
         if ($response->status() === 503) {
-            throw new TradingEngineException('DEPENDENCY_UNAVAILABLE', 'A trading engine dependency is unavailable.', true, 503);
+            throw new TradingEngineException('DEPENDENCY_UNAVAILABLE', 'A trading engine dependency is unavailable.', true, 503, $engineCode);
         }
 
         if ($response->status() === 409) {
-            throw new TradingEngineException('REQUEST_CONFLICT', 'The trading engine request conflicts with existing state.', $retryable, 409);
+            throw new TradingEngineException('REQUEST_CONFLICT', 'The trading engine request conflicts with existing state.', $retryable, 409, $engineCode);
         }
 
         throw new TradingEngineException(
@@ -389,14 +395,22 @@ class TradingEngineClient
                 : 'The trading engine returned an unexpected response.',
             $retryable,
             $response->status(),
+            $engineCode,
         );
+    }
+
+    private function safeEngineErrorCode(mixed $value): ?string
+    {
+        return is_string($value) && preg_match('/^[A-Z][A-Z0-9_]{0,127}$/D', $value) === 1
+            ? $value
+            : null;
     }
 
     private function requireResponseContext(Response $response, string $correlationId, string $traceparent): void
     {
         if ($response->header('X-Correlation-Id') !== $correlationId
             || $response->header('traceparent') !== $traceparent) {
-            throw $this->invalidResponse();
+            throw $this->invalidResponse($response->status());
         }
     }
 
@@ -476,8 +490,8 @@ class TradingEngineClient
             : '00-'.bin2hex(random_bytes(16)).'-'.bin2hex(random_bytes(8)).'-01';
     }
 
-    private function invalidResponse(): TradingEngineException
+    private function invalidResponse(int $responseStatus): TradingEngineException
     {
-        return new TradingEngineException('INVALID_RESPONSE', 'The trading engine returned an invalid response.');
+        return new TradingEngineException('INVALID_RESPONSE', 'The trading engine returned an invalid response.', false, $responseStatus);
     }
 }

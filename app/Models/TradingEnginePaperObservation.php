@@ -13,6 +13,9 @@ class TradingEnginePaperObservation extends Model
     {
         return [
             'payload' => 'array',
+            'last_attempted_at' => 'immutable_datetime',
+            'recovery_requested_at' => 'immutable_datetime',
+            'recovered_at' => 'immutable_datetime',
             'submitted_at' => 'immutable_datetime',
         ];
     }

@@ -141,6 +141,10 @@ class TradingEnginePaperLifecycleProjector
             'engine_decision_id' => $decision->decision_id,
             'engine_decision' => $decision->decision,
             'error_code' => null,
+            'recovery_token' => null,
+            'recovered_at' => $observation->recovery_previous_error_code !== null
+                ? ($observation->recovered_at ?? now())
+                : null,
         ])->save();
 
         $position->forceFill([

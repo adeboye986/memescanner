@@ -4,9 +4,11 @@ namespace Tests\Unit\Services\TradingEngine;
 
 use App\Exceptions\TradingEngineException;
 use App\Services\TradingEngine\TradingEngineClient;
+use App\Services\TradingEngine\TradingEngineServiceAssertionFactory;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Mockery\MockInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
@@ -332,6 +334,62 @@ class TradingEngineClientTest extends TestCase
         }
     }
 
+    public function test_paper_observation_error_exposes_only_safe_structured_diagnostics(): void
+    {
+        $client = $this->clientWithoutSodium();
+        config()->set([
+            'services.trading_engine.paper_lifecycle_integration_enabled' => true,
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+        ]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://engine.test/v1/commands/paper-positions/observations' => Http::response([
+                'error' => [
+                    'code' => 'PAPER_OBSERVATION_OUT_OF_ORDER',
+                    'message' => 'remote-secret-value',
+                    'retryable' => false,
+                ],
+            ], 409),
+        ]);
+
+        try {
+            $client->observePaperPosition('paper:position:observe:laravel:99:171:v1', []);
+            $this->fail('A conflicting PAPER observation was accepted.');
+        } catch (TradingEngineException $exception) {
+            $this->assertSame('REQUEST_CONFLICT', $exception->errorCode);
+            $this->assertSame(409, $exception->responseStatus);
+            $this->assertSame('PAPER_OBSERVATION_OUT_OF_ORDER', $exception->engineErrorCode);
+            $this->assertStringNotContainsString('remote-secret-value', $exception->getMessage());
+        }
+    }
+
+    public function test_paper_observation_discards_unsafe_remote_error_codes(): void
+    {
+        $client = $this->clientWithoutSodium();
+        config()->set([
+            'services.trading_engine.paper_lifecycle_integration_enabled' => true,
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+        ]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://engine.test/v1/commands/paper-positions/observations' => Http::response([
+                'error' => [
+                    'code' => "UNSAFE\nremote-secret-value",
+                    'retryable' => false,
+                ],
+            ], 409),
+        ]);
+
+        try {
+            $client->observePaperPosition('paper:position:observe:laravel:99:171:v1', []);
+            $this->fail('An unsafe remote error response was accepted.');
+        } catch (TradingEngineException $exception) {
+            $this->assertSame('REQUEST_CONFLICT', $exception->errorCode);
+            $this->assertNull($exception->engineErrorCode);
+            $this->assertStringNotContainsString('remote-secret-value', $exception->getMessage());
+        }
+    }
+
     public function test_invalid_trace_inputs_are_replaced_before_transmission(): void
     {
         $captured = null;
@@ -349,6 +407,15 @@ class TradingEngineClientTest extends TestCase
         $this->assertInstanceOf(Request::class, $captured);
         $this->assertMatchesRegularExpression('/^[A-Za-z0-9._:-]{1,128}$/', $captured->header('X-Correlation-Id')[0]);
         $this->assertMatchesRegularExpression('/^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$/', $captured->header('traceparent')[0]);
+    }
+
+    private function clientWithoutSodium(): TradingEngineClient
+    {
+        $assertions = $this->mock(TradingEngineServiceAssertionFactory::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('create')->andReturn('test-service-assertion');
+        });
+
+        return new TradingEngineClient($assertions);
     }
 
     /** @param array<string, mixed> $body */
