@@ -13,7 +13,10 @@ use Throwable;
 
 class TradingEngineOpportunityProjector
 {
-    public function __construct(private TradingEnginePaperLifecycleProjector $paperLifecycle) {}
+    public function __construct(
+        private TradingEnginePaperLifecycleProjector $paperLifecycle,
+        private TradingEnginePaperEntryProjector $paperEntries,
+    ) {}
 
     private const ETHEREUM_MAINNET_ID = 'eip155:1';
 
@@ -25,6 +28,7 @@ class TradingEngineOpportunityProjector
         'paper.position.recorded.v1',
         'paper.position.evaluated.v1',
         'paper.exit.requested.v1',
+        'paper.entry.executed.v1',
     ];
 
     /**
@@ -60,6 +64,13 @@ class TradingEngineOpportunityProjector
                 $event->handling_attempts++;
 
                 try {
+                    if ($event->event_type === 'paper.entry.executed.v1') {
+                        $this->paperEntries->project($event);
+                        $this->markProjected($event);
+
+                        return ['status' => TradingEngineEvent::STATUS_PROJECTED, 'dependent_event_ids' => []];
+                    }
+
                     if (str_starts_with($event->event_type, 'paper.')) {
                         $this->paperLifecycle->project($event);
                         $this->markProjected($event);

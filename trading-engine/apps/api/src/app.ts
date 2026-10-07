@@ -7,6 +7,7 @@ import { jwtVerify } from 'jose';
 import pino, { type DestinationStream, type Logger } from 'pino';
 
 import type { AcceptNoopCommandHandler } from '../../../src/application/handlers/accept-noop-command-handler.js';
+import type { ExecutePaperEntryCommandHandler } from '../../../src/application/handlers/execute-paper-entry-command-handler.js';
 import type { ObservePaperPositionCommandHandler } from '../../../src/application/handlers/observe-paper-position-command-handler.js';
 import type { RecordOpportunityCommandHandler } from '../../../src/application/handlers/record-opportunity-command-handler.js';
 import type { RecordPaperPositionCommandHandler } from '../../../src/application/handlers/record-paper-position-command-handler.js';
@@ -22,6 +23,7 @@ import {
 } from '../../../src/interfaces/http/health-routes.js';
 import { registerNoopCommandRoutes } from '../../../src/interfaces/http/noop-command-routes.js';
 import { registerOpportunityCommandRoutes } from '../../../src/interfaces/http/opportunity-command-routes.js';
+import { registerPaperEntryCommandRoutes } from '../../../src/interfaces/http/paper-entry-command-routes.js';
 import { registerPaperPositionCommandRoutes } from '../../../src/interfaces/http/paper-position-command-routes.js';
 import type { Kysely } from 'kysely';
 
@@ -34,6 +36,7 @@ export interface AppDependencies {
   readonly databasePing?: DatabasePing;
   readonly noopHandler: AcceptNoopCommandHandler;
   readonly opportunityHandler: RecordOpportunityCommandHandler;
+  readonly paperEntryHandler?: ExecutePaperEntryCommandHandler;
   readonly paperPositionRegistrationHandler?: RecordPaperPositionCommandHandler;
   readonly paperPositionObservationHandler?: ObservePaperPositionCommandHandler;
   readonly logger?: Logger;
@@ -175,6 +178,12 @@ export function buildApp(
     handler: dependencies.opportunityHandler,
     requireServiceAuth,
   });
+  if (dependencies.paperEntryHandler !== undefined) {
+    registerPaperEntryCommandRoutes(app, {
+      handler: dependencies.paperEntryHandler,
+      requireServiceAuth,
+    });
+  }
   if (dependencies.paperPositionRegistrationHandler !== undefined
     && dependencies.paperPositionObservationHandler !== undefined) {
     registerPaperPositionCommandRoutes(app, {

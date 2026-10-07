@@ -19,13 +19,17 @@ describe('source migration module loading', () => {
       '002_opportunities',
       '003_opportunity_evaluations',
       '004_paper_position_lifecycle',
+      '005_paper_financial_entry',
     ]);
     const migration = migrations['003_opportunity_evaluations'];
     const paperLifecycleMigration = migrations['004_paper_position_lifecycle'];
+    const paperFinancialEntryMigration = migrations['005_paper_financial_entry'];
 
     expect(typeof migration?.up).toBe('function');
     expect(typeof migration?.down).toBe('function');
     expect(typeof paperLifecycleMigration?.up).toBe('function');
     expect(typeof paperLifecycleMigration?.down).toBe('function');
+    expect(typeof paperFinancialEntryMigration?.up).toBe('function');
+    expect(typeof paperFinancialEntryMigration?.down).toBe('function');
   });
 });

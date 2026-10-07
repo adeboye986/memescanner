@@ -17,6 +17,7 @@ class TradingEnginePaperDecisionIntegration
 {
     public function __construct(
         private TradingEngineOpportunityDecisionPolicy $decisions,
+        private TradingEnginePaperEntryIntegration $paperEntries,
         private TradeExecutionManager $executions,
         private PaperTradeExecutor $paperExecutor,
     ) {}
@@ -68,6 +69,12 @@ class TradingEnginePaperDecisionIntegration
             $decision = $this->decisions->assess($locked, $link, $evaluation);
 
             if ($decision->decisionCode !== TradingEngineOpportunityDecision::WOULD_ENTER) {
+                return ['position' => null, 'notify' => false];
+            }
+
+            if ($this->paperEntries->routes($locked)) {
+                $this->paperEntries->submit($locked, $link, $evaluation);
+
                 return ['position' => null, 'notify' => false];
             }
 

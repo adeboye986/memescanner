@@ -37,6 +37,7 @@ class ProjectTradingEngineEvent implements ShouldQueue
     ): void {
         if (config('services.trading_engine.enabled', false) !== true
             || (config('services.trading_engine.opportunity_projection_enabled', false) !== true
+                && config('services.trading_engine.paper_entry_integration_enabled', false) !== true
                 && ! (config('services.trading_engine.paper_lifecycle_integration_enabled', false) === true
                     && config('services.trading_engine.paper_lifecycle_authoritative_enabled', false) === true))) {
             return;

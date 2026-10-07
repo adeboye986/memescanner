@@ -51,5 +51,7 @@
     </div>
 
     <div id="tracker-status-badge" class="hidden"><span id="tracker-status-dot"></span><span id="tracker-status-text">{{ $systemStatus['status'] }}</span></div>
+    @include('partials.engine-paper-positions')
+
     <dialog id="close-position-modal" class="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-0 text-slate-100 backdrop:bg-slate-950/80"><form id="close-position-form" method="POST" class="space-y-5 p-6">@csrf<div><p class="text-xs font-bold uppercase tracking-wider text-red-300">Manual exit</p><h2 class="mt-2 text-xl font-semibold">Close <span id="modal-symbol"></span>?</h2></div><dl class="grid grid-cols-2 gap-3 rounded-xl bg-slate-950 p-4 text-sm"><div><dt class="text-slate-500">Return</dt><dd id="modal-return"></dd></div><div><dt class="text-slate-500">Remaining</dt><dd id="modal-remaining"></dd></div><div class="col-span-2"><dt class="text-slate-500">Estimated value</dt><dd id="modal-value"></dd></div></dl><p class="text-sm text-red-200">This closes 100% of the remaining paper position.</p><div class="flex justify-end gap-3"><button id="cancel-close" type="button" class="rounded-lg border border-slate-700 px-4 py-2">Cancel</button><button class="rounded-lg bg-red-500 px-4 py-2 font-semibold">Close Position</button></div></form></dialog>
 </x-layouts.admin>

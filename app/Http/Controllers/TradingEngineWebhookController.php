@@ -53,6 +53,8 @@ class TradingEngineWebhookController extends Controller
                 'opportunity.recorded.v1',
                 'opportunity.evaluated.v1',
             ], true);
+        $paperEntryProjection = config('services.trading_engine.paper_entry_integration_enabled', false) === true
+            && $eventType === 'paper.entry.executed.v1';
         $paperLifecycleProjection = config('services.trading_engine.paper_lifecycle_integration_enabled', false) === true
             && config('services.trading_engine.paper_lifecycle_authoritative_enabled', false) === true
             && in_array($eventType, [
@@ -61,7 +63,7 @@ class TradingEngineWebhookController extends Controller
                 'paper.exit.requested.v1',
             ], true);
 
-        if ($opportunityProjection || $paperLifecycleProjection) {
+        if ($opportunityProjection || $paperEntryProjection || $paperLifecycleProjection) {
             try {
                 ProjectTradingEngineEvent::dispatch($validated['envelope']['event_id']);
             } catch (Throwable) {

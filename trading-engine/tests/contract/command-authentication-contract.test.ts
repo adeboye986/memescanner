@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildApp } from '../../apps/api/src/app.js';
 import { AcceptNoopCommandHandler } from '../../src/application/handlers/accept-noop-command-handler.js';
+import { ExecutePaperEntryCommandHandler } from '../../src/application/handlers/execute-paper-entry-command-handler.js';
 import { ObservePaperPositionCommandHandler } from '../../src/application/handlers/observe-paper-position-command-handler.js';
 import { RecordOpportunityCommandHandler } from '../../src/application/handlers/record-opportunity-command-handler.js';
 import { RecordPaperPositionCommandHandler } from '../../src/application/handlers/record-paper-position-command-handler.js';
@@ -11,6 +12,7 @@ import { CommandInboxRepository } from '../../src/infrastructure/database/reposi
 import { OpportunityRepository } from '../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../src/infrastructure/database/repositories/outbox-repository.js';
 import { PaperPositionLifecycleRepository } from '../../src/infrastructure/database/repositories/paper-position-lifecycle-repository.js';
+import { PaperEntryRepository } from '../../src/infrastructure/database/repositories/paper-entry-repository.js';
 import {
   createServiceToken,
   createTestIdentity,
@@ -116,6 +118,7 @@ describe('command authentication before request validation', () => {
   });
 
   it.each([
+    '/v1/commands/paper-entries',
     '/v1/commands/paper-positions',
     '/v1/commands/paper-positions/observations',
   ])('returns 401 for missing lifecycle authentication before body validation at %s', async (url) => {
@@ -136,6 +139,7 @@ describe('command authentication before request validation', () => {
   });
 
   it.each([
+    '/v1/commands/paper-entries',
     '/v1/commands/paper-positions',
     '/v1/commands/paper-positions/observations',
   ])('returns 403 for lifecycle authentication with the wrong scope at %s', async (url) => {
@@ -160,6 +164,7 @@ describe('command authentication before request validation', () => {
   });
 
   it.each([
+    ['/v1/commands/paper-entries', 'commands:paper-entries:create'],
     ['/v1/commands/paper-positions', 'commands:paper-positions:create'],
     ['/v1/commands/paper-positions/observations', 'commands:paper-positions:observe'],
   ])('returns 400 for a malformed lifecycle command after authentication at %s', async (url, scope) => {
@@ -204,6 +209,18 @@ function createApp(): {
         commandInbox,
         new OpportunityRepository(),
         outbox,
+      ),
+      paperEntryHandler: new ExecutePaperEntryCommandHandler(
+        database,
+        commandInbox,
+        new PaperEntryRepository(),
+        outbox,
+        {
+          enabled: true,
+          openingBalanceNative: '5',
+          entryNotionalNative: '0.1',
+          intentMaxAgeSeconds: 300,
+        },
       ),
       paperPositionRegistrationHandler: new RecordPaperPositionCommandHandler(
         database,

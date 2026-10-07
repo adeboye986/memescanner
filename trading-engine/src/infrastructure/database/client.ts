@@ -206,6 +206,118 @@ export interface PaperPositionLifecycleDecisionTable {
   created_at: ColumnType<Date, Date | string | undefined, never>;
 }
 
+export interface PaperWalletTable {
+  id: string;
+  control_plane_user_id: string;
+  network_id: string;
+  currency: 'SOL';
+  opening_balance_native: string;
+  opening_reference: string;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface PaperLedgerTransactionTable {
+  id: string;
+  wallet_id: string;
+  transaction_type: 'opening_balance' | 'entry' | 'exit_settlement';
+  reference_id: string;
+  idempotency_key: string;
+  correlation_id: string;
+  occurred_at: ColumnType<Date, Date | string, never>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface PaperLedgerEntryTable {
+  id: string;
+  transaction_id: string;
+  wallet_id: string;
+  account: 'available' | 'invested' | 'opening_equity' | 'realized_pnl';
+  direction: 'debit' | 'credit';
+  amount_native: string;
+  currency: 'SOL';
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface PaperEntryIntentTable {
+  id: string;
+  wallet_id: string;
+  opportunity_id: string;
+  evaluation_id: string;
+  source_opportunity_id: string;
+  control_plane_user_id: string;
+  network_id: string;
+  asset_address: string;
+  status: 'executed';
+  execution_mode: 'paper';
+  entry_mode: 'auto';
+  notional_native: string;
+  intent_snapshot: JsonValue;
+  intent_sha256: string;
+  authority_snapshot: JsonValue;
+  authority_sha256: string;
+  idempotency_key: string;
+  correlation_id: string;
+  traceparent: string;
+  accepted_at: ColumnType<Date, Date | string, never>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface PaperOrderTable {
+  id: string;
+  intent_id: string;
+  wallet_id: string;
+  side: 'buy';
+  order_type: 'simulated_market';
+  status: 'filled';
+  asset_address: string;
+  requested_notional_native: string;
+  currency: 'SOL';
+  market_snapshot: JsonValue;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface PaperFillTable {
+  id: string;
+  order_id: string;
+  notional_native: string;
+  fee_native: string;
+  fill_price_usd: string;
+  quantity: string;
+  quantity_unit: 'normalized_position_unit';
+  fill_model: 'observed_mark_normalized_notional_v1';
+  executed_at: ColumnType<Date, Date | string, never>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface PaperFinancialPositionTable {
+  id: string;
+  wallet_id: string;
+  intent_id: string;
+  order_id: string;
+  fill_id: string;
+  opportunity_id: string;
+  evaluation_id: string;
+  control_plane_user_id: string;
+  network_id: string;
+  asset_address: string;
+  symbol: string | null;
+  state: 'open' | 'closed';
+  quantity: string;
+  quantity_unit: 'normalized_position_unit';
+  cost_basis_native: string;
+  entry_price_usd: string;
+  entry_market_cap_usd: string;
+  entry_liquidity_usd: string | null;
+  strategy_snapshot: JsonValue;
+  strategy_sha256: string;
+  authority_snapshot: JsonValue;
+  authority_sha256: string;
+  opened_at: ColumnType<Date, Date | string, never>;
+  closed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 export interface Database {
   command_inbox: CommandInboxTable;
   event_outbox: EventOutboxTable;
@@ -214,6 +326,13 @@ export interface Database {
   evaluation_policies: EvaluationPolicyTable;
   opportunity_evaluation_tasks: OpportunityEvaluationTaskTable;
   opportunity_evaluations: OpportunityEvaluationTable;
+  paper_wallets: PaperWalletTable;
+  paper_ledger_transactions: PaperLedgerTransactionTable;
+  paper_ledger_entries: PaperLedgerEntryTable;
+  paper_entry_intents: PaperEntryIntentTable;
+  paper_orders: PaperOrderTable;
+  paper_fills: PaperFillTable;
+  paper_positions: PaperFinancialPositionTable;
   paper_position_lifecycles: PaperPositionLifecycleTable;
   paper_position_lifecycle_decisions: PaperPositionLifecycleDecisionTable;
 }

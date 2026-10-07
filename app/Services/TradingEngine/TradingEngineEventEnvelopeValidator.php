@@ -16,6 +16,7 @@ class TradingEngineEventEnvelopeValidator
         private TradingEngineOpportunityPayloadValidator $opportunityPayloads,
         private TradingEngineOpportunityEvaluationPayloadValidator $opportunityEvaluations,
         private TradingEnginePaperLifecyclePayloadValidator $paperLifecycle,
+        private TradingEnginePaperEntryPayloadValidator $paperEntries,
     ) {}
 
     private const REQUIRED_KEYS = [
@@ -103,6 +104,11 @@ class TradingEngineEventEnvelopeValidator
             $handlingStatus = TradingEngineEvent::STATUS_STORED;
         }
 
+        if ($envelope['event_type'] === 'paper.entry.executed.v1') {
+            $this->validatePaperEntryExecuted($envelope);
+            $handlingStatus = TradingEngineEvent::STATUS_STORED;
+        }
+
         if (in_array($envelope['event_type'], [
             'paper.position.recorded.v1',
             'paper.position.evaluated.v1',
@@ -165,6 +171,22 @@ class TradingEngineEventEnvelopeValidator
             || $envelope['aggregate_type'] !== 'opportunity_evaluation'
             || $envelope['aggregate_version'] !== 1
             || $payload['evaluation_id'] !== $envelope['aggregate_id']) {
+            $this->rejectEnvelope();
+        }
+    }
+
+    /** @param array<string, mixed> $envelope */
+    private function validatePaperEntryExecuted(array $envelope): void
+    {
+        $payload = $envelope['payload'];
+
+        if (! is_array($payload)
+            || ! $this->paperEntries->isValid($payload)
+            || $envelope['schema_version'] !== 1
+            || $envelope['aggregate_type'] !== 'paper_position'
+            || $payload['position']['position_id'] !== $envelope['aggregate_id']
+            || $envelope['aggregate_version'] !== 1
+            || $payload['operation_id'] !== $envelope['causation_id']) {
             $this->rejectEnvelope();
         }
     }

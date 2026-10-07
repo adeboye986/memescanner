@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
+use App\Models\TradingEnginePaperPositionProjection;
 use App\Models\User;
 use App\Models\UserTelegramBot;
 use App\Services\ApplicationSettingsService;
@@ -55,10 +56,18 @@ class PaperTradingDashboardController extends Controller
             ->get()
             ->map(fn (PaperPosition $position): array => $this->presentPosition($position, $strategies));
 
+        $enginePositions = TradingEnginePaperPositionProjection::query()
+            ->with('wallet')
+            ->where('user_id', $user->id)
+            ->where('state', 'open')
+            ->orderBy('opened_at')
+            ->get();
+
         $viewData = [
             'wallets' => $paperWallets,
             'legacyWallets' => $legacyWallets,
             'positions' => $positions,
+            'enginePositions' => $enginePositions,
             'dashboardActions' => collect($commands->all())
                 ->when(! $user->is_admin, fn ($actions) => $actions->except('paper-track'))
                 ->all(),

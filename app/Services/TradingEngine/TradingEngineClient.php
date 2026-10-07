@@ -180,6 +180,43 @@ class TradingEngineClient
 
     /**
      * @param  array<string, mixed>  $payload
+     * @return array{operationId: string, walletId: string, intentId: string, orderId: string, fillId: string, positionId: string, eventId: string, status: string, duplicate: bool}
+     */
+    public function executePaperEntry(string $idempotencyKey, array $payload): array
+    {
+        $this->ensurePaperEntryEnabled();
+
+        [$response, $correlationId, $traceparent] = $this->request(
+            'POST',
+            '/v1/commands/paper-entries',
+            'commands:paper-entries:create',
+            $payload,
+            ['Idempotency-Key' => $idempotencyKey],
+        );
+        $this->requireStatus($response, [202]);
+        $this->requireResponseContext($response, $correlationId, $traceparent);
+        $result = $response->json();
+        $keys = ['operationId', 'walletId', 'intentId', 'orderId', 'fillId', 'positionId', 'eventId', 'status', 'duplicate'];
+
+        if (! is_array($result)
+            || ! $this->hasExactKeys($result, $keys)
+            || ! $this->validEngineId($result['operationId'] ?? null)
+            || ! $this->validEngineId($result['walletId'] ?? null)
+            || ! $this->validEngineId($result['intentId'] ?? null)
+            || ! $this->validEngineId($result['orderId'] ?? null)
+            || ! $this->validEngineId($result['fillId'] ?? null)
+            || ! $this->validEngineId($result['positionId'] ?? null)
+            || ! $this->validEngineId($result['eventId'] ?? null)
+            || $result['status'] !== 'accepted'
+            || ! is_bool($result['duplicate'])) {
+            throw $this->invalidResponse($response->status());
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
      * @return array{operationId: string, positionId: string, eventId: string, status: string, duplicate: bool}
      */
     public function recordPaperPosition(string $idempotencyKey, array $payload): array
@@ -318,6 +355,15 @@ class TradingEngineClient
     {
         if (! (bool) config('services.trading_engine.enabled', false)) {
             throw new TradingEngineException('INTEGRATION_DISABLED', 'Trading engine integration is disabled.');
+        }
+    }
+
+    private function ensurePaperEntryEnabled(): void
+    {
+        $this->ensureEnabled();
+
+        if (config('services.trading_engine.paper_entry_integration_enabled', false) !== true) {
+            throw new TradingEngineException('INTEGRATION_DISABLED', 'Trading engine PAPER entry integration is disabled.');
         }
     }
 

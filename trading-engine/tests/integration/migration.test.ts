@@ -31,7 +31,7 @@ describe('foundation migration and infrastructure connectivity', () => {
 
     const first = await migrateDatabase(database);
     const second = await migrateDatabase(database);
-    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities', 'evaluation_policies', 'opportunity_evaluation_tasks', 'opportunity_evaluations', 'paper_position_lifecycles', 'paper_position_lifecycle_decisions') order by table_name").execute(database);
+    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities', 'evaluation_policies', 'opportunity_evaluation_tasks', 'opportunity_evaluations', 'paper_position_lifecycles', 'paper_position_lifecycle_decisions', 'paper_wallets', 'paper_ledger_transactions', 'paper_ledger_entries', 'paper_entry_intents', 'paper_orders', 'paper_fills', 'paper_positions') order by table_name").execute(database);
 
     expect(first.error).toBeUndefined();
     expect(first.results).toEqual([
@@ -51,6 +51,10 @@ describe('foundation migration and infrastructure connectivity', () => {
         migrationName: '004_paper_position_lifecycle',
         status: 'Success',
       }),
+      expect.objectContaining({
+        migrationName: '005_paper_financial_entry',
+        status: 'Success',
+      }),
     ]);
     expect(second.error).toBeUndefined();
     expect(second.results).toEqual([]);
@@ -62,8 +66,15 @@ describe('foundation migration and infrastructure connectivity', () => {
       'opportunities',
       'opportunity_evaluation_tasks',
       'opportunity_evaluations',
+      'paper_entry_intents',
+      'paper_fills',
+      'paper_ledger_entries',
+      'paper_ledger_transactions',
+      'paper_orders',
       'paper_position_lifecycle_decisions',
       'paper_position_lifecycles',
+      'paper_positions',
+      'paper_wallets',
     ]);
   });
 

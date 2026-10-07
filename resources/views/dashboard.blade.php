@@ -413,6 +413,8 @@
         @endforelse
     </section>
 
+    @include('partials.engine-paper-positions')
+
     <dialog id="close-position-modal" class="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-0 text-slate-100 shadow-2xl backdrop:bg-slate-950/80">
         <form id="close-position-form" method="POST" class="flex flex-col gap-6 p-6">
             @csrf

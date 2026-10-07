@@ -30,6 +30,10 @@ export interface EngineConfig {
   readonly evaluationBatchSize: number;
   readonly evaluationClaimTtlMs: number;
   readonly workflowLeaderRetryIntervalMs: number;
+  readonly paperEntryEnabled: boolean;
+  readonly paperOpeningBalanceNative: string;
+  readonly paperEntryNotionalNative: string;
+  readonly paperEntryIntentMaxAgeSeconds: number;
   readonly shutdownTimeoutMs: number;
 }
 
@@ -102,6 +106,21 @@ function boolean(env: NodeJS.ProcessEnv, key: string, defaultValue: boolean): bo
   }
 
   throw new EnvironmentConfigurationError(`${key} must be true or false`);
+}
+
+function positiveDecimal(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  defaultValue: string,
+): string {
+  const value = optional(env, key, defaultValue);
+
+  if (!/^(?:0|[1-9]\d{0,47})(?:\.\d{0,29}[1-9])?$/.test(value)
+    || value === '0') {
+    throw new EnvironmentConfigurationError(key + ' must be a positive canonical decimal string');
+  }
+
+  return value;
 }
 
 function optionalBase64Text(
@@ -250,6 +269,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       10_000,
       5_000,
       60_000,
+    ),
+    paperEntryEnabled: boolean(env, 'PAPER_ENTRY_ENABLED', false),
+    paperOpeningBalanceNative: positiveDecimal(env, 'PAPER_OPENING_BALANCE_NATIVE', '5'),
+    paperEntryNotionalNative: positiveDecimal(env, 'PAPER_ENTRY_NOTIONAL_NATIVE', '0.1'),
+    paperEntryIntentMaxAgeSeconds: integer(
+      env,
+      'PAPER_ENTRY_INTENT_MAX_AGE_SECONDS',
+      300,
+      30,
+      3_600,
     ),
     shutdownTimeoutMs: integer(env, 'SHUTDOWN_TIMEOUT_MS', 15_000, 1_000, 60_000),
   };

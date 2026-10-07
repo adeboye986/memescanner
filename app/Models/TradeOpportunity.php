@@ -72,6 +72,11 @@ class TradeOpportunity extends Model
         return $this->belongsTo(PaperPosition::class);
     }
 
+    public function enginePaperPosition(): HasOne
+    {
+        return $this->hasOne(TradingEnginePaperPositionProjection::class, 'trade_opportunity_id');
+    }
+
     public function events(): HasMany
     {
         return $this->hasMany(TradeOpportunityEvent::class);

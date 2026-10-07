@@ -203,6 +203,15 @@ export async function resetDatabase(database: Kysely<Database>): Promise<void> {
 export async function resetDatabaseSchema(database: Kysely<Database>): Promise<void> {
   await assertDedicatedTestDatabase(database);
   await sql`
+    drop table if exists paper_positions cascade;
+    drop table if exists paper_fills cascade;
+    drop table if exists paper_orders cascade;
+    drop table if exists paper_entry_intents cascade;
+    drop table if exists paper_ledger_entries cascade;
+    drop table if exists paper_ledger_transactions cascade;
+    drop table if exists paper_wallets cascade;
+    drop function if exists assert_paper_ledger_transaction_balanced();
+    drop function if exists reject_paper_financial_evidence_mutation();
     drop table if exists paper_position_lifecycle_decisions cascade;
     drop table if exists paper_position_lifecycles cascade;
     drop function if exists reject_paper_lifecycle_decision_mutation();

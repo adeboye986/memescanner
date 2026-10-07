@@ -96,6 +96,33 @@ describe('environment configuration', () => {
     ).toThrow(/WORKFLOW_LEADER_RETRY_INTERVAL_MS must be between 5000 and 60000/);
   });
 
+
+  it('defaults engine PAPER entry off with bounded financial policy', () => {
+    const config = loadConfig(validEnvironment());
+
+    expect(config.paperEntryEnabled).toBe(false);
+    expect(config.paperOpeningBalanceNative).toBe('5');
+    expect(config.paperEntryNotionalNative).toBe('0.1');
+    expect(config.paperEntryIntentMaxAgeSeconds).toBe(300);
+  });
+
+  it.each(['0', '01', '1.0', '1e2', '-1', 'NaN', '1'.repeat(49), '0.' + '1'.repeat(31)])(
+    'rejects non-positive or non-canonical PAPER financial value %s',
+    (value) => {
+      expect(() => loadConfig({
+        ...validEnvironment(),
+        PAPER_OPENING_BALANCE_NATIVE: value,
+      })).toThrow(/PAPER_OPENING_BALANCE_NATIVE must be a positive canonical decimal string/);
+    },
+  );
+
+  it('validates the PAPER entry intent lifetime bounds', () => {
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      PAPER_ENTRY_INTENT_MAX_AGE_SECONDS: '29',
+    })).toThrow(/PAPER_ENTRY_INTENT_MAX_AGE_SECONDS must be between 30 and 3600/);
+  });
+
   it('rejects a missing database URL', () => {
     const environment = validEnvironment();
     delete environment['DATABASE_URL'];

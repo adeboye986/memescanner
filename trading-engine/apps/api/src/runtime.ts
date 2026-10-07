@@ -1,6 +1,7 @@
 import type { Logger } from 'pino';
 
 import { AcceptNoopCommandHandler } from '../../../src/application/handlers/accept-noop-command-handler.js';
+import { ExecutePaperEntryCommandHandler } from '../../../src/application/handlers/execute-paper-entry-command-handler.js';
 import { ObservePaperPositionCommandHandler } from '../../../src/application/handlers/observe-paper-position-command-handler.js';
 import { RecordOpportunityCommandHandler } from '../../../src/application/handlers/record-opportunity-command-handler.js';
 import { RecordPaperPositionCommandHandler } from '../../../src/application/handlers/record-paper-position-command-handler.js';
@@ -9,6 +10,7 @@ import { createDatabase } from '../../../src/infrastructure/database/client.js';
 import { migrateDatabase } from '../../../src/infrastructure/database/migrate.js';
 import { CommandInboxRepository } from '../../../src/infrastructure/database/repositories/command-inbox-repository.js';
 import { OpportunityRepository } from '../../../src/infrastructure/database/repositories/opportunity-repository.js';
+import { PaperEntryRepository } from '../../../src/infrastructure/database/repositories/paper-entry-repository.js';
 import { PaperPositionLifecycleRepository } from '../../../src/infrastructure/database/repositories/paper-position-lifecycle-repository.js';
 import { OutboxRepository } from '../../../src/infrastructure/database/repositories/outbox-repository.js';
 import {
@@ -39,6 +41,7 @@ export async function startApi(
   const commandInbox = new CommandInboxRepository();
   const outbox = new OutboxRepository();
   const opportunities = new OpportunityRepository();
+  const paperEntries = new PaperEntryRepository();
   const paperPositions = new PaperPositionLifecycleRepository();
   const noopHandler = new AcceptNoopCommandHandler(
     database,
@@ -50,6 +53,18 @@ export async function startApi(
     commandInbox,
     opportunities,
     outbox,
+  );
+  const paperEntryHandler = new ExecutePaperEntryCommandHandler(
+    database,
+    commandInbox,
+    paperEntries,
+    outbox,
+    {
+      enabled: options.config.paperEntryEnabled,
+      openingBalanceNative: options.config.paperOpeningBalanceNative,
+      entryNotionalNative: options.config.paperEntryNotionalNative,
+      intentMaxAgeSeconds: options.config.paperEntryIntentMaxAgeSeconds,
+    },
   );
   const paperPositionRegistrationHandler = new RecordPaperPositionCommandHandler(
     database,
@@ -68,6 +83,7 @@ export async function startApi(
     database,
     noopHandler,
     opportunityHandler,
+    paperEntryHandler,
     paperPositionRegistrationHandler,
     paperPositionObservationHandler,
     logger: options.logger,

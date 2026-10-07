@@ -7,12 +7,14 @@ use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Jobs\ProjectTradingEngineEvent;
+use App\Jobs\SubmitTradingEnginePaperEntry;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
 use App\Models\TradeOpportunity;
 use App\Models\TradingEngineEvent;
 use App\Models\TradingEngineOpportunityEvaluation;
 use App\Models\TradingEngineOpportunityLink;
+use App\Models\TradingEnginePaperEntryIntent;
 use App\Models\User;
 use App\Models\UserTradingPreference;
 use App\Services\ApplicationSettingsService;
@@ -26,6 +28,7 @@ use App\Services\TradingEngine\TradingEnginePaperDecisionIntegration;
 use App\Services\UserTelegramNotificationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use LogicException;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -89,6 +92,39 @@ class TradingEnginePaperDecisionIntegrationTest extends TestCase
         $this->assertNull($result['position']);
         $this->assertSame(TradeOpportunityStatus::Qualified, $result['opportunity']->fresh()->status);
         $this->assertDatabaseCount('paper_positions', 0);
+    }
+
+    public function test_cutover_routes_one_canary_entry_without_laravel_financial_writes(): void
+    {
+        Queue::fake();
+        $chain = $this->chain(2_001);
+        UserTradingPreference::factory()->create([
+            'user_id' => $chain['opportunity']->user_id,
+            'execution_mode' => ExecutionMode::Paper,
+            'entry_mode' => EntryMode::Auto,
+            'trading_enabled' => true,
+        ]);
+        config()->set([
+            'services.trading_engine.paper_entry_integration_enabled' => true,
+            'services.trading_engine.paper_entry_canary_user_ids' => (string) $chain['opportunity']->user_id,
+        ]);
+
+        $beforeWallets = PaperWallet::query()->count();
+        $first = $this->integration()->attempt($chain['opportunity']);
+        $second = $this->integration()->attempt($chain['opportunity']->fresh());
+        $intent = TradingEnginePaperEntryIntent::query()->sole();
+
+        $this->assertNull($first);
+        $this->assertNull($second);
+        $this->assertSame(TradeOpportunityStatus::Qualified, $chain['opportunity']->fresh()->status);
+        $this->assertNull($chain['opportunity']->fresh()->paper_position_id);
+        $this->assertSame('pending', $intent->status);
+        $this->assertSame('paper:entry:laravel:'.$chain['opportunity']->getKey().':v1', $intent->idempotency_key);
+        $this->assertDatabaseCount('trading_engine_paper_entry_intents', 1);
+        $this->assertDatabaseCount('paper_positions', 0);
+        $this->assertSame($beforeWallets, PaperWallet::query()->count());
+        Queue::assertPushed(SubmitTradingEnginePaperEntry::class, 1);
+        $this->assertNoLiveOrWalletSideEffects();
     }
 
     public function test_verified_would_enter_uses_existing_paper_path_once(): void

@@ -334,6 +334,34 @@ class TradingEngineClientTest extends TestCase
         }
     }
 
+    public function test_paper_entry_uses_strict_authenticated_command_contract(): void
+    {
+        $client = $this->clientWithoutSodium();
+        config()->set('services.trading_engine.paper_entry_integration_enabled', true);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://engine.test/v1/commands/paper-entries' => fn (Request $request): PromiseInterface => $this->responseFor($request, [
+                'operationId' => '01K9ABCDEFGHJKMNPQRSTVWXYZ',
+                'walletId' => '01K9ABCDEFGHJKMNPQRSTVWXY1',
+                'intentId' => '01K9ABCDEFGHJKMNPQRSTVWXY2',
+                'orderId' => '01K9ABCDEFGHJKMNPQRSTVWXY3',
+                'fillId' => '01K9ABCDEFGHJKMNPQRSTVWXY4',
+                'positionId' => '01K9ABCDEFGHJKMNPQRSTVWXY5',
+                'eventId' => '01K9ABCDEFGHJKMNPQRSTVWXY6',
+                'status' => 'accepted',
+                'duplicate' => false,
+            ], 202),
+        ]);
+
+        $result = $client->executePaperEntry('paper:entry:laravel:101:v1', ['schema_version' => 1]);
+
+        $this->assertSame('01K9ABCDEFGHJKMNPQRSTVWXY5', $result['positionId']);
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'POST'
+            && $request->url() === 'https://engine.test/v1/commands/paper-entries'
+            && $request->hasHeader('Idempotency-Key', 'paper:entry:laravel:101:v1')
+            && $request->hasHeader('Authorization', 'Bearer test-service-assertion'));
+    }
+
     public function test_paper_observation_error_exposes_only_safe_structured_diagnostics(): void
     {
         $client = $this->clientWithoutSodium();
