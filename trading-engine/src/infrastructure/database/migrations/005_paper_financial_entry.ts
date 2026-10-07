@@ -213,20 +213,29 @@ export async function up(database: Kysely<unknown>): Promise<void> {
       entry_count integer;
       transaction_balance numeric(78, 30);
       wallet_mismatches integer;
+      target_transaction_id varchar(26);
     begin
+      if TG_TABLE_NAME = 'paper_ledger_entries' then
+        target_transaction_id := new.transaction_id;
+      elsif TG_TABLE_NAME = 'paper_ledger_transactions' then
+        target_transaction_id := new.id;
+      else
+        raise exception 'unsupported paper ledger balance trigger table';
+      end if;
+
       select count(*), coalesce(sum(case when direction = 'debit' then amount_native else -amount_native end), 0)
       into entry_count, transaction_balance
       from paper_ledger_entries
-      where transaction_id = case when TG_TABLE_NAME = 'paper_ledger_entries' then new.transaction_id else new.id end;
+      where transaction_id = target_transaction_id;
 
       select count(*)
       into wallet_mismatches
       from paper_ledger_entries
-      where transaction_id = case when TG_TABLE_NAME = 'paper_ledger_entries' then new.transaction_id else new.id end
+      where transaction_id = target_transaction_id
         and wallet_id <> (
           select wallet_id
           from paper_ledger_transactions
-          where id = case when TG_TABLE_NAME = 'paper_ledger_entries' then new.transaction_id else new.id end
+          where id = target_transaction_id
         );
 
       if entry_count < 2 or transaction_balance <> 0 or wallet_mismatches <> 0 then
