@@ -4,6 +4,11 @@ namespace App\Services\TradingEngine;
 
 class TradingEngineCanonicalJson
 {
+    public function equals(mixed $left, mixed $right): bool
+    {
+        return $this->encode($left) === $this->encode($right);
+    }
+
     public function hash(mixed $value): string
     {
         return hash('sha256', $this->encode($value));

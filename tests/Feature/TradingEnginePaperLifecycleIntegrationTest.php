@@ -292,6 +292,76 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
         Queue::assertPushed(SubmitTradingEnginePaperObservation::class, 1);
     }
 
+    public function test_recorded_callback_with_reordered_json_objects_projects_successfully(): void
+    {
+        [$position, $opportunity] = $this->positionAndOpportunity();
+        $link = $this->enrolledLink($position, $opportunity);
+        $payload = $this->reorderJsonObjects($this->recordedPayload($link));
+        $event = $this->event('paper.position.recorded.v1', $link, $payload);
+
+        $result = app(TradingEngineOpportunityProjector::class)->project($event->event_id);
+
+        $this->assertSame(TradingEngineEvent::STATUS_PROJECTED, $result['status']);
+        $this->assertSame(TradingEngineEvent::STATUS_PROJECTED, $event->fresh()->handling_status);
+        $this->assertSame('registered', $link->fresh()->ownership_state);
+        $this->assertSame($payload['position_id'], $link->fresh()->engine_position_id);
+    }
+
+    public function test_recorded_callback_with_changed_registration_value_fails_closed(): void
+    {
+        [$position, $opportunity] = $this->positionAndOpportunity();
+        $link = $this->enrolledLink($position, $opportunity);
+        $payload = $this->reorderJsonObjects($this->recordedPayload($link));
+        $payload['strategy']['stop_loss_percent'] = '11';
+        $event = $this->event('paper.position.recorded.v1', $link, $payload);
+
+        $result = app(TradingEngineOpportunityProjector::class)->project($event->event_id);
+
+        $this->assertSame(TradingEngineEvent::STATUS_FAILED, $result['status']);
+        $this->assertSame('PAPER_POSITION_LINK_IDENTITY_MISMATCH', $event->fresh()->handling_error_code);
+        $this->assertDatabaseCount('trading_engine_paper_lifecycle_decisions', 0);
+        $this->assertSame('open', $position->fresh()->status);
+    }
+
+    public function test_evaluated_callback_with_reordered_json_objects_projects_exactly_once(): void
+    {
+        [$position, $opportunity] = $this->positionAndOpportunity();
+        $link = $this->registeredLink($position, $opportunity);
+        $observationPayload = $this->observationPayload($link, $position);
+        $observation = $this->storedObservation($link, $position, $observationPayload);
+        $payload = $this->reorderJsonObjects($this->evaluatedPayload($link, $position, $observation));
+        $event = $this->event('paper.position.evaluated.v1', $link, $payload);
+        $projector = app(TradingEngineOpportunityProjector::class);
+
+        $first = $projector->project($event->event_id);
+        $replay = $projector->project($event->event_id);
+
+        $this->assertSame(TradingEngineEvent::STATUS_PROJECTED, $first['status']);
+        $this->assertSame(TradingEngineEvent::STATUS_PROJECTED, $replay['status']);
+        $this->assertDatabaseCount('trading_engine_paper_lifecycle_decisions', 1);
+        $this->assertDatabaseCount('paper_position_snapshots', 1);
+        $this->assertSame('evaluated', $observation->fresh()->status);
+    }
+
+    public function test_evaluated_callback_with_changed_observation_value_fails_closed(): void
+    {
+        [$position, $opportunity] = $this->positionAndOpportunity();
+        $link = $this->registeredLink($position, $opportunity);
+        $observationPayload = $this->observationPayload($link, $position);
+        $observation = $this->storedObservation($link, $position, $observationPayload);
+        $payload = $this->reorderJsonObjects($this->evaluatedPayload($link, $position, $observation));
+        $payload['market']['market_cap_usd'] = '8501';
+        $event = $this->event('paper.position.evaluated.v1', $link, $payload);
+
+        $result = app(TradingEngineOpportunityProjector::class)->project($event->event_id);
+
+        $this->assertSame(TradingEngineEvent::STATUS_FAILED, $result['status']);
+        $this->assertSame('PAPER_LIFECYCLE_CORRELATION_MISMATCH', $event->fresh()->handling_error_code);
+        $this->assertDatabaseCount('trading_engine_paper_lifecycle_decisions', 0);
+        $this->assertSame('submitted', $observation->fresh()->status);
+        $this->assertSame('open', $position->fresh()->status);
+    }
+
     public function test_authoritative_exit_settles_once_and_credits_only_the_correlated_wallet(): void
     {
         [$position, $opportunity, $wallet] = $this->positionAndOpportunity();
@@ -648,6 +718,36 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
         ]);
     }
 
+    private function enrolledLink(PaperPosition $position, TradeOpportunity $opportunity): TradingEnginePaperPositionLink
+    {
+        config()->set([
+            'services.trading_engine.paper_lifecycle_integration_enabled' => true,
+            'services.trading_engine.paper_lifecycle_authoritative_enabled' => true,
+            'services.trading_engine.paper_lifecycle_canary_user_ids' => (string) $position->user_id,
+        ]);
+        $link = app(TradingEnginePaperLifecycleEnrollment::class)->enroll($position, $opportunity);
+        $this->assertInstanceOf(TradingEnginePaperPositionLink::class, $link);
+
+        $link->forceFill([
+            'engine_position_id' => (string) Str::ulid(),
+            'ownership_state' => 'registered',
+            'registered_at' => now(),
+        ])->save();
+
+        return $link->fresh();
+    }
+
+    /** @return array<string, mixed> */
+    private function recordedPayload(TradingEnginePaperPositionLink $link): array
+    {
+        return [
+            'operation_id' => (string) Str::ulid(),
+            'position_id' => $link->engine_position_id,
+            'policy' => ['key' => 'laravel-paper-protection', 'version' => 1],
+            ...$link->registration_payload,
+        ];
+    }
+
     /** @param array<string, mixed> $payload */
     private function storedObservation(
         TradingEnginePaperPositionLink $link,
@@ -731,6 +831,25 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
         ];
     }
 
+    private function reorderJsonObjects(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        if (array_is_list($value)) {
+            return array_map(fn (mixed $item): mixed => $this->reorderJsonObjects($item), $value);
+        }
+
+        $reordered = [];
+
+        foreach (array_reverse($value, true) as $key => $item) {
+            $reordered[$key] = $this->reorderJsonObjects($item);
+        }
+
+        return $reordered;
+    }
+
     /** @param array<string, mixed> $payload */
     private function event(
         string $type,
@@ -740,6 +859,11 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
     ): TradingEngineEvent {
         $eventId = (string) Str::ulid();
         $hash = app(TradingEngineCanonicalJson::class)->hash($payload);
+        $idempotencyKey = match ($type) {
+            'paper.position.recorded.v1' => $link->registration_idempotency_key,
+            'paper.exit.requested.v1' => 'paper:exit:'.$link->engine_position_id.':1',
+            default => 'paper:position:observe:laravel:'.$link->paper_position_id.':1:v1',
+        };
 
         return TradingEngineEvent::query()->create([
             'event_id' => $eventId,
@@ -752,9 +876,7 @@ class TradingEnginePaperLifecycleIntegrationTest extends TestCase
             'aggregate_version' => 1,
             'correlation_id' => 'paper-lifecycle-test',
             'causation_id' => $causationId ?? (string) Str::ulid(),
-            'idempotency_key' => $type === 'paper.exit.requested.v1'
-                ? 'paper:exit:'.$link->engine_position_id.':1'
-                : 'paper:position:observe:laravel:'.$link->paper_position_id.':1:v1',
+            'idempotency_key' => $idempotencyKey,
             'traceparent' => '00-0123456789abcdef0123456789abcdef-0123456789abcdef-01',
             'payload_sha256' => $hash,
             'raw_body_sha256' => hash('sha256', $eventId),

@@ -359,7 +359,7 @@ class TradingEnginePaperLifecycleProjector
         }
 
         foreach (['source', 'subject', 'network', 'asset', 'entry', 'strategy'] as $key) {
-            if (($payload[$key] ?? null) !== ($registration[$key] ?? null)) {
+            if (! $this->canonicalJson->equals($payload[$key] ?? null, $registration[$key] ?? null)) {
                 return false;
             }
         }
@@ -377,7 +377,7 @@ class TradingEnginePaperLifecycleProjector
         }
 
         foreach (['position_id', 'source', 'subject', 'network', 'asset', 'market'] as $key) {
-            if (($payload[$key] ?? null) !== ($observation->payload[$key] ?? null)) {
+            if (! $this->canonicalJson->equals($payload[$key] ?? null, $observation->payload[$key] ?? null)) {
                 return false;
             }
         }
