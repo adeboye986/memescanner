@@ -27,7 +27,7 @@ import {
 } from '../support/test-environment.js';
 
 const traceparent = '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01';
-const now = new Date('2026-10-07T12:00:00.000Z');
+let testClock = new Date(0);
 const assetAddress = 'So11111111111111111111111111111111111111112';
 
 describe('engine-owned PAPER financial lifecycle', () => {
@@ -196,7 +196,7 @@ describe('engine-owned PAPER financial lifecycle', () => {
   it('rejects stale observations and rolls back settlement when outbox creation fails', async () => {
     const positionId = await openPosition('205');
     const stale = observation(positionId, 1, '10200');
-    stale.body.market.observed_at = '2026-10-07T11:50:00.000Z';
+    stale.body.market.observed_at = new Date(testClock.getTime() - 600_000).toISOString();
 
     await expect(lifecycleHandler().execute(stale)).rejects.toMatchObject({ code: 'PAPER_OBSERVATION_INVALID' });
     expect(await count('paper_position_lifecycle_decisions')).toBe(0);
@@ -225,7 +225,7 @@ describe('engine-owned PAPER financial lifecycle', () => {
       events,
       { enabled: true, observationMaxAgeSeconds: 120 },
       undefined,
-      () => now,
+      () => testClock,
     );
   }
 
@@ -247,9 +247,10 @@ describe('engine-owned PAPER financial lifecycle', () => {
     );
     await dispatcher.dispatchBatch();
     const evaluation = await database.selectFrom('opportunity_evaluations')
-      .select(['id', 'result_sha256'])
+      .select(['id', 'result_sha256', 'created_at'])
       .where('opportunity_id', '=', recorded.opportunityId)
       .executeTakeFirstOrThrow();
+    testClock = new Date(evaluation.created_at.getTime());
     const entry = new ExecutePaperEntryCommandHandler(
       database,
       commandInbox,
@@ -262,7 +263,7 @@ describe('engine-owned PAPER financial lifecycle', () => {
         intentMaxAgeSeconds: 300,
       },
       undefined,
-      () => now,
+      () => testClock,
     );
     const result = await entry.execute(entryCommand({
       opportunityId: recorded.opportunityId,
@@ -319,8 +320,8 @@ function observation(positionId: string, sequence: number, marketCap: string): O
         market_cap_usd: marketCap,
         price_usd: '0.00000085',
         liquidity_usd: '2800',
-        observed_at: now.toISOString(),
-        fetched_at: now.toISOString(),
+        observed_at: testClock.toISOString(),
+        fetched_at: testClock.toISOString(),
         provider: 'birdeye',
       },
       validation: { status: 'eligible', identity_verified: true, simulation_allowed: true },
@@ -357,8 +358,8 @@ function entryCommand(source: {
         market_cap_usd: '12000',
         price_usd: '0.000001',
         liquidity_usd: '3000.25',
-        intent_created_at: now.toISOString(),
-        expires_at: new Date(now.getTime() + 300_000).toISOString(),
+        intent_created_at: testClock.toISOString(),
+        expires_at: new Date(testClock.getTime() + 300_000).toISOString(),
       },
       authority: {
         execution_mode: 'paper', entry_mode: 'auto', trading_enabled: true,
