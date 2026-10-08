@@ -104,6 +104,23 @@ describe('environment configuration', () => {
     expect(config.paperOpeningBalanceNative).toBe('5');
     expect(config.paperEntryNotionalNative).toBe('0.1');
     expect(config.paperEntryIntentMaxAgeSeconds).toBe(300);
+    expect(config.paperFinancialLifecycleEnabled).toBe(false);
+    expect(config.paperObservationMaxAgeSeconds).toBe(120);
+  });
+
+  it('accepts the PAPER financial lifecycle gate and validates observation age bounds', () => {
+    const config = loadConfig({
+      ...validEnvironment(),
+      PAPER_FINANCIAL_LIFECYCLE_ENABLED: 'true',
+      PAPER_OBSERVATION_MAX_AGE_SECONDS: '300',
+    });
+
+    expect(config.paperFinancialLifecycleEnabled).toBe(true);
+    expect(config.paperObservationMaxAgeSeconds).toBe(300);
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      PAPER_OBSERVATION_MAX_AGE_SECONDS: '29',
+    })).toThrow(/PAPER_OBSERVATION_MAX_AGE_SECONDS must be between 30 and 3600/);
   });
 
   it.each(['0', '01', '1.0', '1e2', '-1', 'NaN', '1'.repeat(49), '0.' + '1'.repeat(31)])(

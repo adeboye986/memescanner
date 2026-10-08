@@ -110,6 +110,37 @@ export function subtractCanonicalDecimals(left: string, right: string): string {
   return canonicalFromScaled(leftValue - rightValue, scale);
 }
 
+export function addCanonicalDecimals(left: string, right: string): string {
+  const leftParts = scaledInteger(left);
+  const rightParts = scaledInteger(right);
+  const scale = Math.max(leftParts.scale, rightParts.scale);
+  const leftValue = leftParts.value * (10n ** BigInt(scale - leftParts.scale));
+  const rightValue = rightParts.value * (10n ** BigInt(scale - rightParts.scale));
+
+  return canonicalFromScaled(leftValue + rightValue, scale);
+}
+
+export function roundCanonicalDecimal(value: string, scale: number): string {
+  if (!Number.isInteger(scale) || scale < 0) {
+    throw new Error('Decimal scale must be a non-negative integer');
+  }
+
+  const parts = scaledInteger(value);
+
+  if (parts.scale <= scale) {
+    return canonicalFromScaled(parts.value, parts.scale);
+  }
+
+  const divisor = 10n ** BigInt(parts.scale - scale);
+  const negative = parts.value < 0n;
+  const magnitude = negative ? -parts.value : parts.value;
+  const quotient = magnitude / divisor;
+  const remainder = magnitude % divisor;
+  const rounded = remainder * 2n >= divisor ? quotient + 1n : quotient;
+
+  return canonicalFromScaled(negative ? -rounded : rounded, scale);
+}
+
 interface ScaledInteger {
   readonly value: bigint;
   readonly scale: number;

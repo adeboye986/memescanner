@@ -314,8 +314,60 @@ export interface PaperFinancialPositionTable {
   authority_sha256: string;
   opened_at: ColumnType<Date, Date | string, never>;
   closed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  exit_price_usd: ColumnType<string | null, string | null | undefined, string | null>;
+  exit_market_cap_usd: ColumnType<string | null, string | null | undefined, string | null>;
+  exit_proceeds_native: ColumnType<string | null, string | null | undefined, string | null>;
+  realized_pnl_native: ColumnType<string | null, string | null | undefined, string | null>;
   created_at: ColumnType<Date, Date | string | undefined, never>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+export interface PaperExitOrderTable {
+  id: string;
+  position_id: string;
+  wallet_id: string;
+  side: 'sell';
+  order_type: 'simulated_market';
+  status: 'filled';
+  asset_address: string;
+  quantity: string;
+  currency: 'SOL';
+  market_snapshot: JsonValue;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface PaperExitFillTable {
+  id: string;
+  order_id: string;
+  cost_basis_native: string;
+  proceeds_native: string;
+  realized_pnl_native: string;
+  exit_price_usd: string;
+  exit_market_cap_usd: string;
+  observed_multiple: string;
+  quantity: string;
+  quantity_unit: 'normalized_position_unit';
+  fill_model: 'observed_market_cap_ratio_v1';
+  executed_at: ColumnType<Date, Date | string, never>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+}
+
+export interface PaperExitSettlementTable {
+  id: string;
+  position_id: string;
+  decision_id: string;
+  order_id: string;
+  fill_id: string;
+  ledger_transaction_id: string;
+  event_id: string;
+  cost_basis_native: string;
+  proceeds_native: string;
+  realized_pnl_native: string;
+  result_sha256: string;
+  correlation_id: string;
+  traceparent: string;
+  settled_at: ColumnType<Date, Date | string, never>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
 }
 
 export interface Database {
@@ -335,6 +387,9 @@ export interface Database {
   paper_positions: PaperFinancialPositionTable;
   paper_position_lifecycles: PaperPositionLifecycleTable;
   paper_position_lifecycle_decisions: PaperPositionLifecycleDecisionTable;
+  paper_exit_orders: PaperExitOrderTable;
+  paper_exit_fills: PaperExitFillTable;
+  paper_exit_settlements: PaperExitSettlementTable;
 }
 
 export function createDatabasePoolConfig(config: EngineConfig): PoolConfig {

@@ -10,6 +10,7 @@ use App\Models\TradingEngineOpportunityEvaluation;
 use App\Models\TradingEngineOpportunityLink;
 use App\Models\TradingEnginePaperEntryIntent;
 use App\Models\TradingEnginePaperPositionProjection;
+use App\Models\TradingEnginePaperPositionState;
 use App\Models\TradingEnginePaperWalletProjection;
 use Illuminate\Support\Facades\DB;
 
@@ -135,6 +136,7 @@ class TradingEnginePaperEntryProjector
                 'opening_balance_native' => $walletPayload['opening_balance_native'],
                 'available_balance_native' => $walletPayload['available_balance_native'],
                 'invested_balance_native' => $walletPayload['invested_balance_native'],
+                'realized_pnl_native' => '0',
                 'last_event_id' => $event->event_id,
                 'last_event_occurred_at' => $event->occurred_at,
                 'last_payload_sha256' => $event->payload_sha256,
@@ -183,6 +185,17 @@ class TradingEnginePaperEntryProjector
             'entry_payload_sha256' => $event->payload_sha256,
             'opened_at' => $fillPayload['executed_at'],
             'projected_at' => now(),
+        ]);
+
+        TradingEnginePaperPositionState::query()->create([
+            'position_projection_id' => $position->getKey(),
+            'lifecycle_version' => 0,
+            'next_observation_sequence' => 1,
+            'state' => 'open',
+            'protection_state' => 'none',
+            'peak_market_cap_usd' => $positionPayload['entry_market_cap_usd'],
+            'peak_multiple' => '1',
+            'max_drawdown_percent' => '0',
         ]);
 
         $intent->forceFill([

@@ -4,9 +4,11 @@ import { describe, expect, it } from 'vitest';
 import '../../src/infrastructure/database/client.js';
 
 import {
+  addCanonicalDecimals,
   canonicalizeDatabaseDecimal,
   isCanonicalNonNegativeDecimal,
   isCanonicalSignedDecimal,
+  roundCanonicalDecimal,
 } from '../../src/shared/amount/canonical-decimal.js';
 
 describe('canonical decimal strings', () => {
@@ -74,4 +76,17 @@ describe('canonical decimal strings', () => {
       );
     },
   );
+
+  it.each([
+    ['4.9', '0.085', '4.985'],
+    ['0', '-0.015', '-0.015'],
+    ['0.1', '-0.1', '0'],
+  ])('adds signed canonical decimals without floating point conversion', (left, right, expected) => {
+    expect(addCanonicalDecimals(left, right)).toBe(expected);
+  });
+
+  it('rounds settlement values to the PostgreSQL financial scale', () => {
+    expect(roundCanonicalDecimal('0.1234567890123456789012345678905', 30))
+      .toBe('0.123456789012345678901234567891');
+  });
 });

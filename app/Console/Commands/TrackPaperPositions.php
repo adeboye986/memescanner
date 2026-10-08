@@ -13,6 +13,7 @@ use App\Services\PaperStrategyService;
 use App\Services\PaperTrackerHealthService;
 use App\Services\PaperWalletService;
 use App\Services\TelegramService;
+use App\Services\TradingEngine\TradingEnginePaperFinancialTracker;
 use App\Services\TradingEngine\TradingEnginePaperLifecycleIntegration;
 use App\Services\UserTelegramNotificationService;
 use Closure;
@@ -115,6 +116,13 @@ class TrackPaperPositions extends Command
         };
         try {
             $pulse();
+            $engineMetrics = app(TradingEnginePaperFinancialTracker::class)->track($chains, $limit, $pulse);
+            $this->cycleMetrics['open_positions'] += $engineMetrics['open_positions'];
+            $this->cycleMetrics['priced_positions'] += $engineMetrics['priced_positions'];
+            $this->cycleMetrics['provider_requests'] += $engineMetrics['provider_requests'];
+            $this->cycleMetrics['provider_successes'] += $engineMetrics['provider_successes'];
+            $this->cycleMetrics['provider_failures'] += $engineMetrics['provider_failures'];
+            $this->cycleMetrics['rate_limited'] = $this->cycleMetrics['rate_limited'] || $engineMetrics['rate_limited'];
             $positions = $databaseLocks->run(
                 fn () => PaperPosition::query()
                     ->where('status', 'open')
@@ -133,7 +141,7 @@ class TrackPaperPositions extends Command
                 return self::SUCCESS;
             }
 
-            $this->cycleMetrics['open_positions'] = $positions->count();
+            $this->cycleMetrics['open_positions'] += $positions->count();
 
             $observe = function (PaperPosition $position, array $data) use ($pulse, $telegram, $wallets, $strategies, $databaseLocks, $settings): void {
                 $pulse();

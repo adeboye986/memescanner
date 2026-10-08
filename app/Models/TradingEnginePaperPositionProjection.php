@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use LogicException;
 
 class TradingEnginePaperPositionProjection extends Model
@@ -61,5 +62,15 @@ class TradingEnginePaperPositionProjection extends Model
     public function opportunity(): BelongsTo
     {
         return $this->belongsTo(TradeOpportunity::class, 'trade_opportunity_id');
+    }
+
+    public function lifecycleState(): HasOne
+    {
+        return $this->hasOne(TradingEnginePaperPositionState::class, 'position_projection_id');
+    }
+
+    public function exitSettlement(): HasOne
+    {
+        return $this->hasOne(TradingEnginePaperExitSettlementProjection::class, 'position_projection_id');
     }
 }

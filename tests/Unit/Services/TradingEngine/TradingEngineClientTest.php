@@ -362,6 +362,70 @@ class TradingEngineClientTest extends TestCase
             && $request->hasHeader('Authorization', 'Bearer test-service-assertion'));
     }
 
+    public function test_paper_financial_observation_uses_dedicated_authenticated_command_contract(): void
+    {
+        $client = $this->clientWithoutSodium();
+        config()->set([
+            'services.trading_engine.paper_financial_lifecycle_enabled' => true,
+        ]);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://engine.test/v1/commands/paper-financial-positions/observations' => fn (Request $request): PromiseInterface => $this->responseFor($request, [
+                'operationId' => '01K9ABCDEFGHJKMNPQRSTVWXYZ',
+                'positionId' => '01K9ABCDEFGHJKMNPQRSTVWXY1',
+                'decisionId' => '01K9ABCDEFGHJKMNPQRSTVWXY2',
+                'eventId' => '01K9ABCDEFGHJKMNPQRSTVWXY3',
+                'settlementId' => null,
+                'decision' => 'HOLD',
+                'duplicate' => false,
+            ], 202),
+        ]);
+
+        $result = $client->observePaperFinancialPosition(
+            'paper:financial-position:observe:01K9ABCDEFGHJKMNPQRSTVWXY1:1:v1',
+            ['schema_version' => 1],
+        );
+
+        $this->assertSame('HOLD', $result['decision']);
+        $this->assertNull($result['settlementId']);
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'POST'
+            && $request->url() === 'https://engine.test/v1/commands/paper-financial-positions/observations'
+            && $request->hasHeader(
+                'Idempotency-Key',
+                'paper:financial-position:observe:01K9ABCDEFGHJKMNPQRSTVWXY1:1:v1',
+            )
+            && $request->hasHeader('Authorization', 'Bearer test-service-assertion'));
+    }
+
+    public function test_paper_financial_observation_rejects_inconsistent_exit_settlement_identity(): void
+    {
+        $client = $this->clientWithoutSodium();
+        config()->set('services.trading_engine.paper_financial_lifecycle_enabled', true);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://engine.test/v1/commands/paper-financial-positions/observations' => fn (Request $request): PromiseInterface => $this->responseFor($request, [
+                'operationId' => '01K9ABCDEFGHJKMNPQRSTVWXYZ',
+                'positionId' => '01K9ABCDEFGHJKMNPQRSTVWXY1',
+                'decisionId' => '01K9ABCDEFGHJKMNPQRSTVWXY2',
+                'eventId' => '01K9ABCDEFGHJKMNPQRSTVWXY3',
+                'settlementId' => null,
+                'decision' => 'EXIT',
+                'duplicate' => false,
+            ], 202),
+        ]);
+
+        try {
+            $client->observePaperFinancialPosition(
+                'paper:financial-position:observe:01K9ABCDEFGHJKMNPQRSTVWXY1:1:v1',
+                ['schema_version' => 1],
+            );
+            $this->fail('An EXIT response without settlement identity was accepted.');
+        } catch (TradingEngineException $exception) {
+            $this->assertSame('INVALID_RESPONSE', $exception->errorCode);
+            $this->assertSame(202, $exception->responseStatus);
+        }
+    }
+
     public function test_paper_observation_error_exposes_only_safe_structured_diagnostics(): void
     {
         $client = $this->clientWithoutSodium();

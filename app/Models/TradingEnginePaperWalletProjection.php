@@ -15,6 +15,7 @@ class TradingEnginePaperWalletProjection extends Model
         'opening_balance_native',
         'available_balance_native',
         'invested_balance_native',
+        'realized_pnl_native',
         'last_event_id',
         'last_event_occurred_at',
         'last_payload_sha256',

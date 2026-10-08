@@ -34,6 +34,8 @@ export interface EngineConfig {
   readonly paperOpeningBalanceNative: string;
   readonly paperEntryNotionalNative: string;
   readonly paperEntryIntentMaxAgeSeconds: number;
+  readonly paperFinancialLifecycleEnabled: boolean;
+  readonly paperObservationMaxAgeSeconds: number;
   readonly shutdownTimeoutMs: number;
 }
 
@@ -277,6 +279,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       env,
       'PAPER_ENTRY_INTENT_MAX_AGE_SECONDS',
       300,
+      30,
+      3_600,
+    ),
+    paperFinancialLifecycleEnabled: boolean(env, 'PAPER_FINANCIAL_LIFECYCLE_ENABLED', false),
+    paperObservationMaxAgeSeconds: integer(
+      env,
+      'PAPER_OBSERVATION_MAX_AGE_SECONDS',
+      120,
       30,
       3_600,
     ),

@@ -174,6 +174,7 @@ return [
         'paper_decision_integration_enabled' => env('TRADING_ENGINE_PAPER_DECISION_INTEGRATION_ENABLED', false),
         'paper_entry_integration_enabled' => env('TRADING_ENGINE_PAPER_ENTRY_INTEGRATION_ENABLED', false),
         'paper_entry_canary_user_ids' => env('TRADING_ENGINE_PAPER_ENTRY_CANARY_USER_IDS', ''),
+        'paper_financial_lifecycle_enabled' => env('TRADING_ENGINE_PAPER_FINANCIAL_LIFECYCLE_ENABLED', false),
         'paper_lifecycle_integration_enabled' => env('TRADING_ENGINE_PAPER_LIFECYCLE_INTEGRATION_ENABLED', false),
         'paper_lifecycle_authoritative_enabled' => env('TRADING_ENGINE_PAPER_LIFECYCLE_AUTHORITATIVE_ENABLED', false),
         'paper_lifecycle_general_rollout_enabled' => env('TRADING_ENGINE_PAPER_LIFECYCLE_GENERAL_ROLLOUT_ENABLED', false),

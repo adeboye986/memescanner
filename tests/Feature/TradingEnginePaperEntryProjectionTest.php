@@ -126,6 +126,7 @@ class TradingEnginePaperEntryProjectionTest extends TestCase
 
         $this->assertDatabaseCount('trading_engine_paper_wallet_projections', 1);
         $this->assertDatabaseCount('trading_engine_paper_position_projections', 1);
+        $this->assertDatabaseCount('trading_engine_paper_position_states', 1);
         $this->assertDatabaseCount('trading_engine_paper_entry_intents', 1);
         $this->assertSame(
             '0.000001234567890123456789012345',

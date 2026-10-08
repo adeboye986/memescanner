@@ -2,7 +2,10 @@
 
 namespace App\Services;
 
+use App\Chain;
 use App\Models\PaperPosition;
+use App\Models\TradingEnginePaperPositionProjection;
+use App\Models\TradingEnginePaperPositionState;
 use Illuminate\Support\Carbon;
 use Throwable;
 
@@ -88,5 +91,84 @@ class PaperMarketObservation
             'minimum_liquidity_usd' => $policy['minimum_liquidity_usd'] ?? null,
             'pool_execution_limitation' => $data['pool_execution_limitation'] ?? 'Pool marks do not establish an executable fill.',
             'fallback_reason' => $data['fallback_reason'] ?? null];
+    }
+
+    /** @return array<string, mixed> */
+    public function evaluateEnginePosition(
+        TradingEnginePaperPositionProjection $position,
+        TradingEnginePaperPositionState $state,
+        array $data,
+    ): array {
+        $policy = config('services.trading.paper_market.'.Chain::Solana->value, []);
+        $diagnostics = [];
+        $price = self::positive($data['price_usd'] ?? $data['price'] ?? null);
+        $reportedCap = self::positive($data['market_cap'] ?? null);
+        $entryCap = self::positive($position->entry_market_cap_usd);
+        $entryPrice = self::positive($position->entry_price_usd);
+        $ratioCap = $entryCap !== null && $entryPrice !== null && $price !== null
+            ? self::positive($entryCap * ($price / $entryPrice)) : null;
+        $cap = $reportedCap ?? $ratioCap;
+        $liquidity = self::positive($data['liquidity_usd'] ?? null);
+        $reasons = [];
+
+        if (! ($data['available'] ?? false)
+            || (! ($data['requested_token_is_base'] ?? false) && ! ($data['requested_token_identity_verified'] ?? false))
+            || $cap === null || $entryCap === null || $price === null) {
+            $reasons[] = $data['reason'] ?? 'invalid_valuation';
+        }
+        if (($policy['max_observation_age_seconds'] ?? null) !== null) {
+            try {
+                $fetched = isset($data['fetched_at']) ? Carbon::parse($data['fetched_at']) : null;
+                if ($fetched === null || $fetched->gt(now()) || $fetched->lt(now()->subSeconds(max(1, (int) $policy['max_observation_age_seconds'])))) {
+                    $reasons[] = 'stale_or_missing_fetch_time';
+                }
+            } catch (Throwable) {
+                $reasons[] = 'invalid_fetch_time';
+            }
+        }
+        if (($cap !== null && $cap >= 1e16) || ($liquidity !== null && $liquidity >= 1e16) || ($price !== null && $price >= 1e12)
+            || ($cap !== null && $entryCap !== null && $cap / $entryCap >= 1e8)) {
+            $reasons[] = 'valuation_outside_storage_range';
+        }
+        if (($policy['require_liquidity'] ?? false) && ($liquidity === null || $liquidity < (float) ($policy['minimum_liquidity_usd'] ?? 0))) {
+            $reasons[] = $liquidity === null ? 'liquidity_unavailable' : 'liquidity_below_configured_minimum';
+        }
+        if (($policy['valuation_discrepancy_ratio'] ?? null) !== null && $reportedCap !== null && $ratioCap !== null
+            && max($reportedCap, $ratioCap) / min($reportedCap, $ratioCap) > max(1, (float) $policy['valuation_discrepancy_ratio'])) {
+            $diagnostics[] = 'market_cap_price_ratio_discrepancy_possible_supply_change';
+        }
+        $previous = self::positive($state->last_market_cap_usd) ?? $entryCap;
+        $collapse = ($policy['decline_diagnostic_percent'] ?? null) !== null && $cap !== null && $previous !== null
+            && (1 - $cap / $previous) * 100 >= (float) $policy['decline_diagnostic_percent'];
+        if ($collapse) {
+            $diagnostics[] = 'severe_decline';
+        }
+
+        $strategy = is_array($position->strategy_snapshot) ? $position->strategy_snapshot : [];
+        $stopLossPercent = self::positive($strategy['stop_loss_percent'] ?? null);
+        $stopLoss = $stopLossPercent !== null ? max(0.0, 1 - ($stopLossPercent / 100)) : null;
+        $multiple = $cap !== null && $entryCap !== null ? self::positive($cap / $entryCap) : null;
+        if ($multiple === null || $stopLoss === null) {
+            $reasons[] = 'invalid_valuation_multiple';
+        }
+
+        return [
+            'observed_multiple' => $multiple,
+            'stop_loss_trigger_multiple' => $stopLoss,
+            'stop_loss_threshold_breached' => $multiple !== null && $stopLoss !== null && $multiple <= $stopLoss,
+            'status' => $reasons !== [] ? 'unverified' : ($collapse ? 'severe_decline' : 'observed'),
+            'reasons' => $reasons,
+            'diagnostics' => $diagnostics,
+            'severe_decline' => $collapse,
+            'checked_at' => now()->toIso8601String(),
+            'market_cap' => $cap,
+            'reported_market_cap' => $reportedCap,
+            'price_usd' => $price,
+            'liquidity_usd' => $liquidity,
+            'simulation_allowed' => $reasons === [],
+            'provider' => $data['provider'] ?? null,
+            'fetched_at' => $data['fetched_at'] ?? null,
+            'provider_observed_at' => $data['provider_observed_at'] ?? null,
+        ];
     }
 }

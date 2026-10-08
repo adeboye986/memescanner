@@ -32,6 +32,7 @@ class TradingEngineConfigurationTest extends TestCase
         $this->assertFalse($services['trading_engine']['decision_boundary_enabled']);
         $this->assertFalse($services['trading_engine']['paper_decision_integration_enabled']);
         $this->assertFalse($services['trading_engine']['paper_entry_integration_enabled']);
+        $this->assertFalse($services['trading_engine']['paper_financial_lifecycle_enabled']);
         $this->assertSame('', $services['trading_engine']['paper_entry_canary_user_ids']);
         $this->assertFalse($services['trading_engine']['paper_lifecycle_integration_enabled']);
         $this->assertFalse($services['trading_engine']['paper_lifecycle_authoritative_enabled']);

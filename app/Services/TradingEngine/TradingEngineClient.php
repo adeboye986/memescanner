@@ -287,6 +287,43 @@ class TradingEngineClient
     }
 
     /**
+     * @param  array<string, mixed>  $payload
+     * @return array{operationId: string, positionId: string, decisionId: string, eventId: string, settlementId: string|null, decision: string, duplicate: bool}
+     */
+    public function observePaperFinancialPosition(string $idempotencyKey, array $payload): array
+    {
+        $this->ensurePaperFinancialLifecycleEnabled();
+
+        [$response, $correlationId, $traceparent] = $this->request(
+            'POST',
+            '/v1/commands/paper-financial-positions/observations',
+            'commands:paper-financial-positions:observe',
+            $payload,
+            ['Idempotency-Key' => $idempotencyKey],
+        );
+        $this->requireStatus($response, [202]);
+        $this->requireResponseContext($response, $correlationId, $traceparent);
+        $result = $response->json();
+        $keys = ['operationId', 'positionId', 'decisionId', 'eventId', 'settlementId', 'decision', 'duplicate'];
+
+        if (! is_array($result)
+            || ! $this->hasExactKeys($result, $keys)
+            || ! $this->validEngineId($result['operationId'] ?? null)
+            || ! $this->validEngineId($result['positionId'] ?? null)
+            || ! $this->validEngineId($result['decisionId'] ?? null)
+            || ! $this->validEngineId($result['eventId'] ?? null)
+            || (! is_null($result['settlementId'] ?? null) && ! $this->validEngineId($result['settlementId']))
+            || ! in_array($result['decision'], ['HOLD', 'EXIT'], true)
+            || (($result['decision'] === 'EXIT')
+                !== is_string($result['settlementId']))
+            || ! is_bool($result['duplicate'])) {
+            throw $this->invalidResponse($response->status());
+        }
+
+        return $result;
+    }
+
+    /**
      * @param  array<string, mixed>  $body
      * @param  array<string, string>  $headers
      * @return array{Response, string, string}
@@ -372,6 +409,18 @@ class TradingEngineClient
         if (config('services.trading_engine.paper_lifecycle_integration_enabled', false) !== true
             || config('services.trading_engine.paper_lifecycle_authoritative_enabled', false) !== true) {
             throw new TradingEngineException('INTEGRATION_DISABLED', 'Trading engine PAPER lifecycle integration is disabled.');
+        }
+    }
+
+    private function ensurePaperFinancialLifecycleEnabled(): void
+    {
+        $this->ensureEnabled();
+
+        if (config('services.trading_engine.paper_financial_lifecycle_enabled', false) !== true) {
+            throw new TradingEngineException(
+                'INTEGRATION_DISABLED',
+                'Trading engine PAPER financial lifecycle integration is disabled.',
+            );
         }
     }
 

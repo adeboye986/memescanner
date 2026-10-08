@@ -32,6 +32,12 @@ trait RefreshesPaperTradingDatabase
                 'database/migrations/2026_09_04_121919_add_user_ownership_to_paper_trading_tables.php',
                 'database/migrations/2026_09_04_121920_add_user_id_to_paper_strategy_settings_table.php',
                 'database/migrations/2026_09_04_121921_add_user_id_to_system_activities_table.php',
+                'database/migrations/2026_09_28_091116_create_trading_engine_event_inbox_table.php',
+                'database/migrations/2026_09_28_153953_add_projection_processing_to_trading_engine_event_inbox_table.php',
+                'database/migrations/2026_09_28_154006_create_trading_engine_opportunity_links_table.php',
+                'database/migrations/2026_09_28_154011_create_trading_engine_opportunity_evaluations_table.php',
+                'database/migrations/2026_10_07_180000_create_trading_engine_paper_entry_projections.php',
+                'database/migrations/2026_10_07_234711_create_trading_engine_paper_financial_lifecycle_projections.php',
             ],
             '--no-interaction' => true,
         ])->assertSuccessful();

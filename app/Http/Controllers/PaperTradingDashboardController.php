@@ -57,9 +57,8 @@ class PaperTradingDashboardController extends Controller
             ->map(fn (PaperPosition $position): array => $this->presentPosition($position, $strategies));
 
         $enginePositions = TradingEnginePaperPositionProjection::query()
-            ->with('wallet')
+            ->with(['wallet', 'lifecycleState', 'exitSettlement'])
             ->where('user_id', $user->id)
-            ->where('state', 'open')
             ->orderBy('opened_at')
             ->get();
 

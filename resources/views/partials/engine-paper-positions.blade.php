@@ -13,13 +13,17 @@
                             <h3 class="font-semibold text-white">{{ $position->symbol ?: 'Solana token' }}</h3>
                             <p class="mt-1 max-w-64 truncate text-xs text-slate-500">{{ $position->asset_address }}</p>
                         </div>
-                        <span class="rounded-full bg-cyan-400/10 px-2.5 py-1 text-xs font-semibold uppercase text-cyan-300">{{ $position->state }}</span>
+                        <span class="rounded-full bg-cyan-400/10 px-2.5 py-1 text-xs font-semibold uppercase text-cyan-300">{{ $position->lifecycleState?->state ?? $position->state }}</span>
                     </div>
                     <dl class="mt-4 grid grid-cols-2 gap-3 text-sm">
-                        <div><dt class="text-slate-500">Cost basis</dt><dd class="mt-1 text-slate-200">{{ rtrim(rtrim($position->cost_basis_native, '0'), '.') }} SOL</dd></div>
+                        <div><dt class="text-slate-500">Cost basis</dt><dd class="mt-1 text-slate-200">{{ rtrim(rtrim($position->cost_basis_native, '0'), '.') ?: '0' }} SOL</dd></div>
                         <div><dt class="text-slate-500">Entry market cap</dt><dd class="mt-1 text-slate-200">${{ number_format((float) $position->entry_market_cap_usd, 2) }}</dd></div>
-                        <div><dt class="text-slate-500">Wallet available</dt><dd class="mt-1 text-slate-200">{{ rtrim(rtrim($position->wallet->available_balance_native, '0'), '.') }} SOL</dd></div>
-                        <div><dt class="text-slate-500">Wallet invested</dt><dd class="mt-1 text-slate-200">{{ rtrim(rtrim($position->wallet->invested_balance_native, '0'), '.') }} SOL</dd></div>
+                        <div><dt class="text-slate-500">Wallet available</dt><dd class="mt-1 text-slate-200">{{ rtrim(rtrim($position->wallet->available_balance_native, '0'), '.') ?: '0' }} SOL</dd></div>
+                        <div><dt class="text-slate-500">Wallet invested</dt><dd class="mt-1 text-slate-200">{{ rtrim(rtrim($position->wallet->invested_balance_native, '0'), '.') ?: '0' }} SOL</dd></div>
+                        <div><dt class="text-slate-500">Last market cap</dt><dd class="mt-1 text-slate-200">{{ $position->lifecycleState?->last_market_cap_usd ? '$'.number_format((float) $position->lifecycleState->last_market_cap_usd, 2) : 'Awaiting observation' }}</dd></div>
+                        <div><dt class="text-slate-500">Protection</dt><dd class="mt-1 uppercase text-slate-200">{{ str_replace('_', ' ', $position->lifecycleState?->protection_state ?? 'none') }}</dd></div>
+                        <div><dt class="text-slate-500">Exit proceeds</dt><dd class="mt-1 text-slate-200">{{ $position->exitSettlement ? (rtrim(rtrim($position->exitSettlement->proceeds_native, '0'), '.') ?: '0').' SOL' : 'Open' }}</dd></div>
+                        <div><dt class="text-slate-500">Realized P&amp;L</dt><dd class="mt-1 text-slate-200">{{ $position->exitSettlement ? (rtrim(rtrim($position->exitSettlement->realized_pnl_native, '0'), '.') ?: '0').' SOL' : 'Unrealized' }}</dd></div>
                     </dl>
                 </article>
             @endforeach
