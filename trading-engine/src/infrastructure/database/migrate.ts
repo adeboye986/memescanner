@@ -1,6 +1,5 @@
-import { existsSync, promises as fs } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { loadEnvFile } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { sql, type Kysely } from 'kysely';
@@ -10,7 +9,7 @@ import {
   type MigrationResultSet,
 } from 'kysely/migration';
 
-import { loadConfig } from '../../config/env.js';
+import type { DatabaseConfig } from '../../config/env.js';
 import { createDatabase, type Database } from './client.js';
 
 const migrationLockId = 7_421_901;
@@ -59,37 +58,14 @@ export async function migrateDatabase(
   });
 }
 
-async function run(): Promise<void> {
-  if (existsSync('.env')) {
-    loadEnvFile('.env');
-  }
-
-  const config = loadConfig();
+export async function migrateConfiguredDatabase(
+  config: DatabaseConfig,
+): Promise<MigrationResultSet> {
   const database = createDatabase(config);
 
   try {
-    const result = await migrateDatabase(database);
-
-    for (const migration of result.results ?? []) {
-      process.stdout.write(
-        JSON.stringify({
-          migration: migration.migrationName,
-          status: migration.status,
-        }) + '\n',
-      );
-    }
+    return await migrateDatabase(database);
   } finally {
     await database.destroy();
   }
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  void run().catch((error: unknown): void => {
-    const message = error instanceof Error
-      ? (error.stack ?? error.message)
-      : String(error);
-
-    process.stderr.write(message + '\n');
-    process.exitCode = 1;
-  });
 }

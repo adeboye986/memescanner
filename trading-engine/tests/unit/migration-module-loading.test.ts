@@ -5,6 +5,12 @@ import { FileMigrationProvider } from 'kysely/migration';
 import { describe, expect, it } from 'vitest';
 
 describe('source migration module loading', () => {
+  it('loads the database-only migration CLI without executing it on import', async () => {
+    const module = await import('../../apps/migrate/src/main.js');
+
+    expect(typeof module.runDatabaseMigrationCli).toBe('function');
+  });
+
   it('loads all migrations through the production file migration provider', async () => {
     const provider = new FileMigrationProvider({
       fs,

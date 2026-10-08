@@ -2,8 +2,9 @@ import { sql, type Kysely } from 'kysely';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { loadDatabaseConfig } from '../../src/config/env.js';
 import { createDatabase, type Database } from '../../src/infrastructure/database/client.js';
-import { migrateDatabase } from '../../src/infrastructure/database/migrate.js';
+import { migrateConfiguredDatabase } from '../../src/infrastructure/database/migrate.js';
 import {
   createTestIdentity,
   resetDatabaseSchema,
@@ -29,8 +30,13 @@ describe('foundation migration and infrastructure connectivity', () => {
   it('applies all migrations to an empty PostgreSQL database and reruns safely', async () => {
     await resetDatabaseSchema(database);
 
-    const first = await migrateDatabase(database);
-    const second = await migrateDatabase(database);
+    const migrationConfig = loadDatabaseConfig({
+      DATABASE_URL: environment.databaseUrl,
+      DATABASE_MAX_CONNECTIONS: '2',
+      DATABASE_SSL: 'false',
+    });
+    const first = await migrateConfiguredDatabase(migrationConfig);
+    const second = await migrateConfiguredDatabase(migrationConfig);
     const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities', 'evaluation_policies', 'opportunity_evaluation_tasks', 'opportunity_evaluations', 'paper_position_lifecycles', 'paper_position_lifecycle_decisions', 'paper_wallets', 'paper_ledger_transactions', 'paper_ledger_entries', 'paper_entry_intents', 'paper_orders', 'paper_fills', 'paper_positions', 'paper_exit_orders', 'paper_exit_fills', 'paper_exit_settlements') order by table_name").execute(database);
 
     expect(first.error).toBeUndefined();

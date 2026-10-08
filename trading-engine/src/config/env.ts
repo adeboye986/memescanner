@@ -2,17 +2,21 @@ import { createPublicKey } from 'node:crypto';
 
 export type LogLevel = 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace';
 
-export interface EngineConfig {
+export interface DatabaseConfig {
+  readonly databaseUrl: string;
+  readonly databaseMaxConnections: number;
+  readonly databaseSsl: boolean;
+  readonly databaseCaCertificate: string | undefined;
+  readonly serviceName?: string;
+}
+
+export interface EngineConfig extends DatabaseConfig {
   readonly nodeEnv: 'development' | 'test' | 'production';
   readonly serviceName: string;
   readonly serviceVersion: string;
   readonly host: string;
   readonly port: number;
   readonly logLevel: LogLevel;
-  readonly databaseUrl: string;
-  readonly databaseMaxConnections: number;
-  readonly databaseSsl: boolean;
-  readonly databaseCaCertificate: string | undefined;
   readonly redisUrl: string;
   readonly redisPrefix: string;
   readonly serviceAuthIssuer: string;
@@ -219,18 +223,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     outboxPollIntervalMs,
     60_000,
   );
+  const database = loadDatabaseConfig(env);
 
   return {
+    ...database,
     nodeEnv: nodeEnvironment(env),
     serviceName: optional(env, 'SERVICE_NAME', 'meme-scanner-trading-engine'),
     serviceVersion: optional(env, 'SERVICE_VERSION', '0.1.0'),
     host: optional(env, 'HOST', '127.0.0.1'),
     port: integer(env, 'PORT', 3100, 1, 65_535),
     logLevel,
-    databaseUrl: required(env, 'DATABASE_URL'),
-    databaseMaxConnections: integer(env, 'DATABASE_MAX_CONNECTIONS', 10, 1, 100),
-    databaseSsl: boolean(env, 'DATABASE_SSL', false),
-    databaseCaCertificate: optionalBase64Text(env, 'DATABASE_CA_CERT_BASE64'),
     redisUrl: required(env, 'REDIS_URL'),
     redisPrefix: optional(env, 'REDIS_PREFIX', 'meme-scanner:engine'),
     serviceAuthIssuer: required(env, 'SERVICE_AUTH_ISSUER'),
@@ -291,5 +293,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       3_600,
     ),
     shutdownTimeoutMs: integer(env, 'SHUTDOWN_TIMEOUT_MS', 15_000, 1_000, 60_000),
+  };
+}
+
+export function loadDatabaseConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): DatabaseConfig {
+  return {
+    databaseUrl: required(env, 'DATABASE_URL'),
+    databaseMaxConnections: integer(env, 'DATABASE_MAX_CONNECTIONS', 10, 1, 100),
+    databaseSsl: boolean(env, 'DATABASE_SSL', false),
+    databaseCaCertificate: optionalBase64Text(env, 'DATABASE_CA_CERT_BASE64'),
   };
 }

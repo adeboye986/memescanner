@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EnvironmentConfigurationError,
   loadConfig,
+  loadDatabaseConfig,
 } from '../../src/config/env.js';
 import { createDatabasePoolConfig } from '../../src/infrastructure/database/client.js';
 
@@ -33,6 +34,46 @@ function validEnvironment(): NodeJS.ProcessEnv {
 }
 
 describe('environment configuration', () => {
+  it('loads database-only migration configuration without runtime dependencies', () => {
+    const encodedCertificate = Buffer.from(databaseCaCertificate).toString(
+      'base64',
+    );
+    const config = loadDatabaseConfig({
+      DATABASE_URL: 'postgresql://engine:test@localhost:5433/engine',
+      DATABASE_MAX_CONNECTIONS: '2',
+      DATABASE_SSL: 'true',
+      DATABASE_CA_CERT_BASE64: encodedCertificate,
+    });
+
+    expect(config).toEqual({
+      databaseUrl: 'postgresql://engine:test@localhost:5433/engine',
+      databaseMaxConnections: 2,
+      databaseSsl: true,
+      databaseCaCertificate,
+    });
+    expect(createDatabasePoolConfig(config).ssl).toEqual({
+      rejectUnauthorized: true,
+      ca: databaseCaCertificate,
+    });
+  });
+
+  it('rejects missing database configuration without requiring runtime configuration', () => {
+    expect(() => loadDatabaseConfig({})).toThrow(
+      new EnvironmentConfigurationError('DATABASE_URL is required'),
+    );
+  });
+
+  it('defaults database-only migration TLS off and pool size to ten', () => {
+    const config = loadDatabaseConfig({
+      DATABASE_URL: 'postgresql://engine:test@localhost:5433/engine',
+    });
+
+    expect(config.databaseMaxConnections).toBe(10);
+    expect(config.databaseSsl).toBe(false);
+    expect(config.databaseCaCertificate).toBeUndefined();
+    expect(createDatabasePoolConfig(config).ssl).toBeUndefined();
+  });
+
   it('loads external database and redis URLs without changing domain configuration', () => {
     const config = loadConfig({
       ...validEnvironment(),

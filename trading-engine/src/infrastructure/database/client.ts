@@ -1,7 +1,7 @@
 import { Kysely, PostgresDialect, sql, type ColumnType, type Generated } from 'kysely';
 import { Pool, types, type PoolConfig } from 'pg';
 
-import type { EngineConfig } from '../../config/env.js';
+import type { DatabaseConfig } from '../../config/env.js';
 import type { EventEnvelope } from '../../contracts/events/event-envelope.schema.js';
 import type { EvaluationOutcome } from '../../domain/opportunities/evaluation-policy.js';
 import { canonicalizeDatabaseDecimal } from '../../shared/amount/canonical-decimal.js';
@@ -392,7 +392,7 @@ export interface Database {
   paper_exit_settlements: PaperExitSettlementTable;
 }
 
-export function createDatabasePoolConfig(config: EngineConfig): PoolConfig {
+export function createDatabasePoolConfig(config: DatabaseConfig): PoolConfig {
   const ssl = config.databaseSsl
     ? {
         rejectUnauthorized: true,
@@ -406,11 +406,11 @@ export function createDatabasePoolConfig(config: EngineConfig): PoolConfig {
     connectionString: config.databaseUrl,
     max: config.databaseMaxConnections,
     ssl,
-    application_name: config.serviceName,
+    application_name: config.serviceName ?? 'meme-scanner-trading-engine-migrate',
   };
 }
 
-export function createDatabase(config: EngineConfig): Kysely<Database> {
+export function createDatabase(config: DatabaseConfig): Kysely<Database> {
   return new Kysely<Database>({
     dialect: new PostgresDialect({
       pool: new Pool(createDatabasePoolConfig(config)),
