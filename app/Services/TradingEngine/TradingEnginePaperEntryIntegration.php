@@ -6,6 +6,7 @@ use App\Chain;
 use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Jobs\SubmitTradingEnginePaperEntry;
+use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Models\TradingEngineOpportunityEvaluation;
 use App\Models\TradingEngineOpportunityLink;
@@ -35,7 +36,7 @@ class TradingEnginePaperEntryIntegration
         TradeOpportunity $opportunity,
         TradingEngineOpportunityLink $link,
         TradingEngineOpportunityEvaluation $evaluation,
-    ): TradingEnginePaperEntryIntent {
+    ): ?TradingEnginePaperEntryIntent {
         if (! $this->routes($opportunity)) {
             throw new LogicException('The opportunity is outside the engine PAPER entry cutover boundary.');
         }
@@ -61,6 +62,10 @@ class TradingEnginePaperEntryIntegration
             return $existing;
         }
 
+        if ($this->hasOpenLegacyPosition($opportunity)) {
+            return null;
+        }
+
         $command = $this->commands->make($opportunity, $link, $evaluation);
         $intent = TradingEnginePaperEntryIntent::query()->create([
             'trade_opportunity_id' => $opportunity->getKey(),
@@ -76,6 +81,16 @@ class TradingEnginePaperEntryIntegration
         DB::afterCommit(fn () => SubmitTradingEnginePaperEntry::dispatch($intent->getKey()));
 
         return $intent;
+    }
+
+    private function hasOpenLegacyPosition(TradeOpportunity $opportunity): bool
+    {
+        return PaperPosition::query()
+            ->where('user_id', $opportunity->user_id)
+            ->where('chain', $opportunity->chain->value)
+            ->where('address', $opportunity->address)
+            ->where('status', 'open')
+            ->exists();
     }
 
     /** @return list<int> */

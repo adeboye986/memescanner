@@ -127,6 +127,100 @@ class TradingEnginePaperDecisionIntegrationTest extends TestCase
         $this->assertNoLiveOrWalletSideEffects();
     }
 
+    public function test_cutover_blocks_repeated_engine_entry_when_matching_legacy_position_is_open(): void
+    {
+        Queue::fake();
+        $chain = $this->chain(2_002);
+        $position = $this->legacyPosition(
+            $chain['opportunity']->user,
+            $chain['opportunity']->address,
+        );
+        $this->enablePaperEntryCutover($chain['opportunity']->user_id);
+
+        $first = $this->integration()->attempt($chain['opportunity']);
+        $second = $this->integration()->attempt($chain['opportunity']->fresh());
+
+        $this->assertNull($first);
+        $this->assertNull($second);
+        $this->assertSame(TradeOpportunityStatus::Qualified, $chain['opportunity']->fresh()->status);
+        $this->assertNull($chain['opportunity']->fresh()->paper_position_id);
+        $this->assertModelExists($position);
+        $this->assertDatabaseCount('paper_positions', 1);
+        $this->assertDatabaseCount('trading_engine_paper_entry_intents', 0);
+        Queue::assertNotPushed(SubmitTradingEnginePaperEntry::class);
+        $this->assertNoLiveOrWalletSideEffects();
+    }
+
+    public function test_cutover_allows_engine_entry_for_a_different_token(): void
+    {
+        Queue::fake();
+        $chain = $this->chain(2_003);
+        $this->legacyPosition(
+            $chain['opportunity']->user,
+            'So11111111111111111111111111111111111111112',
+        );
+        $this->enablePaperEntryCutover($chain['opportunity']->user_id);
+
+        $this->assertNull($this->integration()->attempt($chain['opportunity']));
+
+        $this->assertDatabaseCount('paper_positions', 1);
+        $this->assertDatabaseCount('trading_engine_paper_entry_intents', 1);
+        Queue::assertPushed(SubmitTradingEnginePaperEntry::class, 1);
+    }
+
+    public function test_cutover_allows_engine_entry_when_another_user_owns_the_open_token(): void
+    {
+        Queue::fake();
+        $chain = $this->chain(2_004);
+        $this->legacyPosition(User::factory()->create(), $chain['opportunity']->address);
+        $this->enablePaperEntryCutover($chain['opportunity']->user_id);
+
+        $this->assertNull($this->integration()->attempt($chain['opportunity']));
+
+        $this->assertDatabaseCount('paper_positions', 1);
+        $this->assertDatabaseCount('trading_engine_paper_entry_intents', 1);
+        Queue::assertPushed(SubmitTradingEnginePaperEntry::class, 1);
+    }
+
+    public function test_cutover_allows_engine_entry_when_the_matching_legacy_position_is_closed(): void
+    {
+        Queue::fake();
+        $chain = $this->chain(2_005);
+        $this->legacyPosition($chain['opportunity']->user, $chain['opportunity']->address, [
+            'status' => 'closed',
+            'closed_at' => now(),
+        ]);
+        $this->enablePaperEntryCutover($chain['opportunity']->user_id);
+
+        $this->assertNull($this->integration()->attempt($chain['opportunity']));
+
+        $this->assertDatabaseCount('paper_positions', 1);
+        $this->assertDatabaseCount('trading_engine_paper_entry_intents', 1);
+        Queue::assertPushed(SubmitTradingEnginePaperEntry::class, 1);
+    }
+
+    public function test_non_canary_duplicate_preserves_the_existing_legacy_entry_path(): void
+    {
+        Queue::fake();
+        $chain = $this->chain(2_006);
+        $position = $this->legacyPosition(
+            $chain['opportunity']->user,
+            $chain['opportunity']->address,
+        );
+        $this->enablePaperEntryCutover(User::factory()->create()->getKey());
+
+        $result = $this->integration()->attempt($chain['opportunity']);
+
+        $this->assertInstanceOf(PaperPosition::class, $result);
+        $this->assertTrue($position->is($result));
+        $this->assertSame(TradeOpportunityStatus::Executed, $chain['opportunity']->fresh()->status);
+        $this->assertSame($position->getKey(), $chain['opportunity']->fresh()->paper_position_id);
+        $this->assertDatabaseCount('paper_positions', 1);
+        $this->assertDatabaseCount('trading_engine_paper_entry_intents', 0);
+        Queue::assertNotPushed(SubmitTradingEnginePaperEntry::class);
+        $this->assertNoLiveOrWalletSideEffects();
+    }
+
     public function test_verified_would_enter_uses_existing_paper_path_once(): void
     {
         Http::preventStrayRequests();
@@ -395,6 +489,38 @@ class TradingEnginePaperDecisionIntegrationTest extends TestCase
     private function integration(): TradingEnginePaperDecisionIntegration
     {
         return app(TradingEnginePaperDecisionIntegration::class);
+    }
+
+    private function enablePaperEntryCutover(int $canaryUserId): void
+    {
+        UserTradingPreference::factory()->create([
+            'user_id' => $canaryUserId,
+            'execution_mode' => ExecutionMode::Paper,
+            'entry_mode' => EntryMode::Auto,
+            'trading_enabled' => true,
+        ]);
+        config()->set([
+            'services.trading_engine.paper_entry_integration_enabled' => true,
+            'services.trading_engine.paper_entry_canary_user_ids' => (string) $canaryUserId,
+        ]);
+    }
+
+    /** @param array<string, mixed> $overrides */
+    private function legacyPosition(User $user, string $address, array $overrides = []): PaperPosition
+    {
+        return PaperPosition::query()->create([
+            'user_id' => $user->getKey(),
+            'chain' => Chain::Solana,
+            'address' => $address,
+            'symbol' => 'LEGACY',
+            'entry_market_cap' => 12_000,
+            'entry_price' => 0.001,
+            'entry_at' => now(),
+            'status' => 'open',
+            'initial_investment_sol' => 0.1,
+            'remaining_investment_sol' => 0.1,
+            ...$overrides,
+        ]);
     }
 
     private function assertNoLiveOrWalletSideEffects(): void
