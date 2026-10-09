@@ -11,6 +11,11 @@ import {
   idempotentClose,
   type RuntimeHandle,
 } from '../../../src/infrastructure/runtime/process-lifecycle.js';
+import {
+  startPaperMarketMonitorRuntime,
+  type PaperMarketMonitorRuntimeHandle,
+  type PaperMarketMonitorRuntimeOptions,
+} from '../../../src/workers/paper-market-monitor-runtime.js';
 import { OpportunityEvaluationDispatcher } from '../../../src/workers/opportunity-evaluation-dispatcher.js';
 import { OutboxDispatcher } from '../../../src/workers/outbox-dispatcher.js';
 import {
@@ -34,6 +39,9 @@ export interface StartWorkerDependencies {
   readonly databaseFactory?: typeof createDatabase;
   readonly leadershipStarter?: (options: PostgresWorkflowLeaderOptions) => RuntimeHandle;
   readonly pollerStarter?: (options: WorkflowPollerOptions) => WorkflowPollerHandle;
+  readonly paperMarketMonitorStarter?: (
+    options: PaperMarketMonitorRuntimeOptions,
+  ) => PaperMarketMonitorRuntimeHandle;
 }
 
 export async function startWorker(
@@ -43,6 +51,8 @@ export async function startWorker(
   const databaseFactory = dependencies.databaseFactory ?? createDatabase;
   const leadershipStarter = dependencies.leadershipStarter ?? startPostgresWorkflowLeader;
   const pollerStarter = dependencies.pollerStarter ?? startWorkflowPoller;
+  const paperMarketMonitorStarter = dependencies.paperMarketMonitorStarter
+    ?? startPaperMarketMonitorRuntime;
   const database = databaseFactory(options.config);
   let leadership: RuntimeHandle | undefined;
   const close = idempotentClose(async (): Promise<void> => {
@@ -73,8 +83,7 @@ export async function startWorker(
       logger: options.logger,
       startPoller: ({ database: leadershipDatabase, beforeCycle }) => {
         const outbox = new OutboxRepository();
-
-        return pollerStarter({
+        const workflowPoller = pollerStarter({
           intervalMs: options.config.outboxPollIntervalMs,
           idleMaxIntervalMs: options.config.workflowIdleMaxIntervalMs,
           logger: options.logger,
@@ -94,6 +103,19 @@ export async function startWorker(
             options.logger,
           ),
         });
+
+        if (!options.config.paperMarketMonitoringEnabled) {
+          return workflowPoller;
+        }
+
+        const paperMarketMonitor = paperMarketMonitorStarter({
+          config: options.config,
+          database: leadershipDatabase,
+          logger: options.logger,
+          beforeCycle,
+        });
+
+        return combineLeaderPollers(workflowPoller, paperMarketMonitor);
       },
     });
   } catch (error) {
@@ -120,4 +142,31 @@ export async function startWorker(
   );
 
   return { close };
+}
+
+function combineLeaderPollers(
+  workflowPoller: WorkflowPollerHandle,
+  paperMarketMonitor: PaperMarketMonitorRuntimeHandle,
+): WorkflowPollerHandle {
+  const closePaperMarketMonitor = idempotentClose(
+    (): Promise<void> => paperMarketMonitor.close(),
+  );
+  const completed = (async (): Promise<void> => {
+    await workflowPoller.completed;
+    await closePaperMarketMonitor();
+  })();
+  const close = idempotentClose(async (): Promise<void> => {
+    await closeInOrder('leader-controlled poller shutdown', [
+      {
+        name: 'workflow poller',
+        close: (): Promise<void> => workflowPoller.close(),
+      },
+      {
+        name: 'PAPER market monitor',
+        close: closePaperMarketMonitor,
+      },
+    ]);
+  });
+
+  return { close, completed };
 }

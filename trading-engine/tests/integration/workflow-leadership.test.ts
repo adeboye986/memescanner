@@ -5,6 +5,7 @@ import {
   createDatabase,
   type Database,
 } from '../../src/infrastructure/database/client.js';
+import { paperMarketMonitoringCapabilitiesAvailable } from '../../src/workers/paper-market-monitor-runtime.js';
 import { PostgresWorkflowLeadershipBackend } from '../../src/workers/postgres-workflow-leader.js';
 import {
   createTestIdentity,
@@ -71,5 +72,11 @@ describe('PostgreSQL workflow leadership session', () => {
       expect(await session.isHeld()).toBe(true);
       expect(await session.release()).toBe(true);
     });
+  });
+
+  it('recognizes the complete migrated shadow monitoring schema', async () => {
+    await expect(
+      paperMarketMonitoringCapabilitiesAvailable(firstDatabase),
+    ).resolves.toBe(true);
   });
 });

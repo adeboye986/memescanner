@@ -287,7 +287,8 @@ no-op.
 
 ## PAPER market monitoring foundation (Phase 1)
 
-Phase 1 creates one durable `paper_position_monitoring_tasks` row in the same
+The monitoring foundation creates one durable `paper_position_monitoring_tasks`
+row in the same
 PostgreSQL transaction as every new engine-owned PAPER position. Exact command
 replay reuses the position and task, while a rolled-back entry leaves neither.
 The task records only scheduling, lease, provider-attempt, safe failure-code,
@@ -295,13 +296,16 @@ and last-observed market diagnostics. It cannot invoke lifecycle evaluation,
 create HOLD/EXIT decisions, settle a wallet, write ledger entries, or emit a
 lifecycle decision event.
 
-`PAPER_MARKET_MONITORING_ENABLED` defaults to `false`. No API, worker,
-scheduler, or combined Hostinger runtime constructs or starts the Phase 1
-monitoring cycle, even if someone changes that value. Runtime activation and
-shared workflow leadership are deliberately deferred to Phase 2.
+`PAPER_MARKET_MONITORING_ENABLED` defaults to `false`. While disabled, no
+API, worker, scheduler, or combined Hostinger runtime constructs the shadow
+poller, claims monitoring tasks, schedules timers, or calls the provider.
+When explicitly enabled, the PostgreSQL workflow leader starts the independent,
+non-overlapping shadow poller only after migrations 007 and 008 are verified.
+Standby processes do not construct it.
 
-Laravel remains the authoritative observation producer in production until
-Phase 2 explicitly activates the engine monitor under PostgreSQL leadership.
+Laravel remains the authoritative lifecycle observation producer. Shadow
+observations never invoke lifecycle evaluation, financial settlement, or
+outbox delivery.
 
 The provider adapter uses DexScreener's Solana token endpoint. It sends no API
 credential, preserves the requested base-token identity, chooses the valid pair
