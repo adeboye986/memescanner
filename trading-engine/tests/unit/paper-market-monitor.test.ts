@@ -145,7 +145,7 @@ describe('PAPER market monitoring cycle', () => {
       expect.any(String),
       expect.objectContaining({ pairAddress: 'pair', dex: 'dex' }),
       {
-        requestId: expect.any(String),
+        requestId: expect.any(String) as string,
         startedAt: requestStartedAt,
         receivedAt: responseReceivedAt,
         latencyMs: 250,
