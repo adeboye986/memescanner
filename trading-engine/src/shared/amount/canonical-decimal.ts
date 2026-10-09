@@ -3,6 +3,13 @@ import { Type, type Static } from '@sinclair/typebox';
 const unsignedPattern = '^(?:0|[1-9][0-9]{0,47})(?:\\.[0-9]{0,29}[1-9])?$';
 const signedPattern = '^-?(?:0|[1-9][0-9]{0,47})(?:\\.[0-9]{0,29}[1-9])?$';
 const databaseDecimalPattern = /^(-?)([0-9]+)(?:\.([0-9]+))?$/;
+const maximumFinancialScale = 30;
+const maximumIntermediateIntegerDigits = 96;
+const maximumIntermediateFractionDigits = 60;
+const roundableExpression = new RegExp(
+  `^-?(?:0|[1-9][0-9]{0,${maximumIntermediateIntegerDigits - 1}})`
+  + `(?:\\.[0-9]{0,${maximumIntermediateFractionDigits - 1}}[1-9])?$`,
+);
 
 export const NonNegativeDecimalStringSchema = Type.String({
   pattern: unsignedPattern,
@@ -121,14 +128,14 @@ export function addCanonicalDecimals(left: string, right: string): string {
 }
 
 export function roundCanonicalDecimal(value: string, scale: number): string {
-  if (!Number.isInteger(scale) || scale < 0) {
-    throw new Error('Decimal scale must be a non-negative integer');
+  if (!Number.isInteger(scale) || scale < 0 || scale > maximumFinancialScale) {
+    throw new Error(`Decimal scale must be an integer between 0 and ${maximumFinancialScale}`);
   }
 
-  const parts = scaledInteger(value);
+  const parts = roundableScaledInteger(value);
 
   if (parts.scale <= scale) {
-    return canonicalFromScaled(parts.value, parts.scale);
+    return canonicalRoundedResult(parts.value, parts.scale);
   }
 
   const divisor = 10n ** BigInt(parts.scale - scale);
@@ -138,7 +145,7 @@ export function roundCanonicalDecimal(value: string, scale: number): string {
   const remainder = magnitude % divisor;
   const rounded = remainder * 2n >= divisor ? quotient + 1n : quotient;
 
-  return canonicalFromScaled(negative ? -rounded : rounded, scale);
+  return canonicalRoundedResult(negative ? -rounded : rounded, scale);
 }
 
 interface ScaledInteger {
@@ -151,6 +158,22 @@ function scaledInteger(value: string): ScaledInteger {
     throw new Error("Decimal arithmetic requires canonical decimal strings");
   }
 
+  return parseScaledInteger(value);
+}
+
+function roundableScaledInteger(value: string): ScaledInteger {
+  if (
+    value === '-0'
+    || value.length > maximumIntermediateIntegerDigits + maximumIntermediateFractionDigits + 2
+    || !roundableExpression.test(value)
+  ) {
+    throw new Error('Decimal rounding requires a bounded canonical decimal string');
+  }
+
+  return parseScaledInteger(value);
+}
+
+function parseScaledInteger(value: string): ScaledInteger {
   const negative = value.startsWith("-");
   const unsigned = negative ? value.slice(1) : value;
   const [integer = "0", fraction = ""] = unsigned.split(".", 2);
@@ -160,6 +183,16 @@ function scaledInteger(value: string): ScaledInteger {
     value: negative ? -magnitude : magnitude,
     scale: fraction.length,
   };
+}
+
+function canonicalRoundedResult(value: bigint, scale: number): string {
+  const result = canonicalFromScaled(value, scale);
+
+  if (!isCanonicalSignedDecimal(result)) {
+    throw new Error('Rounded decimal exceeds canonical financial precision');
+  }
+
+  return result;
 }
 
 function canonicalFromScaled(value: bigint, scale: number): string {
