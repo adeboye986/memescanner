@@ -37,6 +37,7 @@ function enabledConfig(
 ): ReturnType<typeof createTestIdentity>['config'] {
   return createTestIdentity(undefined, {
     PAPER_MARKET_MONITORING_ENABLED: 'true',
+    PAPER_MARKET_MONITOR_CANARY_USER_IDS: '1',
     PAPER_MARKET_PROVIDER_TIMEOUT_MS: '3000',
     PAPER_MARKET_MONITOR_LEASE_DURATION_MS: '10000',
     SHUTDOWN_TIMEOUT_MS: '5000',
@@ -114,6 +115,7 @@ describe('leader-controlled PAPER market monitor runtime', () => {
       logger,
       policy: {
         enabled: true,
+        eligibleControlPlaneUserIds: config.paperMarketMonitorCanaryUserIds,
         intervalMs: config.paperMarketMonitorIntervalMs,
         batchSize: config.paperMarketMonitorBatchSize,
         requestBudget: config.paperMarketMonitorRequestBudget,

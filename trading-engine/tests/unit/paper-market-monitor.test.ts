@@ -50,6 +50,7 @@ function task(): PaperPositionMonitoringTaskRecord {
 function policy(enabled = true): PaperMarketMonitoringPolicy {
   return {
     enabled,
+    eligibleControlPlaneUserIds: ['1'],
     intervalMs: 5_000,
     batchSize: 30,
     requestBudget: 1,
@@ -138,6 +139,15 @@ describe('PAPER market monitoring cycle', () => {
       succeeded: 1,
       failed: 0,
     });
+    expect(repository.retireClosedTasks).toHaveBeenCalledWith(database, ['1'], now);
+    expect(repository.claimDue).toHaveBeenCalledWith(
+      database,
+      expect.any(String),
+      ['1'],
+      30,
+      30_000,
+      now,
+    );
     expect(provider.fetchSolana).toHaveBeenCalledWith([assetAddress]);
     expect(repository.recordSuccess).toHaveBeenCalledWith(
       database,

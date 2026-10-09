@@ -105,6 +105,7 @@ describe('PostgreSQL workflow worker runtime', () => {
   it('starts shadow monitoring once per leadership acquisition and isolates its completion', async () => {
     const identity = createTestIdentity(undefined, {
       PAPER_MARKET_MONITORING_ENABLED: 'true',
+      PAPER_MARKET_MONITOR_CANARY_USER_IDS: '1',
       PAPER_MARKET_PROVIDER_TIMEOUT_MS: '3000',
       PAPER_MARKET_MONITOR_LEASE_DURATION_MS: '10000',
       SHUTDOWN_TIMEOUT_MS: '5000',

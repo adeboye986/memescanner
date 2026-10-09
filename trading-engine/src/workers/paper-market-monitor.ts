@@ -18,6 +18,7 @@ import { newEngineId } from '../shared/ids/id.js';
 
 export interface PaperMarketMonitoringPolicy {
   readonly enabled: boolean;
+  readonly eligibleControlPlaneUserIds: readonly string[];
   readonly intervalMs: number;
   readonly batchSize: number;
   readonly requestBudget: number;
@@ -55,6 +56,7 @@ export class PaperMarketMonitoringCycle {
     const startedAt = this.now();
     const retired = await this.repository.retireClosedTasks(
       this.database,
+      this.policy.eligibleControlPlaneUserIds,
       startedAt,
     );
     const claimLimit = Math.min(
@@ -64,6 +66,7 @@ export class PaperMarketMonitoringCycle {
     const tasks = await this.repository.claimDue(
       this.database,
       this.leaseOwner,
+      this.policy.eligibleControlPlaneUserIds,
       claimLimit,
       this.policy.leaseDurationMs,
       startedAt,

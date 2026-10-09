@@ -328,8 +328,8 @@ describe('engine-owned PAPER financial entry', () => {
     const firstOwner = '01M50000000000000000000010';
     const secondOwner = '01M50000000000000000000011';
     const [firstClaims, secondClaims] = await Promise.all([
-      monitoring.claimDue(database, firstOwner, 10, 30_000, now),
-      monitoring.claimDue(database, secondOwner, 10, 30_000, now),
+      monitoring.claimDue(database, firstOwner, ['7'], 10, 30_000, now),
+      monitoring.claimDue(database, secondOwner, ['7'], 10, 30_000, now),
     ]);
     const claimed = [...firstClaims, ...secondClaims];
 
@@ -340,6 +340,7 @@ describe('engine-owned PAPER financial entry', () => {
     await expect(monitoring.claimDue(
       database,
       '01M50000000000000000000012',
+      ['7'],
       10,
       30_000,
       new Date(now.getTime() + 29_999),
@@ -347,6 +348,7 @@ describe('engine-owned PAPER financial entry', () => {
     await expect(monitoring.claimDue(
       database,
       '01M50000000000000000000012',
+      ['7'],
       10,
       30_000,
       new Date(now.getTime() + 30_000),
@@ -360,12 +362,89 @@ describe('engine-owned PAPER financial entry', () => {
     ]);
   });
 
+  it('claims only canary-user tasks and preserves the filter after leadership takeover', async () => {
+    const canaryAsset = 'So33333333333333333333333333333333333333333';
+    const otherAsset = 'So44444444444444444444444444444444444444444';
+    const canarySource = await evaluatedOpportunity(
+      'canary-1',
+      'c'.repeat(64),
+      canaryAsset,
+      '1',
+    );
+    const otherSource = await evaluatedOpportunity(
+      'canary-2',
+      'd'.repeat(64),
+      otherAsset,
+      '2',
+    );
+    const canaryPosition = await handler().execute(
+      entryCommand(canarySource, 'paper-entry-canary-1'),
+    );
+    const otherPosition = await handler().execute(
+      entryCommand(otherSource, 'paper-entry-canary-2'),
+    );
+    const monitoring = new PaperPositionMonitoringRepository();
+    const firstOwner = '01M50000000000000000000201';
+    const secondOwner = '01M50000000000000000000202';
+
+    await expect(monitoring.claimDue(
+      database,
+      firstOwner,
+      [],
+      10,
+      30_000,
+      now,
+    )).resolves.toEqual([]);
+    await expect(monitoring.claimDue(
+      database,
+      firstOwner,
+      ['1'],
+      10,
+      30_000,
+      now,
+    )).resolves.toEqual([
+      expect.objectContaining({
+        position_id: canaryPosition.positionId,
+        lease_owner: firstOwner,
+      }),
+    ]);
+    expect(await database.selectFrom('paper_position_monitoring_tasks')
+      .select(['monitoring_state', 'lease_owner'])
+      .where('position_id', '=', otherPosition.positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      monitoring_state: 'pending',
+      lease_owner: null,
+    });
+
+    await monitoring.releaseLeases(database, firstOwner, now);
+    await expect(monitoring.claimDue(
+      database,
+      secondOwner,
+      ['1'],
+      10,
+      30_000,
+      now,
+    )).resolves.toEqual([
+      expect.objectContaining({
+        position_id: canaryPosition.positionId,
+        lease_owner: secondOwner,
+      }),
+    ]);
+    expect(await database.selectFrom('paper_position_monitoring_tasks')
+      .select(['monitoring_state', 'lease_owner'])
+      .where('position_id', '=', otherPosition.positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      monitoring_state: 'pending',
+      lease_owner: null,
+    });
+  });
+
   it('atomically persists one append-only observed sample under concurrent completion', async () => {
     const source = await evaluatedOpportunity('1101');
     const opened = await handler().execute(entryCommand(source, 'paper-entry-1101'));
     const monitoring = new PaperPositionMonitoringRepository();
     const owner = '01M50000000000000000000101';
-    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+    const [claimed] = await monitoring.claimDue(database, owner, ['7'], 1, 30_000, now);
 
     if (claimed === undefined) {
       expect.fail('Expected the new monitoring task to be claimable');
@@ -444,7 +523,7 @@ describe('engine-owned PAPER financial entry', () => {
     const opened = await handler().execute(entryCommand(source, 'paper-entry-1102'));
     const monitoring = new PaperPositionMonitoringRepository();
     const owner = '01M50000000000000000000102';
-    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+    const [claimed] = await monitoring.claimDue(database, owner, ['7'], 1, 30_000, now);
 
     if (claimed === undefined) {
       expect.fail('Expected the new monitoring task to be claimable');
@@ -490,7 +569,7 @@ describe('engine-owned PAPER financial entry', () => {
     const opened = await handler().execute(entryCommand(source, 'paper-entry-1103'));
     const monitoring = new PaperPositionMonitoringRepository();
     const owner = '01M50000000000000000000103';
-    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+    const [claimed] = await monitoring.claimDue(database, owner, ['7'], 1, 30_000, now);
 
     if (claimed === undefined) {
       expect.fail('Expected the new monitoring task to be claimable');
@@ -539,7 +618,7 @@ describe('engine-owned PAPER financial entry', () => {
     const opened = await handler().execute(entryCommand(source, 'paper-entry-1104'));
     const monitoring = new PaperPositionMonitoringRepository();
     const owner = '01M50000000000000000000104';
-    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+    const [claimed] = await monitoring.claimDue(database, owner, ['7'], 1, 30_000, now);
 
     if (claimed === undefined) {
       expect.fail('Expected the new monitoring task to be claimable');
@@ -596,7 +675,7 @@ describe('engine-owned PAPER financial entry', () => {
     const opened = await handler().execute(entryCommand(source, 'paper-entry-111'));
     const monitoring = new PaperPositionMonitoringRepository();
     const owner = '01M50000000000000000000013';
-    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+    const [claimed] = await monitoring.claimDue(database, owner, ['7'], 1, 30_000, now);
 
     if (claimed === undefined) {
       expect.fail('Expected the new monitoring task to be claimable');
@@ -642,6 +721,7 @@ describe('engine-owned PAPER financial entry', () => {
     await expect(monitoring.claimDue(
       database,
       owner,
+      ['7'],
       1,
       30_000,
       new Date(now.getTime() + 11_999),
@@ -649,6 +729,7 @@ describe('engine-owned PAPER financial entry', () => {
     const [secondClaim] = await monitoring.claimDue(
       database,
       owner,
+      ['7'],
       1,
       30_000,
       new Date(now.getTime() + 12_000),
@@ -700,10 +781,11 @@ describe('engine-owned PAPER financial entry', () => {
       .where('id', '=', opened.positionId)
       .executeTakeFirstOrThrow();
 
-    await expect(monitoring.retireClosedTasks(database, now)).resolves.toBe(1);
+    await expect(monitoring.retireClosedTasks(database, ['7'], now)).resolves.toBe(1);
     await expect(monitoring.claimDue(
       database,
       '01M50000000000000000000014',
+      ['7'],
       1,
       30_000,
       now,
@@ -733,12 +815,14 @@ describe('engine-owned PAPER financial entry', () => {
     sourceId: string,
     discoveryKey = 'a'.repeat(64),
     address = assetAddress,
+    controlPlaneUserId = '7',
   ): Promise<{
     readonly opportunityId: string;
     readonly sourceOpportunityId: string;
     readonly evaluationId: string;
     readonly resultSha256: string;
     readonly assetAddress: string;
+    readonly controlPlaneUserId: string;
   }> {
     const recorded = await recordHandler.execute({
       idempotencyKey: `opportunity-${sourceId}`,
@@ -746,7 +830,7 @@ describe('engine-owned PAPER financial entry', () => {
       subject: 'laravel-service',
       correlationId: `correlation-${sourceId}`,
       traceparent,
-      body: opportunity(sourceId, discoveryKey, address),
+      body: opportunity(sourceId, discoveryKey, address, controlPlaneUserId),
     });
     const dispatcher = new OpportunityEvaluationDispatcher(
       config,
@@ -767,6 +851,7 @@ describe('engine-owned PAPER financial entry', () => {
       evaluationId: evaluation.id,
       resultSha256: evaluation.result_sha256,
       assetAddress: address,
+      controlPlaneUserId,
     };
   }
 
@@ -817,7 +902,7 @@ function policy(): {
 }
 
 function entryCommand(
-  source: { readonly opportunityId: string; readonly sourceOpportunityId: string; readonly evaluationId: string; readonly resultSha256: string; readonly assetAddress: string },
+  source: { readonly opportunityId: string; readonly sourceOpportunityId: string; readonly evaluationId: string; readonly resultSha256: string; readonly assetAddress: string; readonly controlPlaneUserId: string },
   idempotencyKey = 'paper-entry-101',
 ): ExecutePaperEntryCommand {
   return {
@@ -835,7 +920,7 @@ function entryCommand(
         evaluation_id: source.evaluationId,
         evaluation_result_sha256: source.resultSha256,
       },
-      subject: { control_plane_user_id: '7' },
+      subject: { control_plane_user_id: source.controlPlaneUserId },
       network: { id: SOLANA_MAINNET_ID, native_currency: 'SOL' },
       asset: { address: source.assetAddress, symbol: 'MEME' },
       entry: {
@@ -865,7 +950,7 @@ function entryCommand(
   };
 }
 
-function opportunity(sourceId: string, discoveryKey: string, address: string): OpportunityCommand {
+function opportunity(sourceId: string, discoveryKey: string, address: string, controlPlaneUserId = '7'): OpportunityCommand {
   return {
     schema_version: 1,
     source: {
@@ -874,7 +959,7 @@ function opportunity(sourceId: string, discoveryKey: string, address: string): O
       discovery_key: discoveryKey,
       scanner: 'new-token',
     },
-    subject: { control_plane_user_id: '7' },
+    subject: { control_plane_user_id: controlPlaneUserId },
     network: { id: SOLANA_MAINNET_ID },
     asset: { address, symbol: 'MEME' },
     market_snapshot: {

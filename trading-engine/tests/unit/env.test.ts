@@ -286,6 +286,7 @@ describe('environment configuration', () => {
     const config = loadConfig(validEnvironment());
 
     expect(config.paperMarketMonitoringEnabled).toBe(false);
+    expect(config.paperMarketMonitorCanaryUserIds).toEqual([]);
     expect(config.paperMarketMonitorIntervalMs).toBe(5_000);
     expect(config.paperMarketMonitorBatchSize).toBe(30);
     expect(config.paperMarketProviderConnectionTimeoutMs).toBe(3_000);
@@ -299,6 +300,7 @@ describe('environment configuration', () => {
     const config = loadConfig({
       ...validEnvironment(),
       PAPER_MARKET_MONITORING_ENABLED: 'true',
+      PAPER_MARKET_MONITOR_CANARY_USER_IDS: '1, 3',
       PAPER_MARKET_MONITOR_INTERVAL_MS: '10000',
       PAPER_MARKET_MONITOR_BATCH_SIZE: '60',
       PAPER_MARKET_PROVIDER_CONNECTION_TIMEOUT_MS: '2000',
@@ -309,6 +311,7 @@ describe('environment configuration', () => {
     });
 
     expect(config.paperMarketMonitoringEnabled).toBe(true);
+    expect(config.paperMarketMonitorCanaryUserIds).toEqual(['1', '3']);
     expect(config.paperMarketMonitorIntervalMs).toBe(10_000);
     expect(config.paperMarketMonitorBatchSize).toBe(60);
     expect(config.paperMarketProviderConnectionTimeoutMs).toBe(2_000);
@@ -317,6 +320,23 @@ describe('environment configuration', () => {
     expect(config.paperMarketMonitorMaximumBackoffMs).toBe(120_000);
     expect(config.paperMarketMonitorLeaseDurationMs).toBe(45_000);
   });
+
+  it('fails closed when PAPER market monitoring is enabled without canary users', () => {
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      PAPER_MARKET_MONITORING_ENABLED: 'true',
+    })).toThrow(/PAPER_MARKET_MONITOR_CANARY_USER_IDS must contain at least one/);
+  });
+
+  it.each(['0', '-1', '1.0', '*', 'all', '1,,2', '1,1', '1'.repeat(65)])(
+    'rejects invalid PAPER market monitoring canary IDs %s',
+    (value) => {
+      expect(() => loadConfig({
+        ...validEnvironment(),
+        PAPER_MARKET_MONITOR_CANARY_USER_IDS: value,
+      })).toThrow(/must contain at most 100 unique positive integer IDs/);
+    },
+  );
 
   it.each([
     ['PAPER_MARKET_MONITOR_INTERVAL_MS', '999'],

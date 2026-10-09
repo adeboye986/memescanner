@@ -58,11 +58,13 @@ export interface PaperPositionMonitoringStore {
   ) => Promise<PaperPositionMonitoringTaskRecord>;
   readonly retireClosedTasks: (
     database: Kysely<Database>,
+    eligibleControlPlaneUserIds: readonly string[],
     now: Date,
   ) => Promise<number>;
   readonly claimDue: (
     database: Kysely<Database>,
     leaseOwner: string,
+    eligibleControlPlaneUserIds: readonly string[],
     batchSize: number,
     leaseDurationMs: number,
     now: Date,
@@ -142,8 +144,13 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
 
   public async retireClosedTasks(
     database: Kysely<Database>,
+    eligibleControlPlaneUserIds: readonly string[],
     now: Date,
   ): Promise<number> {
+    if (eligibleControlPlaneUserIds.length === 0) {
+      return 0;
+    }
+
     const result = await database
       .updateTable('paper_position_monitoring_tasks as task')
       .set({
@@ -161,6 +168,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         expression.selectFrom('paper_positions as position')
           .select('position.id')
           .whereRef('position.id', '=', 'task.position_id')
+          .where('position.control_plane_user_id', 'in', eligibleControlPlaneUserIds)
           .where('position.state', '=', 'closed'),
       ))
       .executeTakeFirst();
@@ -171,10 +179,15 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
   public async claimDue(
     database: Kysely<Database>,
     leaseOwner: string,
+    eligibleControlPlaneUserIds: readonly string[],
     batchSize: number,
     leaseDurationMs: number,
     now: Date,
   ): Promise<readonly PaperPositionMonitoringTaskRecord[]> {
+    if (eligibleControlPlaneUserIds.length === 0) {
+      return [];
+    }
+
     const leaseExpiresAt = new Date(now.getTime() + leaseDurationMs);
 
     return database.transaction().execute(async (transaction) => {
@@ -183,6 +196,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         .innerJoin('paper_positions as position', 'position.id', 'task.position_id')
         .select('task.position_id')
         .where('position.state', '=', 'open')
+        .where('position.control_plane_user_id', 'in', eligibleControlPlaneUserIds)
         .where((expression) => expression.or([
           expression.and([
             expression('task.monitoring_state', '=', 'pending'),

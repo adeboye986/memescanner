@@ -296,7 +296,15 @@ and last-observed market diagnostics. It cannot invoke lifecycle evaluation,
 create HOLD/EXIT decisions, settle a wallet, write ledger entries, or emit a
 lifecycle decision event.
 
-`PAPER_MARKET_MONITORING_ENABLED` defaults to `false`. While disabled, no
+`PAPER_MARKET_MONITORING_ENABLED` defaults to `false`.
+`PAPER_MARKET_MONITOR_CANARY_USER_IDS` is also empty by default. Enabling
+monitoring requires an explicit, non-empty comma-separated list of positive
+control-plane user IDs; invalid, duplicate, missing, and empty lists fail closed.
+The PostgreSQL task-claim and closed-task retirement queries enforce this list
+through `paper_positions.control_plane_user_id`. There is no wildcard or
+implicit all-users value.
+
+While disabled, no
 API, worker, scheduler, or combined Hostinger runtime constructs the shadow
 poller, claims monitoring tasks, schedules timers, or calls the provider.
 When explicitly enabled, the PostgreSQL workflow leader starts the independent,

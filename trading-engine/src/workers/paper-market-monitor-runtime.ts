@@ -113,6 +113,7 @@ export function startPaperMarketMonitorRuntime(
           config: options.config,
           policy: {
             enabled: true,
+            eligibleControlPlaneUserIds: options.config.paperMarketMonitorCanaryUserIds,
             intervalMs: options.config.paperMarketMonitorIntervalMs,
             batchSize: options.config.paperMarketMonitorBatchSize,
             requestBudget: options.config.paperMarketMonitorRequestBudget,

@@ -41,6 +41,7 @@ export interface EngineConfig extends DatabaseConfig {
   readonly paperFinancialLifecycleEnabled: boolean;
   readonly paperObservationMaxAgeSeconds: number;
   readonly paperMarketMonitoringEnabled: boolean;
+  readonly paperMarketMonitorCanaryUserIds: readonly string[];
   readonly paperMarketMonitorIntervalMs: number;
   readonly paperMarketMonitorBatchSize: number;
   readonly paperMarketProviderConnectionTimeoutMs: number;
@@ -59,6 +60,7 @@ export class EnvironmentConfigurationError extends Error {
 }
 
 const logLevels = new Set<LogLevel>(['fatal', 'error', 'warn', 'info', 'debug', 'trace']);
+const maximumPaperMarketMonitorCanaryUsers = 100;
 
 function required(env: NodeJS.ProcessEnv, key: string): string {
   const value = env[key]?.trim();
@@ -120,6 +122,27 @@ function boolean(env: NodeJS.ProcessEnv, key: string, defaultValue: boolean): bo
   }
 
   throw new EnvironmentConfigurationError(`${key} must be true or false`);
+}
+
+function positiveIdList(env: NodeJS.ProcessEnv, key: string): readonly string[] {
+  const raw = env[key]?.trim();
+
+  if (raw === undefined || raw === '') {
+    return [];
+  }
+
+  const values = raw.split(',').map((value) => value.trim());
+  const uniqueValues = new Set(values);
+
+  if (values.length > maximumPaperMarketMonitorCanaryUsers
+    || uniqueValues.size !== values.length
+    || values.some((value) => !/^[1-9][0-9]{0,63}$/.test(value))) {
+    throw new EnvironmentConfigurationError(
+      `${key} must contain at most ${maximumPaperMarketMonitorCanaryUsers} unique positive integer IDs`,
+    );
+  }
+
+  return values;
 }
 
 function positiveDecimal(
@@ -266,6 +289,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     paperMarketProviderTimeoutMs,
     600_000,
   );
+  const paperMarketMonitoringEnabled = boolean(
+    env,
+    'PAPER_MARKET_MONITORING_ENABLED',
+    false,
+  );
+  const paperMarketMonitorCanaryUserIds = positiveIdList(
+    env,
+    'PAPER_MARKET_MONITOR_CANARY_USER_IDS',
+  );
+
+  if (paperMarketMonitoringEnabled && paperMarketMonitorCanaryUserIds.length === 0) {
+    throw new EnvironmentConfigurationError(
+      'PAPER_MARKET_MONITOR_CANARY_USER_IDS must contain at least one positive integer ID when PAPER_MARKET_MONITORING_ENABLED is true',
+    );
+  }
   const database = loadDatabaseConfig(env);
 
   return {
@@ -336,7 +374,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       3_600,
     ),
     shutdownTimeoutMs: integer(env, 'SHUTDOWN_TIMEOUT_MS', 15_000, 1_000, 60_000),
-    paperMarketMonitoringEnabled: boolean(env, 'PAPER_MARKET_MONITORING_ENABLED', false),
+    paperMarketMonitoringEnabled,
+    paperMarketMonitorCanaryUserIds,
     paperMarketMonitorIntervalMs,
     paperMarketMonitorBatchSize: integer(env, 'PAPER_MARKET_MONITOR_BATCH_SIZE', 30, 1, 300),
     paperMarketProviderConnectionTimeoutMs,
