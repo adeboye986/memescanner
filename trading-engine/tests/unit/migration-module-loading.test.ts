@@ -28,12 +28,14 @@ describe('source migration module loading', () => {
       '005_paper_financial_entry',
       '006_paper_financial_lifecycle',
       '007_paper_market_monitoring',
+      '008_paper_market_shadow_observations',
     ]);
     const migration = migrations['003_opportunity_evaluations'];
     const paperLifecycleMigration = migrations['004_paper_position_lifecycle'];
     const paperFinancialEntryMigration = migrations['005_paper_financial_entry'];
     const paperFinancialLifecycleMigration = migrations['006_paper_financial_lifecycle'];
     const paperMarketMonitoringMigration = migrations['007_paper_market_monitoring'];
+    const paperMarketShadowMigration = migrations['008_paper_market_shadow_observations'];
 
     expect(typeof migration?.up).toBe('function');
     expect(typeof migration?.down).toBe('function');
@@ -45,5 +47,7 @@ describe('source migration module loading', () => {
     expect(typeof paperFinancialLifecycleMigration?.down).toBe('function');
     expect(typeof paperMarketMonitoringMigration?.up).toBe('function');
     expect(typeof paperMarketMonitoringMigration?.down).toBe('function');
+    expect(typeof paperMarketShadowMigration?.up).toBe('function');
+    expect(typeof paperMarketShadowMigration?.down).toBe('function');
   });
 });

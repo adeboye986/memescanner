@@ -32,6 +32,7 @@ function task(): PaperPositionMonitoringTaskRecord {
     last_successful_observation_at: null,
     last_fetch_attempted_at: null,
     consecutive_failure_count: 0,
+    next_attempt_sequence: 1,
     provider_backoff_until: null,
     last_error_code: null,
     last_http_status: null,
@@ -117,15 +118,18 @@ describe('PAPER market monitoring cycle', () => {
     expect(provider.fetchSolana).not.toHaveBeenCalled();
   });
 
-  it('fetches claimed identities and persists only monitoring diagnostics', async () => {
+  it('persists selected market data and measured provider request timing', async () => {
     const { database, repository, provider } = dependencies();
+    const requestStartedAt = new Date(now.getTime() + 10);
+    const responseReceivedAt = new Date(now.getTime() + 260);
+    const times = [now, requestStartedAt, responseReceivedAt];
     const cycle = new PaperMarketMonitoringCycle(
       database,
       repository,
       provider,
       policy(),
       pino({ level: 'silent' }),
-      () => now,
+      () => times.shift() ?? responseReceivedAt,
     );
 
     await expect(cycle.runCycle()).resolves.toMatchObject({
@@ -135,11 +139,54 @@ describe('PAPER market monitoring cycle', () => {
       failed: 0,
     });
     expect(provider.fetchSolana).toHaveBeenCalledWith([assetAddress]);
-    expect(repository.recordSuccess).toHaveBeenCalledOnce();
+    expect(repository.recordSuccess).toHaveBeenCalledWith(
+      database,
+      expect.objectContaining({ position_id: positionId }),
+      expect.any(String),
+      expect.objectContaining({ pairAddress: 'pair', dex: 'dex' }),
+      {
+        requestId: expect.any(String),
+        startedAt: requestStartedAt,
+        receivedAt: responseReceivedAt,
+        latencyMs: 250,
+      },
+      5_000,
+    );
     expect(repository.recordFailure).not.toHaveBeenCalled();
   });
 
-  it('converts an unknown provider outcome to safe retry state and releases leases', async () => {
+  it('distinguishes an unavailable market result from a failed provider request', async () => {
+    const { database, repository, provider } = dependencies();
+    vi.mocked(provider.fetchSolana).mockResolvedValue([{
+      available: false,
+      assetAddress,
+      errorCode: 'PROVIDER_PAIR_NOT_FOUND',
+    }]);
+    const cycle = new PaperMarketMonitoringCycle(
+      database,
+      repository,
+      provider,
+      policy(),
+      pino({ level: 'silent' }),
+      () => now,
+    );
+
+    await expect(cycle.runCycle()).resolves.toMatchObject({ failed: 1 });
+    expect(repository.recordFailure).toHaveBeenCalledWith(
+      database,
+      expect.objectContaining({ position_id: positionId }),
+      expect.any(String),
+      expect.objectContaining({
+        outcome: 'unavailable',
+        errorCode: 'PROVIDER_PAIR_NOT_FOUND',
+      }),
+      expect.objectContaining({ latencyMs: 0 }),
+      5_000,
+      60_000,
+    );
+  });
+
+  it('persists a safe failed outcome and releases leases after a provider exception', async () => {
     const { database, repository, provider } = dependencies();
     vi.mocked(provider.fetchSolana).mockRejectedValue(
       new PaperMarketProviderError('PROVIDER_TIMEOUT', true),
@@ -159,11 +206,12 @@ describe('PAPER market monitoring cycle', () => {
       expect.objectContaining({ position_id: positionId }),
       expect.any(String),
       {
+        outcome: 'failed',
         errorCode: 'PROVIDER_TIMEOUT',
         httpStatus: null,
         retryAfterMs: null,
       },
-      now,
+      expect.objectContaining({ latencyMs: 0 }),
       5_000,
       60_000,
     );

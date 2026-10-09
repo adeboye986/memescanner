@@ -381,6 +381,7 @@ export interface PaperPositionMonitoringTaskTable {
   last_successful_observation_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   last_fetch_attempted_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   consecutive_failure_count: Generated<number>;
+  next_attempt_sequence: Generated<number>;
   provider_backoff_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   last_error_code: string | null;
   last_http_status: number | null;
@@ -392,6 +393,34 @@ export interface PaperPositionMonitoringTaskTable {
   last_provider_observed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   created_at: ColumnType<Date, Date | string | undefined, never>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+export interface PaperMarketShadowObservationTable {
+  id: string;
+  position_id: string;
+  attempt_sequence: number;
+  request_id: string;
+  scheduled_due_at: ColumnType<Date, Date | string, never>;
+  network_id: string;
+  asset_address: string;
+  outcome: 'discarded_closed' | 'failed' | 'observed' | 'unavailable';
+  provider: 'dexscreener';
+  pair_address: string | null;
+  dex: string | null;
+  market_cap_usd: string | null;
+  price_usd: string | null;
+  liquidity_usd: string | null;
+  request_started_at: ColumnType<Date, Date | string, never>;
+  response_received_at: ColumnType<Date, Date | string, never>;
+  provider_latency_ms: number;
+  provider_observed_at: ColumnType<Date | null, Date | string | null, never>;
+  fetched_at: ColumnType<Date | null, Date | string | null, never>;
+  error_code: string | null;
+  http_status: number | null;
+  retry_after_ms: number | null;
+  consecutive_failure_count: number;
+  next_observation_due_at: ColumnType<Date | null, Date | string | null, never>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
 }
 
 export interface Database {
@@ -415,6 +444,7 @@ export interface Database {
   paper_exit_fills: PaperExitFillTable;
   paper_exit_settlements: PaperExitSettlementTable;
   paper_position_monitoring_tasks: PaperPositionMonitoringTaskTable;
+  paper_market_shadow_observations: PaperMarketShadowObservationTable;
 }
 
 export function createDatabasePoolConfig(config: DatabaseConfig): PoolConfig {

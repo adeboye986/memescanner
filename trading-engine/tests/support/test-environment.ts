@@ -206,6 +206,7 @@ export async function resetDatabaseSchema(database: Kysely<Database>): Promise<v
     drop table if exists paper_exit_settlements cascade;
     drop table if exists paper_exit_fills cascade;
     drop table if exists paper_exit_orders cascade;
+    drop table if exists paper_market_shadow_observations cascade;
     drop table if exists paper_position_monitoring_tasks cascade;
     drop table if exists paper_positions cascade;
     drop table if exists paper_fills cascade;
@@ -216,6 +217,7 @@ export async function resetDatabaseSchema(database: Kysely<Database>): Promise<v
     drop table if exists paper_wallets cascade;
     drop function if exists assert_paper_ledger_transaction_balanced();
     drop function if exists reject_paper_financial_evidence_mutation();
+    drop function if exists reject_paper_market_shadow_observation_mutation();
     drop table if exists paper_position_lifecycle_decisions cascade;
     drop table if exists paper_position_lifecycles cascade;
     drop function if exists reject_paper_lifecycle_decision_mutation();

@@ -6,8 +6,10 @@ import {
   type Updateable,
 } from 'kysely';
 
+import { newEngineId, type EngineId } from '../../../shared/ids/id.js';
 import type {
   Database,
+  PaperMarketShadowObservationTable,
   PaperPositionMonitoringTaskTable,
 } from '../client.js';
 
@@ -15,9 +17,12 @@ export const SOLANA_MAINNET_ID = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 
 export type PaperPositionMonitoringTaskRecord = Selectable<PaperPositionMonitoringTaskTable>;
 type Connection = Kysely<Database> | Transaction<Database>;
+type ShadowOutcome = PaperMarketShadowObservationTable['outcome'];
 
 export interface PaperMarketObservationSnapshot {
   readonly provider: 'dexscreener';
+  readonly pairAddress: string | null;
+  readonly dex: string | null;
   readonly marketCapUsd: string;
   readonly priceUsd: string;
   readonly liquidityUsd: string | null;
@@ -32,7 +37,15 @@ export interface CreatePaperPositionMonitoringTask {
   readonly dueAt: Date;
 }
 
+export interface PaperMarketRequestDetails {
+  readonly requestId: EngineId;
+  readonly startedAt: Date;
+  readonly receivedAt: Date;
+  readonly latencyMs: number;
+}
+
 export interface PaperMonitoringFailure {
+  readonly outcome: 'failed' | 'unavailable';
   readonly errorCode: string;
   readonly httpStatus: number | null;
   readonly retryAfterMs: number | null;
@@ -59,7 +72,7 @@ export interface PaperPositionMonitoringStore {
     task: PaperPositionMonitoringTaskRecord,
     leaseOwner: string,
     observation: PaperMarketObservationSnapshot,
-    attemptedAt: Date,
+    request: PaperMarketRequestDetails,
     intervalMs: number,
   ) => Promise<'rescheduled' | 'completed'>;
   readonly recordFailure: (
@@ -67,7 +80,7 @@ export interface PaperPositionMonitoringStore {
     task: PaperPositionMonitoringTaskRecord,
     leaseOwner: string,
     failure: PaperMonitoringFailure,
-    attemptedAt: Date,
+    request: PaperMarketRequestDetails,
     intervalMs: number,
     maximumBackoffMs: number,
   ) => Promise<'rescheduled' | 'completed'>;
@@ -79,6 +92,10 @@ export interface PaperPositionMonitoringStore {
 }
 
 export class PaperPositionMonitoringRepository implements PaperPositionMonitoringStore {
+  public constructor(
+    private readonly createId: () => EngineId = newEngineId,
+  ) {}
+
   public async createForPosition(
     connection: Connection,
     input: CreatePaperPositionMonitoringTask,
@@ -207,34 +224,53 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
     task: PaperPositionMonitoringTaskRecord,
     leaseOwner: string,
     observation: PaperMarketObservationSnapshot,
-    attemptedAt: Date,
+    request: PaperMarketRequestDetails,
     intervalMs: number,
   ): Promise<'rescheduled' | 'completed'> {
+    this.assertRequestDetails(request);
+
     return database.transaction().execute(async (transaction) => {
       const current = await this.lockOwnedTask(transaction, task.position_id, leaseOwner);
-      const position = await transaction
-        .selectFrom('paper_positions')
-        .select('state')
-        .where('id', '=', task.position_id)
-        .forUpdate()
-        .executeTakeFirstOrThrow();
+      const position = await this.lockPositionState(transaction, task.position_id);
 
-      if (position.state !== 'open') {
-        await this.complete(transaction, current, attemptedAt);
+      if (position !== 'open') {
+        await this.appendObservation(
+          transaction,
+          current,
+          'discarded_closed',
+          request,
+          observation,
+          null,
+          current.consecutive_failure_count,
+          null,
+        );
+        await this.complete(transaction, current, request.receivedAt);
 
         return 'completed';
       }
 
+      const nextAttemptAt = new Date(request.receivedAt.getTime() + intervalMs);
+      await this.appendObservation(
+        transaction,
+        current,
+        'observed',
+        request,
+        observation,
+        null,
+        0,
+        nextAttemptAt,
+      );
       await transaction
         .updateTable('paper_position_monitoring_tasks')
         .set({
           monitoring_state: 'pending',
-          next_observation_due_at: new Date(attemptedAt.getTime() + intervalMs),
+          next_observation_due_at: nextAttemptAt,
           lease_owner: null,
           lease_expires_at: null,
           last_successful_observation_at: observation.fetchedAt,
-          last_fetch_attempted_at: attemptedAt,
+          last_fetch_attempted_at: request.receivedAt,
           consecutive_failure_count: 0,
+          next_attempt_sequence: current.next_attempt_sequence + 1,
           provider_backoff_until: null,
           last_error_code: null,
           last_http_status: null,
@@ -244,7 +280,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
           last_liquidity_usd: observation.liquidityUsd,
           last_fetched_at: observation.fetchedAt,
           last_provider_observed_at: observation.providerObservedAt,
-          updated_at: attemptedAt,
+          updated_at: request.receivedAt,
         })
         .where('position_id', '=', current.position_id)
         .where('monitoring_state', '=', 'processing')
@@ -260,33 +296,48 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
     task: PaperPositionMonitoringTaskRecord,
     leaseOwner: string,
     failure: PaperMonitoringFailure,
-    attemptedAt: Date,
+    request: PaperMarketRequestDetails,
     intervalMs: number,
     maximumBackoffMs: number,
   ): Promise<'rescheduled' | 'completed'> {
     this.assertSafeErrorCode(failure.errorCode);
+    this.assertRequestDetails(request);
 
     return database.transaction().execute(async (transaction) => {
       const current = await this.lockOwnedTask(transaction, task.position_id, leaseOwner);
-      const position = await transaction
-        .selectFrom('paper_positions')
-        .select('state')
-        .where('id', '=', task.position_id)
-        .forUpdate()
-        .executeTakeFirstOrThrow();
+      const position = await this.lockPositionState(transaction, task.position_id);
+      const failures = current.consecutive_failure_count + 1;
 
-      if (position.state !== 'open') {
-        await this.complete(transaction, current, attemptedAt);
+      if (position !== 'open') {
+        await this.appendObservation(
+          transaction,
+          current,
+          'discarded_closed',
+          request,
+          null,
+          failure,
+          failures,
+          null,
+        );
+        await this.complete(transaction, current, request.receivedAt);
 
         return 'completed';
       }
 
-      const failures = current.consecutive_failure_count + 1;
       const exponential = intervalMs * 2 ** Math.min(failures - 1, 20);
       const requested = Math.max(exponential, failure.retryAfterMs ?? 0);
       const backoffMs = Math.min(maximumBackoffMs, requested);
-      const nextAttemptAt = new Date(attemptedAt.getTime() + backoffMs);
-
+      const nextAttemptAt = new Date(request.receivedAt.getTime() + backoffMs);
+      await this.appendObservation(
+        transaction,
+        current,
+        failure.outcome,
+        request,
+        null,
+        failure,
+        failures,
+        nextAttemptAt,
+      );
       await transaction
         .updateTable('paper_position_monitoring_tasks')
         .set({
@@ -294,12 +345,13 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
           next_observation_due_at: nextAttemptAt,
           lease_owner: null,
           lease_expires_at: null,
-          last_fetch_attempted_at: attemptedAt,
+          last_fetch_attempted_at: request.receivedAt,
           consecutive_failure_count: failures,
+          next_attempt_sequence: current.next_attempt_sequence + 1,
           provider_backoff_until: nextAttemptAt,
           last_error_code: failure.errorCode,
           last_http_status: failure.httpStatus,
-          updated_at: attemptedAt,
+          updated_at: request.receivedAt,
         })
         .where('position_id', '=', current.position_id)
         .where('monitoring_state', '=', 'processing')
@@ -332,6 +384,49 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
     return Number(result.numUpdatedRows);
   }
 
+  private async appendObservation(
+    transaction: Transaction<Database>,
+    task: PaperPositionMonitoringTaskRecord,
+    outcome: ShadowOutcome,
+    request: PaperMarketRequestDetails,
+    observation: PaperMarketObservationSnapshot | null,
+    failure: PaperMonitoringFailure | null,
+    consecutiveFailureCount: number,
+    nextObservationDueAt: Date | null,
+  ): Promise<void> {
+    const values: Insertable<PaperMarketShadowObservationTable> = {
+      id: this.createId(),
+      position_id: task.position_id,
+      attempt_sequence: task.next_attempt_sequence,
+      request_id: request.requestId,
+      scheduled_due_at: task.next_observation_due_at,
+      network_id: task.network_id,
+      asset_address: task.asset_address,
+      outcome,
+      provider: 'dexscreener',
+      pair_address: observation?.pairAddress ?? null,
+      dex: observation?.dex ?? null,
+      market_cap_usd: observation?.marketCapUsd ?? null,
+      price_usd: observation?.priceUsd ?? null,
+      liquidity_usd: observation?.liquidityUsd ?? null,
+      request_started_at: request.startedAt,
+      response_received_at: request.receivedAt,
+      provider_latency_ms: request.latencyMs,
+      provider_observed_at: observation?.providerObservedAt ?? null,
+      fetched_at: observation?.fetchedAt ?? null,
+      error_code: failure?.errorCode ?? null,
+      http_status: failure?.httpStatus ?? null,
+      retry_after_ms: failure?.retryAfterMs ?? null,
+      consecutive_failure_count: consecutiveFailureCount,
+      next_observation_due_at: nextObservationDueAt,
+    };
+
+    await transaction
+      .insertInto('paper_market_shadow_observations')
+      .values(values)
+      .executeTakeFirstOrThrow();
+  }
+
   private async lockOwnedTask(
     transaction: Transaction<Database>,
     positionId: string,
@@ -353,6 +448,20 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
     return task;
   }
 
+  private async lockPositionState(
+    transaction: Transaction<Database>,
+    positionId: string,
+  ): Promise<'closed' | 'open'> {
+    const position = await transaction
+      .selectFrom('paper_positions')
+      .select('state')
+      .where('id', '=', positionId)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
+
+    return position.state;
+  }
+
   private async complete(
     transaction: Transaction<Database>,
     task: PaperPositionMonitoringTaskRecord,
@@ -364,10 +473,21 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         monitoring_state: 'completed',
         lease_owner: null,
         lease_expires_at: null,
+        next_attempt_sequence: task.next_attempt_sequence + 1,
         updated_at: now,
       })
       .where('position_id', '=', task.position_id)
       .executeTakeFirstOrThrow();
+  }
+
+  private assertRequestDetails(request: PaperMarketRequestDetails): void {
+    const measuredLatencyMs = request.receivedAt.getTime() - request.startedAt.getTime();
+
+    if (request.latencyMs < 0
+      || !Number.isInteger(request.latencyMs)
+      || request.latencyMs !== measuredLatencyMs) {
+      throw new Error('PAPER monitoring request timing is invalid');
+    }
   }
 
   private assertSafeErrorCode(errorCode: string): void {

@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 
 import type { Database } from '../infrastructure/database/client.js';
 import type {
+  PaperMarketRequestDetails,
   PaperMonitoringFailure,
   PaperPositionMonitoringStore,
   PaperPositionMonitoringTaskRecord,
@@ -74,6 +75,8 @@ export class PaperMarketMonitoringCycle {
 
     for (let index = 0; index < tasks.length; index += DEXSCREENER_MAX_TOKEN_ADDRESSES) {
       const batch = tasks.slice(index, index + DEXSCREENER_MAX_TOKEN_ADDRESSES);
+      const requestStartedAt = this.now();
+      const requestId = newEngineId(requestStartedAt.getTime());
       providerRequests += 1;
       let results: readonly PaperMarketFetchResult[];
 
@@ -82,6 +85,7 @@ export class PaperMarketMonitoringCycle {
           batch.map((task) => task.asset_address),
         );
       } catch (error) {
+        const request = this.requestDetails(requestId, requestStartedAt);
         const providerFailure = providerError(error);
         this.logger.warn(
           {
@@ -93,7 +97,7 @@ export class PaperMarketMonitoringCycle {
         );
 
         for (const task of batch) {
-          const outcome = await this.failTask(task, providerFailure);
+          const outcome = await this.failTask(task, providerFailure, request);
           failed += outcome === 'rescheduled' ? 1 : 0;
           completed += outcome === 'completed' ? 1 : 0;
         }
@@ -101,6 +105,7 @@ export class PaperMarketMonitoringCycle {
         continue;
       }
 
+      const request = this.requestDetails(requestId, requestStartedAt);
       const byAddress = new Map(results.map((result) => [
         result.available ? result.observation.assetAddress : result.assetAddress,
         result,
@@ -116,13 +121,15 @@ export class PaperMarketMonitoringCycle {
             this.leaseOwner,
             {
               provider: result.observation.provider,
+              pairAddress: result.observation.pairAddress,
+              dex: result.observation.dex,
               marketCapUsd: result.observation.marketCapUsd,
               priceUsd: result.observation.priceUsd,
               liquidityUsd: result.observation.liquidityUsd,
               fetchedAt: result.observation.fetchedAt,
               providerObservedAt: result.observation.providerObservedAt,
             },
-            this.now(),
+            request,
             this.policy.intervalMs,
           );
           succeeded += outcome === 'rescheduled' ? 1 : 0;
@@ -131,8 +138,9 @@ export class PaperMarketMonitoringCycle {
           const outcome = await this.failTask(
             task,
             result === undefined
-              ? failure('PROVIDER_RESPONSE_MALFORMED')
-              : failure(result.errorCode),
+              ? failure('PROVIDER_RESPONSE_MALFORMED', 'failed')
+              : failure(result.errorCode, 'unavailable'),
+            request,
           );
           failed += outcome === 'rescheduled' ? 1 : 0;
           completed += outcome === 'completed' ? 1 : 0;
@@ -162,16 +170,32 @@ export class PaperMarketMonitoringCycle {
   private async failTask(
     task: PaperPositionMonitoringTaskRecord,
     providerFailure: PaperMonitoringFailure,
+    request: PaperMarketRequestDetails,
   ): Promise<'rescheduled' | 'completed'> {
     return this.repository.recordFailure(
       this.database,
       task,
       this.leaseOwner,
       providerFailure,
-      this.now(),
+      request,
       this.policy.intervalMs,
       this.policy.maximumBackoffMs,
     );
+  }
+
+  private requestDetails(
+    requestId: PaperMarketRequestDetails['requestId'],
+    startedAt: Date,
+  ): PaperMarketRequestDetails {
+    const measuredAt = this.now();
+    const receivedAt = measuredAt.getTime() < startedAt.getTime() ? startedAt : measuredAt;
+
+    return {
+      requestId,
+      startedAt,
+      receivedAt,
+      latencyMs: receivedAt.getTime() - startedAt.getTime(),
+    };
   }
 
   private summary(enabled: boolean): PaperMarketMonitoringSummary {
@@ -190,17 +214,22 @@ export class PaperMarketMonitoringCycle {
 function providerError(error: unknown): PaperMonitoringFailure {
   if (error instanceof PaperMarketProviderError) {
     return {
+      outcome: 'failed',
       errorCode: error.errorCode,
       httpStatus: error.statusCode,
       retryAfterMs: error.retryAfterMs,
     };
   }
 
-  return failure('PROVIDER_UNEXPECTED_FAILURE');
+  return failure('PROVIDER_UNEXPECTED_FAILURE', 'failed');
 }
 
-function failure(errorCode: string): PaperMonitoringFailure {
+function failure(
+  errorCode: string,
+  outcome: PaperMonitoringFailure['outcome'],
+): PaperMonitoringFailure {
   return {
+    outcome,
     errorCode,
     httpStatus: null,
     retryAfterMs: null,

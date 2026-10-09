@@ -6,6 +6,7 @@ import type { ExecutePaperEntryCommand } from '../../src/application/commands/ex
 import { ExecutePaperEntryCommandHandler } from '../../src/application/handlers/execute-paper-entry-command-handler.js';
 import { RecordOpportunityCommandHandler } from '../../src/application/handlers/record-opportunity-command-handler.js';
 import { SOLANA_MAINNET_ID, type OpportunityCommand } from '../../src/contracts/http/opportunity-command.schema.js';
+import { newEngineId } from '../../src/shared/ids/id.js';
 import type { EngineConfig } from '../../src/config/env.js';
 import { createDatabase, type Database } from '../../src/infrastructure/database/client.js';
 import { CommandInboxRepository } from '../../src/infrastructure/database/repositories/command-inbox-repository.js';
@@ -13,7 +14,11 @@ import { OpportunityEvaluationRepository } from '../../src/infrastructure/databa
 import { OpportunityRepository } from '../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../src/infrastructure/database/repositories/outbox-repository.js';
 import { PaperEntryRepository } from '../../src/infrastructure/database/repositories/paper-entry-repository.js';
-import { PaperPositionMonitoringRepository } from '../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
+import {
+  PaperPositionMonitoringRepository,
+  type PaperMarketObservationSnapshot,
+  type PaperMarketRequestDetails,
+} from '../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import { OpportunityEvaluationDispatcher } from '../../src/workers/opportunity-evaluation-dispatcher.js';
 import {
   createTestIdentity,
@@ -26,6 +31,31 @@ import {
 const traceparent = '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01';
 const now = new Date();
 const assetAddress = 'So11111111111111111111111111111111111111112';
+
+function requestDetails(
+  receivedAt: Date,
+  latencyMs = 0,
+): PaperMarketRequestDetails {
+  return {
+    requestId: newEngineId(receivedAt.getTime()),
+    startedAt: new Date(receivedAt.getTime() - latencyMs),
+    receivedAt,
+    latencyMs,
+  };
+}
+
+function marketObservation(): PaperMarketObservationSnapshot {
+  return {
+    provider: 'dexscreener',
+    pairAddress: 'pair-address',
+    dex: 'raydium',
+    marketCapUsd: '1000',
+    priceUsd: '0.1',
+    liquidityUsd: '500',
+    fetchedAt: now,
+    providerObservedAt: null,
+  };
+}
 
 describe('engine-owned PAPER financial entry', () => {
   let environment: TestEnvironment;
@@ -107,6 +137,7 @@ describe('engine-owned PAPER financial entry', () => {
       asset_address: assetAddress,
       monitoring_state: 'pending',
       consecutive_failure_count: 0,
+      next_attempt_sequence: 1,
     });
     expect(monitoringTask.next_observation_due_at).toEqual(now);
     expect(await entries.accountBalance(database, wallet.id, 'invested')).toBe('0.1');
@@ -302,6 +333,8 @@ describe('engine-owned PAPER financial entry', () => {
     ]);
     const claimed = [...firstClaims, ...secondClaims];
 
+    expect(await count('paper_market_shadow_observations')).toBe(0);
+
     expect(claimed).toHaveLength(1);
     expect(claimed[0]?.position_id).toBe(opened.positionId);
     await expect(monitoring.claimDue(
@@ -322,8 +355,240 @@ describe('engine-owned PAPER financial entry', () => {
         position_id: opened.positionId,
         monitoring_state: 'processing',
         lease_owner: '01M50000000000000000000012',
+        next_attempt_sequence: 1,
       }),
     ]);
+  });
+
+  it('atomically persists one append-only observed sample under concurrent completion', async () => {
+    const source = await evaluatedOpportunity('1101');
+    const opened = await handler().execute(entryCommand(source, 'paper-entry-1101'));
+    const monitoring = new PaperPositionMonitoringRepository();
+    const owner = '01M50000000000000000000101';
+    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+
+    if (claimed === undefined) {
+      expect.fail('Expected the new monitoring task to be claimable');
+    }
+
+    const ledgerEntriesBefore = await count('paper_ledger_entries');
+    const outboxEventsBefore = await count('event_outbox');
+    const request = requestDetails(new Date(now.getTime() + 250), 250);
+    const results = await Promise.allSettled([
+      monitoring.recordSuccess(
+        database,
+        claimed,
+        owner,
+        marketObservation(),
+        request,
+        5_000,
+      ),
+      monitoring.recordSuccess(
+        database,
+        claimed,
+        owner,
+        marketObservation(),
+        request,
+        5_000,
+      ),
+    ]);
+    const observation = await database
+      .selectFrom('paper_market_shadow_observations')
+      .selectAll()
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+    const taskAfter = await database
+      .selectFrom('paper_position_monitoring_tasks')
+      .selectAll()
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(observation).toMatchObject({
+      position_id: opened.positionId,
+      attempt_sequence: 1,
+      request_id: request.requestId,
+      outcome: 'observed',
+      provider: 'dexscreener',
+      pair_address: 'pair-address',
+      dex: 'raydium',
+      market_cap_usd: '1000',
+      price_usd: '0.1',
+      liquidity_usd: '500',
+      provider_latency_ms: 250,
+      consecutive_failure_count: 0,
+    });
+    expect(taskAfter).toMatchObject({
+      monitoring_state: 'pending',
+      next_attempt_sequence: 2,
+      consecutive_failure_count: 0,
+    });
+    expect(await count('paper_ledger_entries')).toBe(ledgerEntriesBefore);
+    expect(await count('event_outbox')).toBe(outboxEventsBefore);
+    expect(await count('paper_position_lifecycle_decisions')).toBe(0);
+    expect(await count('paper_exit_settlements')).toBe(0);
+    await expect(database
+      .updateTable('paper_market_shadow_observations')
+      .set({ error_code: 'CHANGED' })
+      .where('id', '=', observation.id)
+      .execute()).rejects.toThrow(/append-only/);
+    await expect(database
+      .deleteFrom('paper_market_shadow_observations')
+      .where('id', '=', observation.id)
+      .execute()).rejects.toThrow(/append-only/);
+  });
+
+  it('persists unavailable provider results with retry evidence', async () => {
+    const source = await evaluatedOpportunity('1102');
+    const opened = await handler().execute(entryCommand(source, 'paper-entry-1102'));
+    const monitoring = new PaperPositionMonitoringRepository();
+    const owner = '01M50000000000000000000102';
+    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+
+    if (claimed === undefined) {
+      expect.fail('Expected the new monitoring task to be claimable');
+    }
+
+    await monitoring.recordFailure(
+      database,
+      claimed,
+      owner,
+      {
+        outcome: 'unavailable',
+        errorCode: 'PROVIDER_PAIR_NOT_FOUND',
+        httpStatus: null,
+        retryAfterMs: null,
+      },
+      requestDetails(now),
+      5_000,
+      60_000,
+    );
+    const observation = await database
+      .selectFrom('paper_market_shadow_observations')
+      .selectAll()
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+
+    expect(observation).toMatchObject({
+      attempt_sequence: 1,
+      outcome: 'unavailable',
+      error_code: 'PROVIDER_PAIR_NOT_FOUND',
+      http_status: null,
+      retry_after_ms: null,
+      consecutive_failure_count: 1,
+      market_cap_usd: null,
+      price_usd: null,
+    });
+    expect(observation.next_observation_due_at).toEqual(
+      new Date(now.getTime() + 5_000),
+    );
+  });
+
+  it('discards a successful provider response when the position closed in flight', async () => {
+    const source = await evaluatedOpportunity('1103');
+    const opened = await handler().execute(entryCommand(source, 'paper-entry-1103'));
+    const monitoring = new PaperPositionMonitoringRepository();
+    const owner = '01M50000000000000000000103';
+    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+
+    if (claimed === undefined) {
+      expect.fail('Expected the new monitoring task to be claimable');
+    }
+
+    await database.updateTable('paper_positions')
+      .set({ state: 'closed', closed_at: now, updated_at: now })
+      .where('id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+    await expect(monitoring.recordSuccess(
+      database,
+      claimed,
+      owner,
+      marketObservation(),
+      requestDetails(new Date(now.getTime() + 500)),
+      5_000,
+    )).resolves.toBe('completed');
+    const observation = await database
+      .selectFrom('paper_market_shadow_observations')
+      .selectAll()
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+    const taskAfter = await database
+      .selectFrom('paper_position_monitoring_tasks')
+      .selectAll()
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+
+    expect(observation).toMatchObject({
+      outcome: 'discarded_closed',
+      attempt_sequence: 1,
+      market_cap_usd: '1000',
+      price_usd: '0.1',
+      next_observation_due_at: null,
+    });
+    expect(taskAfter).toMatchObject({
+      monitoring_state: 'completed',
+      next_attempt_sequence: 2,
+    });
+    expect(await count('paper_position_lifecycle_decisions')).toBe(0);
+    expect(await count('paper_exit_settlements')).toBe(0);
+  });
+
+  it('rolls back the sample when its corresponding task reschedule fails', async () => {
+    const source = await evaluatedOpportunity('1104');
+    const opened = await handler().execute(entryCommand(source, 'paper-entry-1104'));
+    const monitoring = new PaperPositionMonitoringRepository();
+    const owner = '01M50000000000000000000104';
+    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+
+    if (claimed === undefined) {
+      expect.fail('Expected the new monitoring task to be claimable');
+    }
+
+    await sql`
+      create function reject_shadow_task_reschedule_for_test()
+      returns trigger language plpgsql as $function$
+      begin
+        raise exception 'forced task reschedule failure';
+      end;
+      $function$
+    `.execute(database);
+    await sql`
+      create trigger reject_shadow_task_reschedule_for_test
+      before update on paper_position_monitoring_tasks
+      for each row execute function reject_shadow_task_reschedule_for_test()
+    `.execute(database);
+
+    try {
+      await expect(monitoring.recordSuccess(
+        database,
+        claimed,
+        owner,
+        marketObservation(),
+        requestDetails(now),
+        5_000,
+      )).rejects.toThrow(/forced task reschedule failure/);
+      expect(await count('paper_market_shadow_observations')).toBe(0);
+      const taskAfter = await database
+        .selectFrom('paper_position_monitoring_tasks')
+        .selectAll()
+        .where('position_id', '=', opened.positionId)
+        .executeTakeFirstOrThrow();
+
+      expect(taskAfter).toMatchObject({
+        monitoring_state: 'processing',
+        next_attempt_sequence: 1,
+        lease_owner: owner,
+      });
+    } finally {
+      await sql`
+        drop trigger if exists reject_shadow_task_reschedule_for_test
+        on paper_position_monitoring_tasks
+      `.execute(database);
+      await sql`
+        drop function if exists reject_shadow_task_reschedule_for_test()
+      `.execute(database);
+    }
   });
 
   it('reschedules safe provider failures with bounded retry timing', async () => {
@@ -342,11 +607,12 @@ describe('engine-owned PAPER financial entry', () => {
       claimed,
       owner,
       {
+        outcome: 'failed',
         errorCode: 'PROVIDER_RATE_LIMITED',
         httpStatus: 429,
         retryAfterMs: 12_000,
       },
-      now,
+      requestDetails(now),
       5_000,
       60_000,
     );
@@ -363,6 +629,16 @@ describe('engine-owned PAPER financial entry', () => {
     });
     expect(failed.next_observation_due_at).toEqual(new Date(now.getTime() + 12_000));
     expect(failed.provider_backoff_until).toEqual(new Date(now.getTime() + 12_000));
+    expect(await database
+      .selectFrom('paper_market_shadow_observations')
+      .select(['attempt_sequence', 'outcome', 'error_code', 'retry_after_ms'])
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      attempt_sequence: 1,
+      outcome: 'failed',
+      error_code: 'PROVIDER_RATE_LIMITED',
+      retry_after_ms: 12_000,
+    });
     await expect(monitoring.claimDue(
       database,
       owner,
@@ -387,11 +663,12 @@ describe('engine-owned PAPER financial entry', () => {
       secondClaim,
       owner,
       {
+        outcome: 'failed',
         errorCode: 'PROVIDER_RATE_LIMITED',
         httpStatus: 429,
         retryAfterMs: 120_000,
       },
-      new Date(now.getTime() + 12_000),
+      requestDetails(new Date(now.getTime() + 12_000)),
       5_000,
       60_000,
     );
@@ -402,6 +679,15 @@ describe('engine-owned PAPER financial entry', () => {
 
     expect(capped.consecutive_failure_count).toBe(2);
     expect(capped.next_observation_due_at).toEqual(new Date(now.getTime() + 72_000));
+    expect(await database
+      .selectFrom('paper_market_shadow_observations')
+      .select(['attempt_sequence', 'outcome', 'consecutive_failure_count'])
+      .where('position_id', '=', opened.positionId)
+      .orderBy('attempt_sequence', 'asc')
+      .execute()).toEqual([
+      { attempt_sequence: 1, outcome: 'failed', consecutive_failure_count: 1 },
+      { attempt_sequence: 2, outcome: 'failed', consecutive_failure_count: 2 },
+    ]);
   });
 
   it('retires closed positions without lifecycle decisions or financial effects', async () => {
