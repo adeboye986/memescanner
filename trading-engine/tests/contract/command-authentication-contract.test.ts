@@ -15,6 +15,7 @@ import { OutboxRepository } from '../../src/infrastructure/database/repositories
 import { PaperFinancialLifecycleRepository } from '../../src/infrastructure/database/repositories/paper-financial-lifecycle-repository.js';
 import { PaperPositionLifecycleRepository } from '../../src/infrastructure/database/repositories/paper-position-lifecycle-repository.js';
 import { PaperEntryRepository } from '../../src/infrastructure/database/repositories/paper-entry-repository.js';
+import { PaperPositionMonitoringRepository } from '../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import {
   createServiceToken,
   createTestIdentity,
@@ -219,6 +220,7 @@ function createApp(): {
         database,
         commandInbox,
         new PaperEntryRepository(),
+        new PaperPositionMonitoringRepository(),
         outbox,
         {
           enabled: true,

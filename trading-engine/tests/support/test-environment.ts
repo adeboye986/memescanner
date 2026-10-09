@@ -206,6 +206,7 @@ export async function resetDatabaseSchema(database: Kysely<Database>): Promise<v
     drop table if exists paper_exit_settlements cascade;
     drop table if exists paper_exit_fills cascade;
     drop table if exists paper_exit_orders cascade;
+    drop table if exists paper_position_monitoring_tasks cascade;
     drop table if exists paper_positions cascade;
     drop table if exists paper_fills cascade;
     drop table if exists paper_orders cascade;

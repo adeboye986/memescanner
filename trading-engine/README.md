@@ -285,6 +285,48 @@ before parsing, and record `event_id` before applying a projection. The Phase 1
 fake receiver implements those rules and acknowledges duplicate event IDs as a
 no-op.
 
+## PAPER market monitoring foundation (Phase 1)
+
+Phase 1 creates one durable `paper_position_monitoring_tasks` row in the same
+PostgreSQL transaction as every new engine-owned PAPER position. Exact command
+replay reuses the position and task, while a rolled-back entry leaves neither.
+The task records only scheduling, lease, provider-attempt, safe failure-code,
+and last-observed market diagnostics. It cannot invoke lifecycle evaluation,
+create HOLD/EXIT decisions, settle a wallet, write ledger entries, or emit a
+lifecycle decision event.
+
+`PAPER_MARKET_MONITORING_ENABLED` defaults to `false`. No API, worker,
+scheduler, or combined Hostinger runtime constructs or starts the Phase 1
+monitoring cycle, even if someone changes that value. Runtime activation and
+shared workflow leadership are deliberately deferred to Phase 2.
+
+Laravel remains the authoritative observation producer in production until
+Phase 2 explicitly activates the engine monitor under PostgreSQL leadership.
+
+The provider adapter uses DexScreener's Solana token endpoint. It sends no API
+credential, preserves the requested base-token identity, chooses the valid pair
+with the greatest reported USD liquidity, and never substitutes FDV or another
+asset for missing market-cap data. Requests contain at most 30 addresses and
+have independent connection and total timeouts. Missing/malformed markets,
+HTTP failures, rate limiting, and transport failures become bounded retries
+with safe codes; response bodies and secrets are never persisted as errors.
+
+Operational diagnosis is read-only: inspect due time, state, lease expiry,
+failure count, safe error/status, and last successful fetch fields in
+`paper_position_monitoring_tasks`, joined to the authoritative
+`paper_positions` row. An expired processing lease is claimable after a crash,
+and tasks for closed positions are completed without fetching. Provider
+failures back off exponentially up to
+`PAPER_MARKET_MONITOR_MAXIMUM_BACKOFF_MS`, honoring a smaller configured cap
+even when `Retry-After` is longer.
+
+No existing open position is silently enrolled by migration 007. A later
+backfill, if approved, must be an explicit, auditable operation that selects
+only open engine-owned Solana positions, verifies their immutable network and
+asset identity, inserts with `ON CONFLICT (position_id) DO NOTHING`, and is
+tested on a dedicated database before production use. Phase 1 does not provide
+or execute that operation.
+
 ## Operational behavior
 
 - PostgreSQL is authoritative for command idempotency and outbox state.

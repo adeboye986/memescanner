@@ -11,6 +11,7 @@ import type {
   PaperEntryRepository,
   PaperEntryIdentifiers,
 } from '../../infrastructure/database/repositories/paper-entry-repository.js';
+import type { PaperPositionMonitoringRepository } from '../../infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import { compareCanonicalDecimals, subtractCanonicalDecimals } from '../../shared/amount/canonical-decimal.js';
 import { ApplicationError } from '../../shared/errors/application-error.js';
 import { newEngineId, type EngineId } from '../../shared/ids/id.js';
@@ -28,6 +29,7 @@ export class ExecutePaperEntryCommandHandler {
     private readonly database: Kysely<Database>,
     private readonly commandInbox: CommandInboxRepository,
     private readonly entries: PaperEntryRepository,
+    private readonly monitoring: PaperPositionMonitoringRepository,
     private readonly outbox: OutboxRepository,
     private readonly policy: PaperEntryPolicy,
     private readonly createId: () => EngineId = newEngineId,
@@ -176,6 +178,12 @@ export class ExecutePaperEntryCommandHandler {
           strategySha256,
           acceptedAt,
         }, wallet);
+        await this.monitoring.createForPosition(transaction, {
+          positionId: ids.positionId,
+          networkId: command.body.network.id,
+          assetAddress: command.body.asset.address,
+          dueAt: acceptedAt,
+        });
         const availableAfter = subtractCanonicalDecimals(
           availableBefore,
           this.policy.entryNotionalNative,

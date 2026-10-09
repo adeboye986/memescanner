@@ -40,6 +40,14 @@ export interface EngineConfig extends DatabaseConfig {
   readonly paperEntryIntentMaxAgeSeconds: number;
   readonly paperFinancialLifecycleEnabled: boolean;
   readonly paperObservationMaxAgeSeconds: number;
+  readonly paperMarketMonitoringEnabled: boolean;
+  readonly paperMarketMonitorIntervalMs: number;
+  readonly paperMarketMonitorBatchSize: number;
+  readonly paperMarketProviderConnectionTimeoutMs: number;
+  readonly paperMarketProviderTimeoutMs: number;
+  readonly paperMarketMonitorRequestBudget: number;
+  readonly paperMarketMonitorMaximumBackoffMs: number;
+  readonly paperMarketMonitorLeaseDurationMs: number;
   readonly shutdownTimeoutMs: number;
 }
 
@@ -223,6 +231,41 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     outboxPollIntervalMs,
     60_000,
   );
+  const paperMarketMonitorIntervalMs = integer(
+    env,
+    'PAPER_MARKET_MONITOR_INTERVAL_MS',
+    5_000,
+    1_000,
+    300_000,
+  );
+  const paperMarketProviderConnectionTimeoutMs = integer(
+    env,
+    'PAPER_MARKET_PROVIDER_CONNECTION_TIMEOUT_MS',
+    3_000,
+    100,
+    30_000,
+  );
+  const paperMarketProviderTimeoutMs = integer(
+    env,
+    'PAPER_MARKET_PROVIDER_TIMEOUT_MS',
+    8_000,
+    paperMarketProviderConnectionTimeoutMs,
+    60_000,
+  );
+  const paperMarketMonitorMaximumBackoffMs = integer(
+    env,
+    'PAPER_MARKET_MONITOR_MAXIMUM_BACKOFF_MS',
+    60_000,
+    paperMarketMonitorIntervalMs,
+    3_600_000,
+  );
+  const paperMarketMonitorLeaseDurationMs = integer(
+    env,
+    'PAPER_MARKET_MONITOR_LEASE_DURATION_MS',
+    30_000,
+    paperMarketProviderTimeoutMs,
+    600_000,
+  );
   const database = loadDatabaseConfig(env);
 
   return {
@@ -293,6 +336,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       3_600,
     ),
     shutdownTimeoutMs: integer(env, 'SHUTDOWN_TIMEOUT_MS', 15_000, 1_000, 60_000),
+    paperMarketMonitoringEnabled: boolean(env, 'PAPER_MARKET_MONITORING_ENABLED', false),
+    paperMarketMonitorIntervalMs,
+    paperMarketMonitorBatchSize: integer(env, 'PAPER_MARKET_MONITOR_BATCH_SIZE', 30, 1, 300),
+    paperMarketProviderConnectionTimeoutMs,
+    paperMarketProviderTimeoutMs,
+    paperMarketMonitorRequestBudget: integer(env, 'PAPER_MARKET_MONITOR_REQUEST_BUDGET', 1, 1, 20),
+    paperMarketMonitorMaximumBackoffMs,
+    paperMarketMonitorLeaseDurationMs,
   };
 }
 

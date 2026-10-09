@@ -282,4 +282,54 @@ describe('environment configuration', () => {
       }),
     ).toThrow(/Ed25519 SPKI DER public key/);
   });
+  it('defaults PAPER market monitoring off with bounded operational settings', () => {
+    const config = loadConfig(validEnvironment());
+
+    expect(config.paperMarketMonitoringEnabled).toBe(false);
+    expect(config.paperMarketMonitorIntervalMs).toBe(5_000);
+    expect(config.paperMarketMonitorBatchSize).toBe(30);
+    expect(config.paperMarketProviderConnectionTimeoutMs).toBe(3_000);
+    expect(config.paperMarketProviderTimeoutMs).toBe(8_000);
+    expect(config.paperMarketMonitorRequestBudget).toBe(1);
+    expect(config.paperMarketMonitorMaximumBackoffMs).toBe(60_000);
+    expect(config.paperMarketMonitorLeaseDurationMs).toBe(30_000);
+  });
+
+  it('accepts bounded PAPER market monitoring configuration', () => {
+    const config = loadConfig({
+      ...validEnvironment(),
+      PAPER_MARKET_MONITORING_ENABLED: 'true',
+      PAPER_MARKET_MONITOR_INTERVAL_MS: '10000',
+      PAPER_MARKET_MONITOR_BATCH_SIZE: '60',
+      PAPER_MARKET_PROVIDER_CONNECTION_TIMEOUT_MS: '2000',
+      PAPER_MARKET_PROVIDER_TIMEOUT_MS: '5000',
+      PAPER_MARKET_MONITOR_REQUEST_BUDGET: '2',
+      PAPER_MARKET_MONITOR_MAXIMUM_BACKOFF_MS: '120000',
+      PAPER_MARKET_MONITOR_LEASE_DURATION_MS: '45000',
+    });
+
+    expect(config.paperMarketMonitoringEnabled).toBe(true);
+    expect(config.paperMarketMonitorIntervalMs).toBe(10_000);
+    expect(config.paperMarketMonitorBatchSize).toBe(60);
+    expect(config.paperMarketProviderConnectionTimeoutMs).toBe(2_000);
+    expect(config.paperMarketProviderTimeoutMs).toBe(5_000);
+    expect(config.paperMarketMonitorRequestBudget).toBe(2);
+    expect(config.paperMarketMonitorMaximumBackoffMs).toBe(120_000);
+    expect(config.paperMarketMonitorLeaseDurationMs).toBe(45_000);
+  });
+
+  it.each([
+    ['PAPER_MARKET_MONITOR_INTERVAL_MS', '999'],
+    ['PAPER_MARKET_MONITOR_BATCH_SIZE', '0'],
+    ['PAPER_MARKET_PROVIDER_CONNECTION_TIMEOUT_MS', '99'],
+    ['PAPER_MARKET_PROVIDER_TIMEOUT_MS', '2999'],
+    ['PAPER_MARKET_MONITOR_REQUEST_BUDGET', '0'],
+    ['PAPER_MARKET_MONITOR_MAXIMUM_BACKOFF_MS', '4999'],
+    ['PAPER_MARKET_MONITOR_LEASE_DURATION_MS', '7999'],
+  ])('rejects unsafe PAPER market setting %s=%s', (name, value) => {
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      [name]: value,
+    })).toThrow();
+  });
 });

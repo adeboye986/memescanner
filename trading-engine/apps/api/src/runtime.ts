@@ -14,6 +14,7 @@ import { OpportunityRepository } from '../../../src/infrastructure/database/repo
 import { PaperEntryRepository } from '../../../src/infrastructure/database/repositories/paper-entry-repository.js';
 import { PaperFinancialLifecycleRepository } from '../../../src/infrastructure/database/repositories/paper-financial-lifecycle-repository.js';
 import { PaperPositionLifecycleRepository } from '../../../src/infrastructure/database/repositories/paper-position-lifecycle-repository.js';
+import { PaperPositionMonitoringRepository } from '../../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import { OutboxRepository } from '../../../src/infrastructure/database/repositories/outbox-repository.js';
 import {
   closeInOrder,
@@ -44,6 +45,7 @@ export async function startApi(
   const outbox = new OutboxRepository();
   const opportunities = new OpportunityRepository();
   const paperEntries = new PaperEntryRepository();
+  const paperMonitoring = new PaperPositionMonitoringRepository();
   const paperFinancials = new PaperFinancialLifecycleRepository();
   const paperPositions = new PaperPositionLifecycleRepository();
   const noopHandler = new AcceptNoopCommandHandler(
@@ -61,6 +63,7 @@ export async function startApi(
     database,
     commandInbox,
     paperEntries,
+    paperMonitoring,
     outbox,
     {
       enabled: options.config.paperEntryEnabled,

@@ -370,6 +370,30 @@ export interface PaperExitSettlementTable {
   created_at: ColumnType<Date, Date | string | undefined, never>;
 }
 
+export interface PaperPositionMonitoringTaskTable {
+  position_id: string;
+  network_id: string;
+  asset_address: string;
+  monitoring_state: 'pending' | 'processing' | 'completed';
+  next_observation_due_at: ColumnType<Date, Date | string, Date | string>;
+  lease_owner: string | null;
+  lease_expires_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  last_successful_observation_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  last_fetch_attempted_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  consecutive_failure_count: Generated<number>;
+  provider_backoff_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  last_error_code: string | null;
+  last_http_status: number | null;
+  last_provider: string | null;
+  last_market_cap_usd: string | null;
+  last_price_usd: string | null;
+  last_liquidity_usd: string | null;
+  last_fetched_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  last_provider_observed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 export interface Database {
   command_inbox: CommandInboxTable;
   event_outbox: EventOutboxTable;
@@ -390,6 +414,7 @@ export interface Database {
   paper_exit_orders: PaperExitOrderTable;
   paper_exit_fills: PaperExitFillTable;
   paper_exit_settlements: PaperExitSettlementTable;
+  paper_position_monitoring_tasks: PaperPositionMonitoringTaskTable;
 }
 
 export function createDatabasePoolConfig(config: DatabaseConfig): PoolConfig {

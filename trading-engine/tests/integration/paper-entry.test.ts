@@ -13,6 +13,7 @@ import { OpportunityEvaluationRepository } from '../../src/infrastructure/databa
 import { OpportunityRepository } from '../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../src/infrastructure/database/repositories/outbox-repository.js';
 import { PaperEntryRepository } from '../../src/infrastructure/database/repositories/paper-entry-repository.js';
+import { PaperPositionMonitoringRepository } from '../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import { OpportunityEvaluationDispatcher } from '../../src/workers/opportunity-evaluation-dispatcher.js';
 import {
   createTestIdentity,
@@ -68,6 +69,9 @@ describe('engine-owned PAPER financial entry', () => {
     const fill = await database.selectFrom('paper_fills').selectAll().executeTakeFirstOrThrow();
     const position = await database.selectFrom('paper_positions').selectAll().executeTakeFirstOrThrow();
     const lifecycle = await database.selectFrom('paper_position_lifecycles').selectAll().executeTakeFirstOrThrow();
+    const monitoringTask = await database.selectFrom('paper_position_monitoring_tasks')
+      .selectAll()
+      .executeTakeFirstOrThrow();
     const event = await database.selectFrom('event_outbox')
       .selectAll()
       .where('event_type', '=', 'paper.entry.executed.v1')
@@ -97,6 +101,14 @@ describe('engine-owned PAPER financial entry', () => {
       state: 'open',
     });
     expect(await entries.accountBalance(database, wallet.id, 'available')).toBe('4.9');
+    expect(monitoringTask).toMatchObject({
+      position_id: response.positionId,
+      network_id: SOLANA_MAINNET_ID,
+      asset_address: assetAddress,
+      monitoring_state: 'pending',
+      consecutive_failure_count: 0,
+    });
+    expect(monitoringTask.next_observation_due_at).toEqual(now);
     expect(await entries.accountBalance(database, wallet.id, 'invested')).toBe('0.1');
     expect(await unbalancedLedgerTransactions()).toBe(0);
     expect(event.envelope).toMatchObject({
@@ -134,6 +146,7 @@ describe('engine-owned PAPER financial entry', () => {
     const first = await handler().execute(firstCommand);
     const second = await handler().execute({ ...firstCommand, authJti: 'paper-entry-jti-replay' });
 
+    expect(await count('paper_position_monitoring_tasks')).toBe(1);
     expect(second).toEqual({ ...first, duplicate: true });
     expect(await count('paper_wallets')).toBe(1);
     expect(await count('paper_entry_intents')).toBe(1);
@@ -188,6 +201,7 @@ describe('engine-owned PAPER financial entry', () => {
     expect(new Set(results.map((result) => result.positionId)).size).toBe(1);
     expect(await entries.accountBalance(database, wallet.id, 'available')).toBe('4.9');
     expect(await count('paper_positions')).toBe(1);
+    expect(await count('paper_position_monitoring_tasks')).toBe(1);
   });
 
   it('rejects invalid and stale evaluations without partial financial writes', async () => {
@@ -260,6 +274,7 @@ describe('engine-owned PAPER financial entry', () => {
       database,
       commandInbox,
       entries,
+      new PaperPositionMonitoringRepository(),
       new FailingOutbox(),
       policy(),
       undefined,
@@ -271,7 +286,145 @@ describe('engine-owned PAPER financial entry', () => {
     expect(await count('paper_ledger_entries')).toBe(0);
     expect(await count('paper_entry_intents')).toBe(0);
     expect(await count('paper_positions')).toBe(0);
+    expect(await count('paper_position_monitoring_tasks')).toBe(0);
     expect(await count('paper_position_lifecycles')).toBe(0);
+  });
+
+  it('claims due monitoring tasks once and recovers an expired lease after restart', async () => {
+    const source = await evaluatedOpportunity('110');
+    const opened = await handler().execute(entryCommand(source, 'paper-entry-110'));
+    const monitoring = new PaperPositionMonitoringRepository();
+    const firstOwner = '01M50000000000000000000010';
+    const secondOwner = '01M50000000000000000000011';
+    const [firstClaims, secondClaims] = await Promise.all([
+      monitoring.claimDue(database, firstOwner, 10, 30_000, now),
+      monitoring.claimDue(database, secondOwner, 10, 30_000, now),
+    ]);
+    const claimed = [...firstClaims, ...secondClaims];
+
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]?.position_id).toBe(opened.positionId);
+    await expect(monitoring.claimDue(
+      database,
+      '01M50000000000000000000012',
+      10,
+      30_000,
+      new Date(now.getTime() + 29_999),
+    )).resolves.toHaveLength(0);
+    await expect(monitoring.claimDue(
+      database,
+      '01M50000000000000000000012',
+      10,
+      30_000,
+      new Date(now.getTime() + 30_000),
+    )).resolves.toEqual([
+      expect.objectContaining({
+        position_id: opened.positionId,
+        monitoring_state: 'processing',
+        lease_owner: '01M50000000000000000000012',
+      }),
+    ]);
+  });
+
+  it('reschedules safe provider failures with bounded retry timing', async () => {
+    const source = await evaluatedOpportunity('111');
+    const opened = await handler().execute(entryCommand(source, 'paper-entry-111'));
+    const monitoring = new PaperPositionMonitoringRepository();
+    const owner = '01M50000000000000000000013';
+    const [claimed] = await monitoring.claimDue(database, owner, 1, 30_000, now);
+
+    if (claimed === undefined) {
+      expect.fail('Expected the new monitoring task to be claimable');
+    }
+
+    await monitoring.recordFailure(
+      database,
+      claimed,
+      owner,
+      {
+        errorCode: 'PROVIDER_RATE_LIMITED',
+        httpStatus: 429,
+        retryAfterMs: 12_000,
+      },
+      now,
+      5_000,
+      60_000,
+    );
+    const failed = await database.selectFrom('paper_position_monitoring_tasks')
+      .selectAll()
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+
+    expect(failed).toMatchObject({
+      monitoring_state: 'pending',
+      consecutive_failure_count: 1,
+      last_error_code: 'PROVIDER_RATE_LIMITED',
+      last_http_status: 429,
+    });
+    expect(failed.next_observation_due_at).toEqual(new Date(now.getTime() + 12_000));
+    expect(failed.provider_backoff_until).toEqual(new Date(now.getTime() + 12_000));
+    await expect(monitoring.claimDue(
+      database,
+      owner,
+      1,
+      30_000,
+      new Date(now.getTime() + 11_999),
+    )).resolves.toHaveLength(0);
+    const [secondClaim] = await monitoring.claimDue(
+      database,
+      owner,
+      1,
+      30_000,
+      new Date(now.getTime() + 12_000),
+    );
+
+    if (secondClaim === undefined) {
+      expect.fail('Expected the failed monitoring task to become due');
+    }
+
+    await monitoring.recordFailure(
+      database,
+      secondClaim,
+      owner,
+      {
+        errorCode: 'PROVIDER_RATE_LIMITED',
+        httpStatus: 429,
+        retryAfterMs: 120_000,
+      },
+      new Date(now.getTime() + 12_000),
+      5_000,
+      60_000,
+    );
+    const capped = await database.selectFrom('paper_position_monitoring_tasks')
+      .select(['consecutive_failure_count', 'next_observation_due_at'])
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+
+    expect(capped.consecutive_failure_count).toBe(2);
+    expect(capped.next_observation_due_at).toEqual(new Date(now.getTime() + 72_000));
+  });
+
+  it('retires closed positions without lifecycle decisions or financial effects', async () => {
+    const source = await evaluatedOpportunity('112');
+    const opened = await handler().execute(entryCommand(source, 'paper-entry-112'));
+    const monitoring = new PaperPositionMonitoringRepository();
+    const ledgerEntriesBefore = await count('paper_ledger_entries');
+    await database.updateTable('paper_positions')
+      .set({ state: 'closed', closed_at: now, updated_at: now })
+      .where('id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+
+    await expect(monitoring.retireClosedTasks(database, now)).resolves.toBe(1);
+    await expect(monitoring.claimDue(
+      database,
+      '01M50000000000000000000014',
+      1,
+      30_000,
+      now,
+    )).resolves.toHaveLength(0);
+    expect(await count('paper_position_lifecycle_decisions')).toBe(0);
+    expect(await count('paper_exit_settlements')).toBe(0);
+    expect(await count('paper_ledger_entries')).toBe(ledgerEntriesBefore);
   });
 
   function handler(
@@ -282,6 +435,7 @@ describe('engine-owned PAPER financial entry', () => {
       database,
       commandInbox,
       entries,
+      new PaperPositionMonitoringRepository(),
       outbox,
       { ...policy(), ...overrides },
       undefined,

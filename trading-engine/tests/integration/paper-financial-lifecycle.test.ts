@@ -17,6 +17,7 @@ import { OutboxRepository } from '../../src/infrastructure/database/repositories
 import { PaperEntryRepository } from '../../src/infrastructure/database/repositories/paper-entry-repository.js';
 import { PaperFinancialLifecycleRepository } from '../../src/infrastructure/database/repositories/paper-financial-lifecycle-repository.js';
 import { PaperPositionLifecycleRepository } from '../../src/infrastructure/database/repositories/paper-position-lifecycle-repository.js';
+import { PaperPositionMonitoringRepository } from '../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import { OpportunityEvaluationDispatcher } from '../../src/workers/opportunity-evaluation-dispatcher.js';
 import {
   createTestIdentity,
@@ -255,6 +256,7 @@ describe('engine-owned PAPER financial lifecycle', () => {
       database,
       commandInbox,
       new PaperEntryRepository(),
+      new PaperPositionMonitoringRepository(),
       outbox,
       {
         enabled: true,
