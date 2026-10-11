@@ -6,7 +6,13 @@ import {
 } from '../../shared/amount/canonical-decimal.js';
 
 export const DEXSCREENER_MAX_TOKEN_ADDRESSES = 30;
-const maximumResponseBytes = 4 * 1024 * 1024;
+export const DEXSCREENER_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+/** Retry-After hints are advisory and capped at one hour before persistence. */
+export const DEXSCREENER_MAX_RETRY_AFTER_MS = 60 * 60 * 1_000;
+const maximumDatabaseIntegerDigits = 48;
+const maximumDatabaseFractionDigits = 30;
+const maximumPairAddressLength = 128;
+const maximumDexIdentifierLength = 64;
 const solanaAddress = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export interface PaperMarketHttpResponse {
@@ -86,13 +92,26 @@ export class NodeHttpsPaperMarketTransport implements PaperMarketHttpTransport {
       }, (response) => {
         const chunks: Buffer[] = [];
         let bytes = 0;
+        const contentLength = headerValue(response.headers['content-length']);
+
+        if (contentLength !== undefined
+          && /^\d+$/.test(contentLength)
+          && Number(contentLength) > DEXSCREENER_MAX_RESPONSE_BYTES) {
+          finish(new PaperMarketTransportError('RESPONSE_TOO_LARGE'));
+          response.destroy();
+          request.destroy();
+
+          return;
+        }
 
         response.on('data', (chunk: Buffer | string): void => {
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           bytes += buffer.byteLength;
 
-          if (bytes > maximumResponseBytes) {
-            request.destroy(new PaperMarketTransportError('RESPONSE_TOO_LARGE'));
+          if (bytes > DEXSCREENER_MAX_RESPONSE_BYTES) {
+            finish(new PaperMarketTransportError('RESPONSE_TOO_LARGE'));
+            response.destroy();
+            request.destroy();
             return;
           }
 
@@ -107,6 +126,12 @@ export class NodeHttpsPaperMarketTransport implements PaperMarketHttpTransport {
             },
             retrievedAt: new Date(),
           });
+        });
+        response.once('aborted', (): void => {
+          finish(new PaperMarketTransportError('NETWORK'));
+        });
+        response.once('error', (): void => {
+          finish(new PaperMarketTransportError('NETWORK'));
         });
       });
 
@@ -176,6 +201,7 @@ export class PaperMarketProviderError extends Error {
       | 'PROVIDER_HTTP_ERROR'
       | 'PROVIDER_NETWORK_ERROR'
       | 'PROVIDER_RATE_LIMITED'
+      | 'PROVIDER_RESPONSE_TOO_LARGE'
       | 'PROVIDER_RESPONSE_MALFORMED'
       | 'PROVIDER_TIMEOUT',
     public readonly retryable: boolean,
@@ -229,10 +255,20 @@ export class DexScreenerPaperMarketProvider implements PaperMarketDataProvider {
         throw new PaperMarketProviderError('PROVIDER_TIMEOUT', true);
       }
 
+      if (error instanceof PaperMarketTransportError && error.code === 'RESPONSE_TOO_LARGE') {
+        throw new PaperMarketProviderError('PROVIDER_RESPONSE_TOO_LARGE', false);
+      }
+
       throw new PaperMarketProviderError('PROVIDER_NETWORK_ERROR', true);
     }
 
-    if (response.status === 429) {
+    const status = normalizedHttpStatus(response.status);
+
+    if (status === null || !Number.isFinite(response.retrievedAt.getTime())) {
+      throw new PaperMarketProviderError('PROVIDER_HTTP_ERROR', false);
+    }
+
+    if (status === 429) {
       throw new PaperMarketProviderError(
         'PROVIDER_RATE_LIMITED',
         true,
@@ -241,11 +277,11 @@ export class DexScreenerPaperMarketProvider implements PaperMarketDataProvider {
       );
     }
 
-    if (response.status < 200 || response.status >= 300) {
+    if (status < 200 || status >= 300) {
       throw new PaperMarketProviderError(
         'PROVIDER_HTTP_ERROR',
-        response.status >= 500,
-        response.status,
+        status >= 500,
+        status,
       );
     }
 
@@ -260,10 +296,14 @@ export class DexScreenerPaperMarketProvider implements PaperMarketDataProvider {
 }
 
 function parsePayload(body: string): readonly Record<string, unknown>[] {
+  if (Buffer.byteLength(body, 'utf8') > DEXSCREENER_MAX_RESPONSE_BYTES) {
+    throw new PaperMarketProviderError('PROVIDER_RESPONSE_TOO_LARGE', false);
+  }
+
   let payload: unknown;
 
   try {
-    payload = JSON.parse(body) as unknown;
+    payload = JSON.parse(body, preserveJsonNumberSource) as unknown;
   } catch {
     throw new PaperMarketProviderError('PROVIDER_RESPONSE_MALFORMED', false);
   }
@@ -290,22 +330,30 @@ function normalizeAddress(
   const eligible = matching.flatMap((pair) => {
     const priceUsd = decimalValue(pair['priceUsd'], true);
     const marketCapUsd = decimalValue(pair['marketCap'], true);
-    const liquidity = objectValue(pair['liquidity']);
+    const rawLiquidity = pair['liquidity'];
+    const liquidity = objectValue(rawLiquidity);
     const liquidityUsd = liquidity === undefined
       ? null
       : decimalValue(liquidity['usd'], false);
+    const pairAddress = boundedStringValue(pair['pairAddress'], maximumPairAddressLength);
+    const dex = boundedStringValue(pair['dexId'], maximumDexIdentifierLength);
 
     if (priceUsd === null || marketCapUsd === null
-      || (liquidity?.['usd'] !== undefined && liquidityUsd === null)) {
+      || (rawLiquidity !== undefined && rawLiquidity !== null && liquidity === undefined)
+      || (liquidity?.['usd'] !== undefined && liquidityUsd === null)
+      || !pairAddress.valid || !dex.valid) {
       return [];
     }
 
-    return [{ pair, priceUsd, marketCapUsd, liquidityUsd }];
+    return [{
+      pairAddress: pairAddress.value,
+      dex: dex.value,
+      priceUsd,
+      marketCapUsd,
+      liquidityUsd,
+    }];
   });
-  eligible.sort((left, right) => compareCanonicalDecimals(
-    right.liquidityUsd ?? '0',
-    left.liquidityUsd ?? '0',
-  ));
+  eligible.sort(compareEligiblePairs);
   const selected = eligible[0];
 
   if (selected === undefined) {
@@ -324,8 +372,8 @@ function normalizeAddress(
       networkId: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
       assetAddress: address,
       provider: 'dexscreener',
-      pairAddress: stringValue(selected.pair['pairAddress']),
-      dex: stringValue(selected.pair['dexId']),
+      pairAddress: selected.pairAddress,
+      dex: selected.dex,
       marketCapUsd: selected.marketCapUsd,
       priceUsd: selected.priceUsd,
       liquidityUsd: selected.liquidityUsd,
@@ -336,15 +384,22 @@ function normalizeAddress(
 }
 
 function decimalValue(value: unknown, requirePositive: boolean): string | null {
-  if (typeof value !== 'string' && typeof value !== 'number') {
+  if (typeof value !== 'string') {
     return null;
   }
 
-  const raw = typeof value === 'number'
-    ? Number.isFinite(value) ? value.toString() : ''
-    : value.trim();
+  const raw = value.trim();
+  const match = /^([0-9]+)(?:\.([0-9]+))?$/.exec(raw);
 
-  if (!/^[0-9]+(?:\.[0-9]+)?$/.test(raw)) {
+  if (match === null) {
+    return null;
+  }
+
+  const integerDigits = (match[1] ?? '').replace(/^0+(?=[0-9])/, '');
+  const fractionalDigits = match[2] ?? '';
+
+  if (integerDigits.length > maximumDatabaseIntegerDigits
+    || fractionalDigits.length > maximumDatabaseFractionDigits) {
     return null;
   }
 
@@ -363,8 +418,39 @@ function objectValue(value: unknown): Readonly<Record<string, unknown>> | undefi
     : undefined;
 }
 
-function stringValue(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() !== '' ? value : null;
+interface BoundedString {
+  readonly valid: boolean;
+  readonly value: string | null;
+}
+
+function boundedStringValue(value: unknown, maximumLength: number): BoundedString {
+  if (value === undefined || value === null) {
+    return { valid: true, value: null };
+  }
+
+  if (typeof value !== 'string') {
+    return { valid: false, value: null };
+  }
+
+  const normalized = value.trim();
+
+  return normalized !== ''
+    && normalized.length <= maximumLength
+    && hasOnlyPersistableCharacters(normalized)
+    ? { valid: true, value: normalized }
+    : { valid: false, value: null };
+}
+
+function hasOnlyPersistableCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+
+    if (codeUnit < 32 || codeUnit === 127) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function headerValue(value: string | readonly string[] | undefined): string | undefined {
@@ -376,11 +462,79 @@ function retryAfterMilliseconds(value: string | undefined, now: Date): number | 
     return null;
   }
 
-  if (/^\d+$/.test(value)) {
-    return Number(value) * 1_000;
+  const normalized = value.trim();
+
+  if (/^\d+$/.test(normalized)) {
+    const maximumSeconds = DEXSCREENER_MAX_RETRY_AFTER_MS / 1_000;
+
+    if (normalized.length > maximumSeconds.toString().length) {
+      return DEXSCREENER_MAX_RETRY_AFTER_MS;
+    }
+
+    return Math.min(Number(normalized) * 1_000, DEXSCREENER_MAX_RETRY_AFTER_MS);
   }
 
-  const timestamp = Date.parse(value);
+  if (/^[+-]?\d/.test(normalized)) {
+    return null;
+  }
 
-  return Number.isFinite(timestamp) ? Math.max(0, timestamp - now.getTime()) : null;
+  const timestamp = Date.parse(normalized);
+
+  return Number.isFinite(timestamp)
+    ? Math.min(
+      Math.max(0, timestamp - now.getTime()),
+      DEXSCREENER_MAX_RETRY_AFTER_MS,
+    )
+    : null;
+}
+
+function normalizedHttpStatus(status: number): number | null {
+  return Number.isInteger(status) && status >= 100 && status <= 599
+    ? status
+    : null;
+}
+
+function preserveJsonNumberSource(
+  _key: string,
+  value: unknown,
+  context?: { readonly source?: string },
+): unknown {
+  if (typeof value !== 'number') {
+    return value;
+  }
+
+  return context?.source;
+}
+
+interface EligiblePair {
+  readonly pairAddress: string | null;
+  readonly dex: string | null;
+  readonly priceUsd: string;
+  readonly marketCapUsd: string;
+  readonly liquidityUsd: string | null;
+}
+
+function compareEligiblePairs(left: EligiblePair, right: EligiblePair): number {
+  const liquidity = compareCanonicalDecimals(
+    right.liquidityUsd ?? '0',
+    left.liquidityUsd ?? '0',
+  );
+
+  if (liquidity !== 0) {
+    return liquidity;
+  }
+
+  const leftKey = stablePairKey(left);
+  const rightKey = stablePairKey(right);
+
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+function stablePairKey(pair: EligiblePair): string {
+  return [
+    pair.pairAddress ?? '',
+    pair.dex ?? '',
+    pair.priceUsd,
+    pair.marketCapUsd,
+  ].join('\u0000');
 }

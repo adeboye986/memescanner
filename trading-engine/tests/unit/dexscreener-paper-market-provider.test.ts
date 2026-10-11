@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  DEXSCREENER_MAX_RESPONSE_BYTES,
+  DEXSCREENER_MAX_RETRY_AFTER_MS,
   DexScreenerPaperMarketProvider,
   PaperMarketProviderError,
   PaperMarketTransportError,
@@ -187,7 +189,8 @@ describe('DexScreener PAPER market provider', () => {
   it.each([
     [new PaperMarketTransportError('TIMEOUT'), 'PROVIDER_TIMEOUT'],
     [new PaperMarketTransportError('NETWORK'), 'PROVIDER_NETWORK_ERROR'],
-  ] as const)('maps transport failures to safe codes', async (failure, errorCode) => {
+    [new PaperMarketTransportError('RESPONSE_TOO_LARGE'), 'PROVIDER_RESPONSE_TOO_LARGE'],
+  ] as const)('maps timeout, aborted, and oversized transport failures to safe codes', async (failure, errorCode) => {
     const transport = new StubTransport();
     transport.get.mockRejectedValue(failure);
 
@@ -207,4 +210,191 @@ describe('DexScreener PAPER market provider', () => {
       errorCode: 'PROVIDER_RESPONSE_MALFORMED',
     });
   });
+
+  it.each([
+    ['priceUsd', '1'.repeat(49)],
+    ['priceUsd', `0.${'1'.repeat(31)}`],
+    ['marketCap', '9'.repeat(49)],
+    ['marketCap', `1.${'2'.repeat(31)}`],
+    ['liquidityUsd', '8'.repeat(49)],
+    ['liquidityUsd', `0.${'3'.repeat(31)}`],
+  ])('rejects %s values outside PostgreSQL numeric(78,30)', async (field, value) => {
+    const transport = new StubTransport();
+    const pair: Record<string, unknown> = {
+      chainId: 'solana',
+      baseToken: { address: wrappedSol },
+      priceUsd: '0.1',
+      marketCap: '1000',
+      liquidity: { usd: '500' },
+    };
+
+    if (field === 'liquidityUsd') {
+      pair['liquidity'] = { usd: value };
+    } else {
+      pair[field] = value;
+    }
+
+    transport.get.mockResolvedValue(response([pair]));
+
+    await expect(provider(transport).fetchSolana([wrappedSol])).resolves.toEqual([{
+      available: false,
+      assetAddress: wrappedSol,
+      errorCode: 'PROVIDER_MARKET_INVALID',
+    }]);
+  });
+
+  it.each([
+    ['pairAddress', 'p'.repeat(129)],
+    ['dexId', 'd'.repeat(65)],
+    ['pairAddress', 'pair\u0000address'],
+  ])('rejects unsafe %s values before persistence', async (field, value) => {
+    const transport = new StubTransport();
+    transport.get.mockResolvedValue(response([{
+      chainId: 'solana',
+      baseToken: { address: wrappedSol },
+      priceUsd: '0.1',
+      marketCap: '1000',
+      liquidity: { usd: '500' },
+      [field]: value,
+    }]));
+
+    await expect(provider(transport).fetchSolana([wrappedSol])).resolves.toEqual([{
+      available: false,
+      assetAddress: wrappedSol,
+      errorCode: 'PROVIDER_MARKET_INVALID',
+    }]);
+  });
+
+  it.each(['NaN', 'Infinity', '-1', '1e-7', ''])('rejects malformed or unsupported price %s', async (priceUsd) => {
+    const transport = new StubTransport();
+    transport.get.mockResolvedValue(response([{
+      chainId: 'solana',
+      baseToken: { address: wrappedSol },
+      priceUsd,
+      marketCap: '1000',
+      liquidity: { usd: '500' },
+    }]));
+
+    await expect(provider(transport).fetchSolana([wrappedSol])).resolves.toEqual([{
+      available: false,
+      assetAddress: wrappedSol,
+      errorCode: 'PROVIDER_MARKET_INVALID',
+    }]);
+  });
+
+  it.each([
+    { liquidity: 'malformed' },
+    { liquidity: { usd: '-1' } },
+    { liquidity: { usd: 'Infinity' } },
+  ])('rejects malformed, negative, or non-finite liquidity', async (market) => {
+    const transport = new StubTransport();
+    transport.get.mockResolvedValue(response([{
+      chainId: 'solana',
+      baseToken: { address: wrappedSol },
+      priceUsd: '0.1',
+      marketCap: '1000',
+      ...market,
+    }]));
+
+    await expect(provider(transport).fetchSolana([wrappedSol])).resolves.toEqual([{
+      available: false,
+      assetAddress: wrappedSol,
+      errorCode: 'PROVIDER_MARKET_INVALID',
+    }]);
+  });
+
+  it('preserves high-precision JSON number source without floating-point conversion', async () => {
+    const transport = new StubTransport();
+    const exactPrice = '0.123456789012345678901234567891';
+    const exactMarketCap = `${'9'.repeat(48)}.${'8'.repeat(30)}`;
+    const exactLiquidity = `123456789.${'7'.repeat(30)}`;
+    transport.get.mockResolvedValue(response(
+      '[{"chainId":"solana","pairAddress":"pair","dexId":"dex",'
+      + '"baseToken":{"address":"' + wrappedSol + '"},'
+      + '"priceUsd":' + exactPrice + ',"marketCap":' + exactMarketCap
+      + ',"liquidity":{"usd":' + exactLiquidity + '}}]',
+    ));
+
+    const result = await provider(transport).fetchSolana([wrappedSol]);
+
+    expect(result[0]).toMatchObject({
+      available: true,
+      observation: {
+        priceUsd: exactPrice,
+        marketCapUsd: exactMarketCap,
+        liquidityUsd: exactLiquidity,
+      },
+    });
+  });
+
+  it.each([
+    ['999999999999999999999999', DEXSCREENER_MAX_RETRY_AFTER_MS],
+    ['9999999', DEXSCREENER_MAX_RETRY_AFTER_MS],
+    ['invalid', null],
+    ['-1', null],
+  ])('bounds or rejects Retry-After value %s', async (retryAfter, expected) => {
+    const transport = new StubTransport();
+    transport.get.mockResolvedValue(response([], 429, { 'retry-after': retryAfter }));
+
+    await expect(provider(transport).fetchSolana([wrappedSol])).rejects.toMatchObject({
+      errorCode: 'PROVIDER_RATE_LIMITED',
+      statusCode: 429,
+      retryAfterMs: expected,
+    });
+  });
+
+  it('caps Retry-After HTTP dates at the documented one-hour ceiling', async () => {
+    const transport = new StubTransport();
+    transport.get.mockResolvedValue(response([], 429, {
+      'retry-after': new Date(retrievedAt.getTime() + 86_400_000).toUTCString(),
+    }));
+
+    await expect(provider(transport).fetchSolana([wrappedSol])).rejects.toMatchObject({
+      retryAfterMs: DEXSCREENER_MAX_RETRY_AFTER_MS,
+    });
+  });
+
+  it.each([0, 99, 600, 999, Number.NaN, 200.5])('normalizes unexpected HTTP status %s to null', async (status) => {
+    const transport = new StubTransport();
+    transport.get.mockResolvedValue(response([], status));
+
+    await expect(provider(transport).fetchSolana([wrappedSol])).rejects.toMatchObject({
+      errorCode: 'PROVIDER_HTTP_ERROR',
+      retryable: false,
+      statusCode: null,
+    });
+  });
+
+  it('rejects an oversized response body before parsing', async () => {
+    const transport = new StubTransport();
+    transport.get.mockResolvedValue(response('x'.repeat(DEXSCREENER_MAX_RESPONSE_BYTES + 1)));
+
+    await expect(provider(transport).fetchSolana([wrappedSol])).rejects.toMatchObject({
+      errorCode: 'PROVIDER_RESPONSE_TOO_LARGE',
+      retryable: false,
+    });
+  });
+
+  it('selects equal-liquidity pairs deterministically by stable pair identity', async () => {
+    const transport = new StubTransport();
+    const pairA = {
+      chainId: 'solana', dexId: 'raydium', pairAddress: 'pair-a',
+      baseToken: { address: wrappedSol }, priceUsd: '1', marketCap: '1000',
+      liquidity: { usd: '500' },
+    };
+    const pairZ = {
+      chainId: 'solana', dexId: 'raydium', pairAddress: 'pair-z',
+      baseToken: { address: wrappedSol }, priceUsd: '2', marketCap: '2000',
+      liquidity: { usd: '500' },
+    };
+
+    transport.get.mockResolvedValueOnce(response([pairZ, pairA]));
+    const first = await provider(transport).fetchSolana([wrappedSol]);
+    transport.get.mockResolvedValueOnce(response([pairA, pairZ]));
+    const second = await provider(transport).fetchSolana([wrappedSol]);
+
+    expect(first[0]).toMatchObject({ observation: { pairAddress: 'pair-a', priceUsd: '1' } });
+    expect(second).toEqual(first);
+  });
+
 });

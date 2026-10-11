@@ -919,6 +919,8 @@ describe('engine-owned PAPER financial entry', () => {
   it('reschedules safe provider failures with bounded retry timing', async () => {
     const source = await evaluatedOpportunity('111');
     const opened = await handler().execute(entryCommand(source, 'paper-entry-111'));
+    const ledgerEntriesBefore = await count('paper_ledger_entries');
+    const outboxEventsBefore = await count('event_outbox');
     const monitoring = new PaperPositionMonitoringRepository();
     const owner = '01M50000000000000000000013';
     const [claimed] = await monitoring.claimDue(database, owner, ['7'], 1, 30_000, now);
@@ -1015,6 +1017,10 @@ describe('engine-owned PAPER financial entry', () => {
       { attempt_sequence: 1, outcome: 'failed', consecutive_failure_count: 1 },
       { attempt_sequence: 2, outcome: 'failed', consecutive_failure_count: 2 },
     ]);
+    expect(await count('paper_ledger_entries')).toBe(ledgerEntriesBefore);
+    expect(await count('event_outbox')).toBe(outboxEventsBefore);
+    expect(await count('paper_position_lifecycle_decisions')).toBe(0);
+    expect(await count('paper_exit_settlements')).toBe(0);
   });
 
   it('retires closed positions without lifecycle decisions or financial effects', async () => {
