@@ -28,12 +28,23 @@ class SharedLeadership {
   public attempts = 0;
   public failNextAttempt = false;
   private owner: symbol | undefined;
+  private ownerConnectionLost: (() => void) | undefined;
 
   public backend(identity: symbol): WorkflowLeadershipBackend {
     return {
       withSession: async (callback): Promise<void> => {
+        let connectionLostState = false;
+        let resolveConnectionLost = (): void => undefined;
+        const connectionLost = new Promise<void>((resolve) => {
+          resolveConnectionLost = (): void => {
+            connectionLostState = true;
+            resolve();
+          };
+        });
         const session: WorkflowLeadershipSession = {
           database,
+          connectionLost,
+          isConnectionLost: (): boolean => connectionLostState,
           tryAcquire: (): Promise<boolean> => {
             this.attempts += 1;
 
@@ -44,6 +55,7 @@ class SharedLeadership {
 
             if (this.owner === undefined) {
               this.owner = identity;
+              this.ownerConnectionLost = resolveConnectionLost;
               return Promise.resolve(true);
             }
 
@@ -56,6 +68,7 @@ class SharedLeadership {
             }
 
             this.owner = undefined;
+            this.ownerConnectionLost = undefined;
             return Promise.resolve(true);
           },
         };
@@ -67,6 +80,8 @@ class SharedLeadership {
 
   public loseLeadership(): void {
     this.owner = undefined;
+    this.ownerConnectionLost?.();
+    this.ownerConnectionLost = undefined;
   }
 }
 
@@ -172,9 +187,7 @@ describe('PostgreSQL workflow leadership', () => {
     await flushMicrotasks();
 
     leadership.loseLeadership();
-    await vi.advanceTimersByTimeAsync(100);
     await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(500);
 
     expect(leader.outbox).toHaveBeenCalledOnce();
     expect(leader.evaluation).toHaveBeenCalledOnce();

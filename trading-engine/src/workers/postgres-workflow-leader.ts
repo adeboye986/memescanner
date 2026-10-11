@@ -1,7 +1,11 @@
 import { sql, type Kysely } from 'kysely';
 import type { Logger } from 'pino';
 
-import type { Database } from '../infrastructure/database/client.js';
+import {
+  databaseConnectionLossSignal,
+  type Database,
+  type DatabaseConnectionLossSignal,
+} from '../infrastructure/database/client.js';
 import {
   closeInOrder,
   idempotentClose,
@@ -14,6 +18,8 @@ const workflowLockKey = 1;
 
 export interface WorkflowLeadershipSession {
   readonly database: Kysely<Database>;
+  readonly connectionLost: Promise<void>;
+  isConnectionLost(): boolean;
   tryAcquire(): Promise<boolean>;
   isHeld(): Promise<boolean>;
   release(): Promise<boolean>;
@@ -46,15 +52,45 @@ export class PostgresWorkflowLeadershipBackend implements WorkflowLeadershipBack
     callback: (session: WorkflowLeadershipSession) => Promise<void>,
   ): Promise<void> {
     await this.database.connection().execute(async (connection) => {
-      await callback(new PostgresWorkflowLeadershipSession(connection));
+      const backend = await sql<{ readonly pid: number }>`
+        select pg_backend_pid()::int as pid
+      `.execute(connection);
+      const backendPid = backend.rows[0]?.pid;
+      const connectionLoss = backendPid === undefined
+        ? undefined
+        : databaseConnectionLossSignal(this.database, backendPid);
+
+      if (connectionLoss === undefined) {
+        throw new Error('PostgreSQL leadership connection is not monitored');
+      }
+
+      await callback(new PostgresWorkflowLeadershipSession(
+        connection,
+        connectionLoss,
+      ));
     });
   }
 }
 
 class PostgresWorkflowLeadershipSession implements WorkflowLeadershipSession {
-  public constructor(public readonly database: Kysely<Database>) {}
+  public readonly connectionLost: Promise<void>;
+
+  public constructor(
+    public readonly database: Kysely<Database>,
+    private readonly connectionLoss: DatabaseConnectionLossSignal,
+  ) {
+    this.connectionLost = connectionLoss.lost;
+  }
+
+  public isConnectionLost(): boolean {
+    return this.connectionLoss.isLost();
+  }
 
   public async tryAcquire(): Promise<boolean> {
+    if (this.isConnectionLost()) {
+      return false;
+    }
+
     const result = await sql<{ readonly acquired: boolean }>`
       select pg_try_advisory_lock(
         ${workflowLockNamespace},
@@ -66,6 +102,10 @@ class PostgresWorkflowLeadershipSession implements WorkflowLeadershipSession {
   }
 
   public async isHeld(): Promise<boolean> {
+    if (this.isConnectionLost()) {
+      return false;
+    }
+
     const result = await sql<{ readonly held: boolean }>`
       select exists (
         select 1
@@ -83,6 +123,10 @@ class PostgresWorkflowLeadershipSession implements WorkflowLeadershipSession {
   }
 
   public async release(): Promise<boolean> {
+    if (this.isConnectionLost()) {
+      return false;
+    }
+
     const result = await sql<{ readonly released: boolean }>`
       select pg_advisory_unlock(
         ${workflowLockNamespace},
@@ -124,7 +168,7 @@ export function startPostgresWorkflowLeader(
       return;
     }
 
-    if (stopping) {
+    if (stopping || session.isConnectionLost()) {
       await session.release();
       return;
     }
@@ -144,7 +188,16 @@ export function startPostgresWorkflowLeader(
         },
       });
       activePoller = poller;
-      await poller.completed;
+      const completion = await Promise.race([
+        poller.completed.then(() => 'poller' as const),
+        session.connectionLost.then(() => 'connection' as const),
+      ]);
+
+      if (completion === 'connection') {
+        options.logger.warn(
+          'PostgreSQL workflow leadership connection was lost',
+        );
+      }
     } finally {
       const currentPoller = poller;
 

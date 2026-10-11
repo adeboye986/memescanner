@@ -1,5 +1,5 @@
 import { Kysely, PostgresDialect, sql, type ColumnType, type Generated } from 'kysely';
-import { Pool, types, type PoolConfig } from 'pg';
+import { Pool, types, type PoolClient, type PoolConfig } from 'pg';
 
 import type { DatabaseConfig } from '../../config/env.js';
 import type { EventEnvelope } from '../../contracts/events/event-envelope.schema.js';
@@ -447,6 +447,113 @@ export interface Database {
   paper_market_shadow_observations: PaperMarketShadowObservationTable;
 }
 
+export interface DatabaseConnectionLossSignal {
+  readonly lost: Promise<void>;
+  isLost(): boolean;
+}
+
+interface TrackedPoolClient extends PoolClient {
+  readonly processID?: number | null;
+}
+
+class MutableDatabaseConnectionLossSignal implements DatabaseConnectionLossSignal {
+  public readonly lost: Promise<void>;
+  private lostState = false;
+  private resolveLost: () => void = (): void => undefined;
+
+  public constructor() {
+    this.lost = new Promise((resolve) => {
+      this.resolveLost = resolve;
+    });
+  }
+
+  public isLost(): boolean {
+    return this.lostState;
+  }
+
+  public markLost(): void {
+    if (this.lostState) {
+      return;
+    }
+
+    this.lostState = true;
+    this.resolveLost();
+  }
+}
+
+interface TrackedConnection {
+  readonly backendPid: number | null;
+  readonly signal: MutableDatabaseConnectionLossSignal;
+  readonly onEnd: () => void;
+  readonly onError: () => void;
+}
+
+class DatabaseConnectionLossMonitor {
+  private readonly connections = new WeakMap<PoolClient, TrackedConnection>();
+  private readonly connectionsByBackendPid = new Map<number, TrackedConnection>();
+
+  public constructor(pool: Pool) {
+    pool.on('connect', this.onConnect);
+    pool.on('error', this.onPoolError);
+    pool.on('remove', this.onRemove);
+  }
+
+  public signalForBackendPid(backendPid: number): DatabaseConnectionLossSignal | undefined {
+    return this.connectionsByBackendPid.get(backendPid)?.signal;
+  }
+
+  private readonly onConnect = (client: PoolClient): void => {
+    const processId = (client as TrackedPoolClient).processID;
+    const backendPid = typeof processId === 'number' ? processId : null;
+    const signal = new MutableDatabaseConnectionLossSignal();
+    const onError = (): void => {
+      signal.markLost();
+    };
+    const onEnd = (): void => {
+      signal.markLost();
+    };
+    const connection = { backendPid, signal, onEnd, onError };
+
+    this.connections.set(client, connection);
+
+    if (backendPid !== null) {
+      this.connectionsByBackendPid.set(backendPid, connection);
+    }
+
+    client.on('error', onError);
+    client.on('end', onEnd);
+  };
+
+  private readonly onPoolError = (_error: Error, client: PoolClient): void => {
+    this.connections.get(client)?.signal.markLost();
+  };
+
+  private readonly onRemove = (client: PoolClient): void => {
+    const connection = this.connections.get(client);
+
+    if (connection === undefined) {
+      return;
+    }
+
+    connection.signal.markLost();
+    client.removeListener('error', connection.onError);
+    client.removeListener('end', connection.onEnd);
+    this.connections.delete(client);
+
+    if (
+      connection.backendPid !== null
+      && this.connectionsByBackendPid.get(connection.backendPid) === connection
+    ) {
+      this.connectionsByBackendPid.delete(connection.backendPid);
+    }
+  };
+}
+
+const connectionLossMonitors = new WeakMap<
+  Kysely<Database>,
+  DatabaseConnectionLossMonitor
+>();
+
 export function createDatabasePoolConfig(config: DatabaseConfig): PoolConfig {
   const ssl = config.databaseSsl
     ? {
@@ -466,11 +573,24 @@ export function createDatabasePoolConfig(config: DatabaseConfig): PoolConfig {
 }
 
 export function createDatabase(config: DatabaseConfig): Kysely<Database> {
-  return new Kysely<Database>({
+  const pool = new Pool(createDatabasePoolConfig(config));
+  const connectionLossMonitor = new DatabaseConnectionLossMonitor(pool);
+  const database = new Kysely<Database>({
     dialect: new PostgresDialect({
-      pool: new Pool(createDatabasePoolConfig(config)),
+      pool,
     }),
   });
+
+  connectionLossMonitors.set(database, connectionLossMonitor);
+
+  return database;
+}
+
+export function databaseConnectionLossSignal(
+  database: Kysely<Database>,
+  backendPid: number,
+): DatabaseConnectionLossSignal | undefined {
+  return connectionLossMonitors.get(database)?.signalForBackendPid(backendPid);
 }
 
 export async function pingDatabase(database: Kysely<Database>): Promise<void> {
