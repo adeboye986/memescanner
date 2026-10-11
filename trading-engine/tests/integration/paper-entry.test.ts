@@ -22,6 +22,11 @@ import {
 import { OpportunityEvaluationDispatcher } from '../../src/workers/opportunity-evaluation-dispatcher.js';
 import type { PaperMarketFetchResult } from '../../src/infrastructure/market-data/dexscreener-paper-market-provider.js';
 import { PaperMarketMonitoringCycle } from '../../src/workers/paper-market-monitor.js';
+import { PaperMarketMonitorPoller } from '../../src/workers/paper-market-monitor-poller.js';
+import {
+  PostgresWorkflowLeadershipBackend,
+  startPostgresWorkflowLeader,
+} from '../../src/workers/postgres-workflow-leader.js';
 import {
   createTestIdentity,
   resetDatabase,
@@ -33,6 +38,43 @@ import {
 const traceparent = '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01';
 const now = new Date();
 const assetAddress = 'So11111111111111111111111111111111111111112';
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let release: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    release = resolve;
+  });
+
+  return {
+    promise,
+    resolve: (value: T): void => {
+      if (release === undefined) {
+        throw new Error('Deferred promise was resolved before initialization');
+      }
+
+      release(value);
+    },
+  };
+}
+
+async function waitForCondition(
+  condition: () => Promise<boolean>,
+  description: string,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (!await condition()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${description}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 function requestDetails(
   receivedAt: Date,
@@ -362,6 +404,172 @@ describe('engine-owned PAPER financial entry', () => {
         next_attempt_sequence: 1,
       }),
     ]);
+  });
+
+  it('fences an in-flight former leader and transfers shadow persistence after connection loss', async () => {
+    const source = await evaluatedOpportunity('leader-loss', '9'.repeat(64));
+    const opened = await handler().execute(
+      entryCommand(source, 'paper-entry-leader-loss'),
+    );
+    const firstDatabase = createDatabase(config);
+    const secondDatabase = createDatabase(config);
+    const firstProviderStarted = deferred<undefined>();
+    const releaseFirstProvider = deferred<readonly PaperMarketFetchResult[]>();
+    let firstPollerCompleted: Promise<void> | undefined;
+    let standbyProviderCalls = 0;
+    const financialStateBefore = {
+      ledgerEntries: await count('paper_ledger_entries'),
+      outboxEvents: await count('event_outbox'),
+      decisions: await count('paper_position_lifecycle_decisions'),
+      settlements: await count('paper_exit_settlements'),
+    };
+    const logger = pino({ level: 'silent' });
+    const observation = (pairAddress: string): PaperMarketFetchResult => ({
+      available: true,
+      observation: {
+        networkId: SOLANA_MAINNET_ID,
+        assetAddress: source.assetAddress,
+        provider: 'dexscreener',
+        pairAddress,
+        dex: 'raydium',
+        marketCapUsd: '1000',
+        priceUsd: '0.1',
+        liquidityUsd: '500',
+        fetchedAt: new Date(),
+        providerObservedAt: null,
+      },
+    });
+    const monitoringPolicy = {
+      enabled: true,
+      eligibleControlPlaneUserIds: ['7'],
+      intervalMs: 1_000,
+      batchSize: 1,
+      requestBudget: 1,
+      maximumBackoffMs: 60_000,
+      leaseDurationMs: 2_000,
+    } as const;
+    const first = startPostgresWorkflowLeader({
+      backend: new PostgresWorkflowLeadershipBackend(firstDatabase),
+      retryIntervalMs: 300_000,
+      logger,
+      startPoller: ({ database: leaderDatabase, beforeCycle }) => {
+        const cycle = new PaperMarketMonitoringCycle(
+          leaderDatabase,
+          new PaperPositionMonitoringRepository(),
+          {
+            fetchSolana: (): Promise<readonly PaperMarketFetchResult[]> => {
+              firstProviderStarted.resolve(undefined);
+              return releaseFirstProvider.promise;
+            },
+          },
+          monitoringPolicy,
+          logger,
+          () => new Date(),
+          beforeCycle,
+        );
+        const poller = new PaperMarketMonitorPoller({
+          intervalMs: 25,
+          logger,
+          cycle,
+          beforeCycle,
+        });
+        poller.start();
+        firstPollerCompleted = poller.completed.catch((): void => undefined);
+
+        return poller;
+      },
+    });
+
+    try {
+      await firstProviderStarted.promise;
+      const second = startPostgresWorkflowLeader({
+        backend: new PostgresWorkflowLeadershipBackend(secondDatabase),
+        retryIntervalMs: 25,
+        logger,
+        startPoller: ({ database: leaderDatabase, beforeCycle }) => {
+          const cycle = new PaperMarketMonitoringCycle(
+            leaderDatabase,
+            new PaperPositionMonitoringRepository(),
+            {
+              fetchSolana: (): Promise<readonly PaperMarketFetchResult[]> => {
+                standbyProviderCalls += 1;
+                return Promise.resolve([observation('standby-pair')]);
+              },
+            },
+            monitoringPolicy,
+            logger,
+            () => new Date(),
+            beforeCycle,
+          );
+          const poller = new PaperMarketMonitorPoller({
+            intervalMs: 25,
+            logger,
+            cycle,
+            beforeCycle,
+          });
+          poller.start();
+
+          return poller;
+        },
+      });
+
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(standbyProviderCalls).toBe(0);
+        const leaderBackend = await sql<{ readonly pid: number }>`
+          select pid
+          from pg_locks
+          where locktype = 'advisory'
+            and classid = 1297302527::oid
+            and objid = 1::oid
+            and objsubid = 2
+            and granted
+        `.execute(database);
+        const leaderPid = leaderBackend.rows[0]?.pid;
+
+        if (leaderPid === undefined) {
+          expect.fail('Expected an advisory-lock leader backend');
+        }
+
+        const terminated = await sql<{ readonly terminated: boolean }>`
+          select pg_terminate_backend(${leaderPid}) as terminated
+        `.execute(database);
+        expect(terminated.rows[0]?.terminated).toBe(true);
+        releaseFirstProvider.resolve([observation('former-leader-pair')]);
+        await firstPollerCompleted;
+        await first.close().catch((): void => undefined);
+
+        expect(await count('paper_market_shadow_observations')).toBe(0);
+        await waitForCondition(async () => (await database
+          .selectFrom('paper_market_shadow_observations')
+          .select(sql.raw<number>('count(*)::int').as('count'))
+          .where('position_id', '=', opened.positionId)
+          .executeTakeFirstOrThrow()).count > 0, 'standby shadow persistence');
+        await second.close();
+
+        const observations = await database
+          .selectFrom('paper_market_shadow_observations')
+          .select(['attempt_sequence', 'pair_address'])
+          .where('position_id', '=', opened.positionId)
+          .orderBy('attempt_sequence', 'asc')
+          .execute();
+
+        expect(standbyProviderCalls).toBeGreaterThan(0);
+        expect(observations).toEqual([{ attempt_sequence: 1, pair_address: 'standby-pair' }]);
+        expect(new Set(observations.map((item) => item.attempt_sequence)).size)
+          .toBe(observations.length);
+        expect(await count('paper_ledger_entries')).toBe(financialStateBefore.ledgerEntries);
+        expect(await count('event_outbox')).toBe(financialStateBefore.outboxEvents);
+        expect(await count('paper_position_lifecycle_decisions')).toBe(financialStateBefore.decisions);
+        expect(await count('paper_exit_settlements')).toBe(financialStateBefore.settlements);
+      } finally {
+        await second.close().catch((): void => undefined);
+      }
+    } finally {
+      releaseFirstProvider.resolve([observation('former-leader-pair')]);
+      await first.close().catch((): void => undefined);
+      await Promise.allSettled([firstDatabase.destroy(), secondDatabase.destroy()]);
+    }
   });
 
   it('claims only canary-user tasks and preserves the filter after leadership takeover', async () => {

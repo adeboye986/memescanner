@@ -59,6 +59,20 @@ function policy(enabled = true): PaperMarketMonitoringPolicy {
   };
 }
 
+function deferredVoid(): {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+} {
+  let release = (): void => {
+    throw new Error('Deferred promise was resolved before initialization');
+  };
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  return { promise, resolve: release };
+}
+
 function dependencies(): {
   readonly database: Kysely<Database>;
   readonly repository: PaperPositionMonitoringStore;
@@ -148,7 +162,10 @@ describe('PAPER market monitoring cycle', () => {
       30_000,
       now,
     );
-    expect(provider.fetchSolana).toHaveBeenCalledWith([assetAddress]);
+    expect(provider.fetchSolana).toHaveBeenCalledWith(
+      [assetAddress],
+      expect.any(AbortSignal),
+    );
     expect(repository.recordSuccess).toHaveBeenCalledWith(
       database,
       expect.objectContaining({ position_id: positionId }),
@@ -163,6 +180,100 @@ describe('PAPER market monitoring cycle', () => {
       5_000,
     );
     expect(repository.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('does not persist a provider result after leadership is lost in flight', async () => {
+    const { database, repository, provider } = dependencies();
+    const beforePersist = vi.fn((): Promise<boolean> => Promise.resolve(false));
+    const cycle = new PaperMarketMonitoringCycle(
+      database,
+      repository,
+      provider,
+      policy(),
+      pino({ level: 'silent' }),
+      () => now,
+      beforePersist,
+    );
+
+    await expect(cycle.runCycle()).resolves.toMatchObject({
+      claimed: 1,
+      providerRequests: 1,
+      succeeded: 0,
+      failed: 0,
+    });
+    expect(beforePersist).toHaveBeenCalledOnce();
+    expect(repository.recordSuccess).not.toHaveBeenCalled();
+    expect(repository.recordFailure).not.toHaveBeenCalled();
+    await cycle.shutdown();
+    expect(repository.releaseLeases).toHaveBeenCalledOnce();
+  });
+
+  it('does not persist a provider failure after leadership is lost in flight', async () => {
+    const { database, repository, provider } = dependencies();
+    vi.mocked(provider.fetchSolana).mockRejectedValue(
+      new PaperMarketProviderError('PROVIDER_TIMEOUT', true),
+    );
+    const beforePersist = vi.fn((): Promise<boolean> => Promise.resolve(false));
+    const cycle = new PaperMarketMonitoringCycle(
+      database,
+      repository,
+      provider,
+      policy(),
+      pino({ level: 'silent' }),
+      () => now,
+      beforePersist,
+    );
+
+    await expect(cycle.runCycle()).resolves.toMatchObject({
+      claimed: 1,
+      providerRequests: 1,
+      succeeded: 0,
+      failed: 0,
+    });
+    expect(beforePersist).toHaveBeenCalledOnce();
+    expect(repository.recordSuccess).not.toHaveBeenCalled();
+    expect(repository.recordFailure).not.toHaveBeenCalled();
+    await cycle.shutdown();
+  });
+
+  it('aborts an active provider request before releasing leases during shutdown', async () => {
+    const { database, repository, provider } = dependencies();
+    const providerStarted = deferredVoid();
+    let receivedSignal: AbortSignal | undefined;
+    vi.mocked(provider.fetchSolana).mockImplementation((_addresses, signal) => {
+      receivedSignal = signal;
+      providerStarted.resolve();
+
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => {
+          reject(new Error('synthetic abort'));
+        }, { once: true });
+      });
+    });
+    const cycle = new PaperMarketMonitoringCycle(
+      database,
+      repository,
+      provider,
+      policy(),
+      pino({ level: 'silent' }),
+      () => now,
+    );
+    const running = cycle.runCycle();
+
+    await providerStarted.promise;
+    cycle.requestStop();
+    await expect(running).resolves.toMatchObject({
+      claimed: 1,
+      providerRequests: 1,
+      succeeded: 0,
+      failed: 0,
+    });
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(repository.recordSuccess).not.toHaveBeenCalled();
+    expect(repository.recordFailure).not.toHaveBeenCalled();
+
+    await cycle.shutdown();
+    expect(repository.releaseLeases).toHaveBeenCalledOnce();
   });
 
   it('distinguishes an unavailable market result from a failed provider request', async () => {

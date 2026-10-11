@@ -40,6 +40,7 @@ interface PaperMarketMonitoringCycleFactoryOptions {
   readonly logger: Logger;
   readonly policy: PaperMarketMonitoringPolicy;
   readonly config: EngineConfig;
+  readonly beforePersist: () => Promise<boolean>;
 }
 
 export interface PaperMarketMonitorRuntimeDependencies {
@@ -120,6 +121,7 @@ export function startPaperMarketMonitorRuntime(
             maximumBackoffMs: options.config.paperMarketMonitorMaximumBackoffMs,
             leaseDurationMs: options.config.paperMarketMonitorLeaseDurationMs,
           },
+          beforePersist: options.beforeCycle,
         }),
       });
       poller = created;
@@ -209,6 +211,8 @@ function createMonitoringCycle(
     ),
     options.policy,
     options.logger,
+    undefined,
+    options.beforePersist,
   );
 }
 

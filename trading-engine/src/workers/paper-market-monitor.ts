@@ -38,6 +38,8 @@ export interface PaperMarketMonitoringSummary {
 
 export class PaperMarketMonitoringCycle {
   private readonly leaseOwner = newEngineId();
+  private stopping = false;
+  private activeRequest: AbortController | undefined;
 
   public constructor(
     private readonly database: Kysely<Database>,
@@ -46,10 +48,11 @@ export class PaperMarketMonitoringCycle {
     private readonly policy: PaperMarketMonitoringPolicy,
     private readonly logger: Logger,
     private readonly now: () => Date = () => new Date(),
+    private readonly beforePersist: () => Promise<boolean> = () => Promise.resolve(true),
   ) {}
 
   public async runCycle(): Promise<PaperMarketMonitoringSummary> {
-    if (!this.policy.enabled) {
+    if (!this.policy.enabled || this.isStopping()) {
       return this.summary(false);
     }
 
@@ -77,17 +80,28 @@ export class PaperMarketMonitoringCycle {
     let completed = 0;
 
     for (let index = 0; index < tasks.length; index += DEXSCREENER_MAX_TOKEN_ADDRESSES) {
+      if (this.isStopping()) {
+        break;
+      }
+
       const batch = tasks.slice(index, index + DEXSCREENER_MAX_TOKEN_ADDRESSES);
       const requestStartedAt = this.now();
       const requestId = newEngineId(requestStartedAt.getTime());
       providerRequests += 1;
       let results: readonly PaperMarketFetchResult[];
+      const requestController = new AbortController();
+      this.activeRequest = requestController;
 
       try {
         results = await this.provider.fetchSolana(
           batch.map((task) => task.asset_address),
+          requestController.signal,
         );
       } catch (error) {
+        if (this.isStopping()) {
+          break;
+        }
+
         const request = this.requestDetails(requestId, requestStartedAt);
         const providerFailure = providerError(error);
         this.logger.warn(
@@ -100,12 +114,28 @@ export class PaperMarketMonitoringCycle {
         );
 
         for (const task of batch) {
+          if (!await this.persistenceIsAllowed()) {
+            return {
+              enabled: true,
+              retired,
+              claimed: tasks.length,
+              providerRequests,
+              succeeded,
+              failed,
+              completed,
+            };
+          }
+
           const outcome = await this.failTask(task, providerFailure, request);
           failed += outcome === 'rescheduled' ? 1 : 0;
           completed += outcome === 'completed' ? 1 : 0;
         }
 
         continue;
+      } finally {
+        if (this.activeRequest === requestController) {
+          this.activeRequest = undefined;
+        }
       }
 
       const request = this.requestDetails(requestId, requestStartedAt);
@@ -115,6 +145,18 @@ export class PaperMarketMonitoringCycle {
       ]));
 
       for (const task of batch) {
+        if (!await this.persistenceIsAllowed()) {
+          return {
+            enabled: true,
+            retired,
+            claimed: tasks.length,
+            providerRequests,
+            succeeded,
+            failed,
+            completed,
+          };
+        }
+
         const result = byAddress.get(task.asset_address);
 
         if (result?.available === true) {
@@ -162,12 +204,48 @@ export class PaperMarketMonitoringCycle {
     };
   }
 
+  public requestStop(): void {
+    this.stopping = true;
+    this.activeRequest?.abort();
+  }
+
   public async shutdown(): Promise<void> {
+    this.requestStop();
     await this.repository.releaseLeases(
       this.database,
       this.leaseOwner,
       this.now(),
     );
+  }
+
+  private isStopping(): boolean {
+    return this.stopping;
+  }
+
+  private async persistenceIsAllowed(): Promise<boolean> {
+    if (this.isStopping()) {
+      return false;
+    }
+
+    try {
+      const allowed = await this.beforePersist();
+
+      if (!allowed) {
+        this.logger.warn(
+          { errorCode: 'PAPER_MARKET_MONITOR_LEADERSHIP_LOST' },
+          'PAPER market monitoring leadership was lost before persistence',
+        );
+      }
+
+      return allowed;
+    } catch {
+      this.logger.error(
+        { errorCode: 'PAPER_MARKET_MONITOR_LEADERSHIP_CHECK_FAILED' },
+        'PAPER market monitoring leadership check failed before persistence',
+      );
+
+      return false;
+    }
   }
 
   private async failTask(

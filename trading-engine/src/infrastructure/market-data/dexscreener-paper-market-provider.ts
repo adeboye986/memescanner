@@ -28,11 +28,13 @@ export interface PaperMarketHttpTransport {
     options: {
       readonly connectionTimeoutMs: number;
       readonly totalTimeoutMs: number;
+      readonly signal?: AbortSignal;
     },
   ): Promise<PaperMarketHttpResponse>;
 }
 
 export type PaperMarketTransportErrorCode =
+  | 'ABORTED'
   | 'NETWORK'
   | 'RESPONSE_TOO_LARGE'
   | 'TIMEOUT';
@@ -50,10 +52,15 @@ export class NodeHttpsPaperMarketTransport implements PaperMarketHttpTransport {
     options: {
       readonly connectionTimeoutMs: number;
       readonly totalTimeoutMs: number;
+      readonly signal?: AbortSignal;
     },
   ): Promise<PaperMarketHttpResponse> {
     if (url.protocol !== 'https:') {
       return Promise.reject(new PaperMarketTransportError('NETWORK'));
+    }
+
+    if (options.signal?.aborted === true) {
+      return Promise.reject(new PaperMarketTransportError('ABORTED'));
     }
 
     return new Promise((resolve, reject) => {
@@ -85,6 +92,7 @@ export class NodeHttpsPaperMarketTransport implements PaperMarketHttpTransport {
       };
       const request = httpsRequest(url, {
         method: 'GET',
+        signal: options.signal,
         headers: {
           accept: 'application/json',
           'user-agent': 'meme-scanner-trading-engine/0.1',
@@ -156,9 +164,11 @@ export class NodeHttpsPaperMarketTransport implements PaperMarketHttpTransport {
         socket.once('secureConnect', connected);
       });
       request.once('error', (error: Error): void => {
-        finish(error instanceof PaperMarketTransportError
-          ? error
-          : new PaperMarketTransportError('NETWORK'));
+        finish(options.signal?.aborted === true
+          ? new PaperMarketTransportError('ABORTED')
+          : error instanceof PaperMarketTransportError
+            ? error
+            : new PaperMarketTransportError('NETWORK'));
       });
       request.end();
     });
@@ -201,6 +211,7 @@ export class PaperMarketProviderError extends Error {
       | 'PROVIDER_HTTP_ERROR'
       | 'PROVIDER_NETWORK_ERROR'
       | 'PROVIDER_RATE_LIMITED'
+      | 'PROVIDER_REQUEST_ABORTED'
       | 'PROVIDER_RESPONSE_TOO_LARGE'
       | 'PROVIDER_RESPONSE_MALFORMED'
       | 'PROVIDER_TIMEOUT',
@@ -214,7 +225,10 @@ export class PaperMarketProviderError extends Error {
 }
 
 export interface PaperMarketDataProvider {
-  readonly fetchSolana: (addresses: readonly string[]) => Promise<readonly PaperMarketFetchResult[]>;
+  readonly fetchSolana: (
+    addresses: readonly string[],
+    signal?: AbortSignal,
+  ) => Promise<readonly PaperMarketFetchResult[]>;
 }
 
 export class DexScreenerPaperMarketProvider implements PaperMarketDataProvider {
@@ -230,6 +244,7 @@ export class DexScreenerPaperMarketProvider implements PaperMarketDataProvider {
 
   public async fetchSolana(
     addresses: readonly string[],
+    signal?: AbortSignal,
   ): Promise<readonly PaperMarketFetchResult[]> {
     const unique = [...new Set(addresses)];
 
@@ -249,6 +264,7 @@ export class DexScreenerPaperMarketProvider implements PaperMarketDataProvider {
       response = await this.transport.get(url, {
         connectionTimeoutMs: this.options.connectionTimeoutMs,
         totalTimeoutMs: this.options.totalTimeoutMs,
+        ...(signal === undefined ? {} : { signal }),
       });
     } catch (error) {
       if (error instanceof PaperMarketTransportError && error.code === 'TIMEOUT') {
@@ -257,6 +273,10 @@ export class DexScreenerPaperMarketProvider implements PaperMarketDataProvider {
 
       if (error instanceof PaperMarketTransportError && error.code === 'RESPONSE_TOO_LARGE') {
         throw new PaperMarketProviderError('PROVIDER_RESPONSE_TOO_LARGE', false);
+      }
+
+      if (error instanceof PaperMarketTransportError && error.code === 'ABORTED') {
+        throw new PaperMarketProviderError('PROVIDER_REQUEST_ABORTED', true);
       }
 
       throw new PaperMarketProviderError('PROVIDER_NETWORK_ERROR', true);

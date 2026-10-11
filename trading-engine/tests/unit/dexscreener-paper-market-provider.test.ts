@@ -102,6 +102,23 @@ describe('DexScreener PAPER market provider', () => {
     expect(second?.available === true ? second.observation.assetAddress : null).toBe(otherToken);
   });
 
+  it('passes cancellation through and reports an aborted request safely', async () => {
+    const transport = new StubTransport();
+    const controller = new AbortController();
+    transport.get.mockRejectedValue(new PaperMarketTransportError('ABORTED'));
+
+    await expect(provider(transport).fetchSolana([
+      wrappedSol,
+    ], controller.signal)).rejects.toMatchObject({
+      errorCode: 'PROVIDER_REQUEST_ABORTED',
+      retryable: true,
+    });
+    expect(transport.get).toHaveBeenCalledWith(
+      expect.any(URL),
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
   it('does not substitute quote-token identity or fabricate market values', async () => {
     const transport = new StubTransport();
     transport.get.mockResolvedValue(response([

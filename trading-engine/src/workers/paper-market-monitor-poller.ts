@@ -7,6 +7,7 @@ const maximumPollIntervalMs = 300_000;
 
 export interface PaperMarketMonitoringCycleRunner {
   runCycle(): Promise<PaperMarketMonitoringSummary>;
+  requestStop(): void;
   shutdown(): Promise<void>;
 }
 
@@ -58,6 +59,7 @@ export class PaperMarketMonitorPoller implements PaperMarketMonitorPollerHandle 
   public close(): Promise<void> {
     this.closePromise ??= (async (): Promise<void> => {
       this.stopping = true;
+      this.options.cycle.requestStop();
       this.releaseWait?.();
       await this.runPromise;
     })();

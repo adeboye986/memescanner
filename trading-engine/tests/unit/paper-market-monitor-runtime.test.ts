@@ -78,6 +78,7 @@ describe('leader-controlled PAPER market monitor runtime', () => {
     });
     const cycle: PaperMarketMonitoringCycleRunner = {
       runCycle: vi.fn(),
+      requestStop: vi.fn(),
       shutdown: vi.fn(),
     };
     const capabilityChecker = vi.fn<
@@ -122,6 +123,7 @@ describe('leader-controlled PAPER market monitor runtime', () => {
         maximumBackoffMs: config.paperMarketMonitorMaximumBackoffMs,
         leaseDurationMs: config.paperMarketMonitorLeaseDurationMs,
       },
+      beforePersist: beforeCycle,
     });
     expect(pollerFactory).toHaveBeenCalledWith({
       intervalMs: config.paperMarketMonitorIntervalMs,
@@ -203,6 +205,7 @@ describe('leader-controlled PAPER market monitor runtime', () => {
         capabilityChecker: (): Promise<boolean> => Promise.resolve(true),
         cycleFactory: (): PaperMarketMonitoringCycleRunner => ({
           runCycle: vi.fn(),
+          requestStop: vi.fn(),
           shutdown: vi.fn(),
         }),
         pollerFactory: () => ({
@@ -273,6 +276,7 @@ describe('leader-controlled PAPER market monitor runtime', () => {
         capabilityChecker: (): Promise<boolean> => Promise.resolve(true),
         cycleFactory: (): PaperMarketMonitoringCycleRunner => ({
           runCycle: vi.fn(),
+          requestStop: vi.fn(),
           shutdown: vi.fn(),
         }),
         pollerFactory,

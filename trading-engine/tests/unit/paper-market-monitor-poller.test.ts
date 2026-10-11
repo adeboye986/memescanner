@@ -28,6 +28,7 @@ const summary: PaperMarketMonitoringSummary = {
 interface TestCycle {
   readonly cycle: PaperMarketMonitoringCycleRunner;
   readonly runCycle: Mock<PaperMarketMonitoringCycleRunner['runCycle']>;
+  readonly requestStop: Mock<PaperMarketMonitoringCycleRunner['requestStop']>;
   readonly shutdown: Mock<PaperMarketMonitoringCycleRunner['shutdown']>;
 }
 
@@ -36,11 +37,13 @@ function testCycle(
     Promise.resolve(summary),
 ): TestCycle {
   const runCycle = vi.fn(implementation);
+  const requestStop = vi.fn();
   const shutdown = vi.fn((): Promise<void> => Promise.resolve());
 
   return {
-    cycle: { runCycle, shutdown },
+    cycle: { runCycle, requestStop, shutdown },
     runCycle,
+    requestStop,
     shutdown,
   };
 }
@@ -188,6 +191,7 @@ describe('PAPER market monitor poller', () => {
     await flushMicrotasks();
 
     expect(closed).toBe(false);
+    expect(monitoring.requestStop).toHaveBeenCalledOnce();
     expect(monitoring.shutdown).not.toHaveBeenCalled();
 
     activeCycle.resolve(summary);
@@ -264,6 +268,7 @@ describe('PAPER market monitor poller', () => {
 
     expect(vi.getTimerCount()).toBe(0);
     expect(monitoring.runCycle).toHaveBeenCalledOnce();
+    expect(monitoring.requestStop).toHaveBeenCalledOnce();
     expect(monitoring.shutdown).toHaveBeenCalledOnce();
   });
 
