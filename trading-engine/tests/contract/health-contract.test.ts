@@ -43,6 +43,23 @@ function inertDependencies(): {
   };
 }
 
+function compatibleSchema(
+  detectedVersion = 6,
+  requiredVersion = detectedVersion,
+): Promise<{
+  readonly compatible: true;
+  readonly detectedVersion: number;
+  readonly requiredVersion: number;
+  readonly missingCapabilities: readonly [];
+}> {
+  return Promise.resolve({
+    compatible: true,
+    detectedVersion,
+    requiredVersion,
+    missingCapabilities: [],
+  });
+}
+
 describe('health and version contracts', () => {
   it('returns 401 when no service assertion is provided', async () => {
     const identity = createTestIdentity();
@@ -140,6 +157,8 @@ describe('health and version contracts', () => {
       config: identity.config,
       database: dependencies.database,
       databasePing,
+      databaseSchemaCompatibilityCheck: (): ReturnType<typeof compatibleSchema> =>
+        compatibleSchema(),
       noopHandler: dependencies.handler,
       opportunityHandler: dependencies.opportunityHandler,
     });
@@ -177,6 +196,8 @@ describe('health and version contracts', () => {
       config: identity.config,
       database: dependencies.database,
       databasePing,
+      databaseSchemaCompatibilityCheck: (): Promise<never> =>
+        Promise.reject(new Error('synthetic PostgreSQL failure')),
       noopHandler: dependencies.handler,
       opportunityHandler: dependencies.opportunityHandler,
     });
@@ -201,6 +222,112 @@ describe('health and version contracts', () => {
       },
     });
     expect(databasePing).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it('reports schema 006 as unavailable when PAPER entry requires schema 007', async () => {
+    const identity = createTestIdentity(undefined, { PAPER_ENTRY_ENABLED: 'true' });
+    const dependencies = inertDependencies();
+    const app = buildApp({
+      config: identity.config,
+      database: dependencies.database,
+      databasePing: (): Promise<void> => Promise.resolve(),
+      databaseSchemaCompatibilityCheck: () => Promise.resolve({
+        compatible: false,
+        detectedVersion: 6,
+        requiredVersion: 7,
+        missingCapabilities: ['MIGRATION_007_NOT_APPLIED'],
+      }),
+      noopHandler: dependencies.handler,
+      opportunityHandler: dependencies.opportunityHandler,
+    });
+    const token = await createServiceToken(identity, { scopes: ['health:read'] });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/health/ready',
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.headers['x-database-schema-version']).toBe('006');
+    expect(response.headers['x-database-schema-required-version']).toBe('007');
+    expect(response.json()).toMatchObject({
+      status: 'unavailable',
+      service: identity.config.serviceName,
+      version: identity.config.serviceVersion,
+      dependencies: { postgres: 'up', redis: 'not_required' },
+    });
+    await app.close();
+  });
+
+  it('reports schema 007 as unavailable when monitoring requires schema 008', async () => {
+    const identity = createTestIdentity(undefined, {
+      PAPER_MARKET_MONITORING_ENABLED: 'true',
+      PAPER_MARKET_MONITOR_CANARY_USER_IDS: '1',
+    });
+    const dependencies = inertDependencies();
+    const app = buildApp({
+      config: identity.config,
+      database: dependencies.database,
+      databasePing: (): Promise<void> => Promise.resolve(),
+      databaseSchemaCompatibilityCheck: () => Promise.resolve({
+        compatible: false,
+        detectedVersion: 7,
+        requiredVersion: 8,
+        missingCapabilities: ['MIGRATION_008_NOT_APPLIED'],
+      }),
+      noopHandler: dependencies.handler,
+      opportunityHandler: dependencies.opportunityHandler,
+    });
+    const token = await createServiceToken(identity, { scopes: ['health:read'] });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/health/ready',
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.headers['x-database-schema-version']).toBe('007');
+    expect(response.headers['x-database-schema-required-version']).toBe('008');
+    expect(response.json()).toMatchObject({
+      status: 'unavailable',
+      dependencies: { postgres: 'up', redis: 'not_required' },
+    });
+    await app.close();
+  });
+
+  it('reports readiness with schema 008 and an eligible monitoring canary', async () => {
+    const identity = createTestIdentity(undefined, {
+      PAPER_MARKET_MONITORING_ENABLED: 'true',
+      PAPER_MARKET_MONITOR_CANARY_USER_IDS: '1',
+    });
+    const dependencies = inertDependencies();
+    const app = buildApp({
+      config: identity.config,
+      database: dependencies.database,
+      databasePing: (): Promise<void> => Promise.resolve(),
+      databaseSchemaCompatibilityCheck: (): ReturnType<typeof compatibleSchema> =>
+        compatibleSchema(8),
+      noopHandler: dependencies.handler,
+      opportunityHandler: dependencies.opportunityHandler,
+    });
+    const token = await createServiceToken(identity, { scopes: ['health:read'] });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/health/ready',
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-database-schema-version']).toBe('008');
+    expect(response.headers['x-database-schema-required-version']).toBe('008');
+    expect(response.json()).toMatchObject({
+      status: 'ok',
+      dependencies: { postgres: 'up', redis: 'not_required' },
+    });
     await app.close();
   });
 

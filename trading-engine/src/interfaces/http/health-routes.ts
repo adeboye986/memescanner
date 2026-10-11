@@ -11,6 +11,11 @@ import {
   type HealthStatus,
 } from '../../contracts/http/health.schema.js';
 import { pingDatabase, type Database } from '../../infrastructure/database/client.js';
+import {
+  formatDatabaseSchemaVersion,
+  inspectDatabaseSchemaCompatibility,
+  type DatabaseSchemaCompatibility,
+} from '../../infrastructure/database/schema-compatibility.js';
 
 export type EngineFastifyInstance = FastifyInstance<
   Server,
@@ -33,6 +38,10 @@ export type RequireServiceAuth = (
 export type DatabasePing = (
   database: Kysely<Database>,
 ) => Promise<void>;
+
+export type DatabaseSchemaCompatibilityCheck = (
+  database: Kysely<Database>,
+) => Promise<DatabaseSchemaCompatibility>;
 
 export interface PreValidationServiceAuth {
   readonly preValidation: (request: FastifyRequest) => Promise<void>;
@@ -68,6 +77,7 @@ export interface HealthRouteDependencies {
   readonly config: EngineConfig;
   readonly database: Kysely<Database>;
   readonly databasePing?: DatabasePing;
+  readonly databaseSchemaCompatibilityCheck?: DatabaseSchemaCompatibilityCheck;
   readonly requireServiceAuth: RequireServiceAuth;
 }
 
@@ -110,10 +120,46 @@ export function registerHealthRoutes(
       await dependencies.requireServiceAuth(request, 'health:read');
 
       const databasePing = dependencies.databasePing ?? pingDatabase;
-      const [postgres] = await Promise.allSettled([
+      const databaseSchemaCompatibilityCheck =
+        dependencies.databaseSchemaCompatibilityCheck
+        ?? ((database): Promise<DatabaseSchemaCompatibility> =>
+          inspectDatabaseSchemaCompatibility(database, dependencies.config));
+      const [postgres, schema] = await Promise.allSettled([
         databasePing(dependencies.database),
+        databaseSchemaCompatibilityCheck(dependencies.database),
       ]);
-      const ready = postgres.status === 'fulfilled';
+      const schemaCompatible = schema.status === 'fulfilled'
+        && schema.value.compatible;
+      const ready = postgres.status === 'fulfilled' && schemaCompatible;
+
+      if (schema.status === 'fulfilled') {
+        reply.header(
+          'x-database-schema-version',
+          formatDatabaseSchemaVersion(schema.value.detectedVersion),
+        );
+        reply.header(
+          'x-database-schema-required-version',
+          formatDatabaseSchemaVersion(schema.value.requiredVersion),
+        );
+
+        if (!schema.value.compatible) {
+          request.log.warn(
+            {
+              errorCode: 'DATABASE_SCHEMA_INCOMPATIBLE',
+              detectedSchemaVersion: schema.value.detectedVersion,
+              requiredSchemaVersion: schema.value.requiredVersion,
+              missingCapabilities: schema.value.missingCapabilities,
+            },
+            'Database schema is incompatible with enabled capabilities',
+          );
+        }
+      } else if (postgres.status === 'fulfilled') {
+        request.log.error(
+          { errorCode: 'DATABASE_SCHEMA_CHECK_FAILED' },
+          'Database schema compatibility check failed',
+        );
+      }
+
       const status: HealthStatus = {
         status: ready ? 'ok' : 'unavailable',
         service: dependencies.config.serviceName,

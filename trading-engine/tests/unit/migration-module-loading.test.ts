@@ -2,13 +2,32 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { FileMigrationProvider } from 'kysely/migration';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 describe('source migration module loading', () => {
   it('loads the database-only migration CLI without executing it on import', async () => {
     const module = await import('../../apps/migrate/src/main.js');
 
     expect(typeof module.runDatabaseMigrationCli).toBe('function');
+  });
+
+  it('runs migrations only through the dedicated database CLI', async () => {
+    const module = await import('../../apps/migrate/src/main.js');
+    const migrationRunner = vi.fn(() => Promise.resolve({ results: [] }));
+
+    await module.runDatabaseMigrationCli({
+      DATABASE_URL: 'postgresql://test@127.0.0.1:5432/trading_engine_test',
+      DATABASE_SSL: 'false',
+      DATABASE_MAX_CONNECTIONS: '2',
+    }, migrationRunner);
+
+    expect(migrationRunner).toHaveBeenCalledOnce();
+    expect(migrationRunner).toHaveBeenCalledWith({
+      databaseUrl: 'postgresql://test@127.0.0.1:5432/trading_engine_test',
+      databaseSsl: false,
+      databaseCaCertificate: undefined,
+      databaseMaxConnections: 2,
+    });
   });
 
   it('loads all migrations through the production file migration provider', async () => {

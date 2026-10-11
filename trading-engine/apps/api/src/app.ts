@@ -18,6 +18,7 @@ import { ApplicationError } from '../../../src/shared/errors/application-error.j
 import {
   registerHealthRoutes,
   type DatabasePing,
+  type DatabaseSchemaCompatibilityCheck,
   type EngineFastifyInstance,
   type RequireServiceAuth,
   type ServiceClaims,
@@ -36,6 +37,7 @@ export interface AppDependencies {
   readonly config: EngineConfig;
   readonly database: Kysely<Database>;
   readonly databasePing?: DatabasePing;
+  readonly databaseSchemaCompatibilityCheck?: DatabaseSchemaCompatibilityCheck;
   readonly noopHandler: AcceptNoopCommandHandler;
   readonly opportunityHandler: RecordOpportunityCommandHandler;
   readonly paperEntryHandler?: ExecutePaperEntryCommandHandler;
@@ -171,6 +173,12 @@ export function buildApp(
     ...(dependencies.databasePing === undefined
       ? {}
       : { databasePing: dependencies.databasePing }),
+    ...(dependencies.databaseSchemaCompatibilityCheck === undefined
+      ? {}
+      : {
+          databaseSchemaCompatibilityCheck:
+            dependencies.databaseSchemaCompatibilityCheck,
+        }),
     requireServiceAuth,
   });
   registerNoopCommandRoutes(app, {

@@ -31,6 +31,20 @@ function deferredVoid(): {
   return { promise, resolve: release };
 }
 
+function compatibleSchemaChecker(): Promise<{
+  readonly compatible: true;
+  readonly detectedVersion: 8;
+  readonly requiredVersion: 6;
+  readonly missingCapabilities: readonly [];
+}> {
+  return Promise.resolve({
+    compatible: true,
+    detectedVersion: 8,
+    requiredVersion: 6,
+    missingCapabilities: [],
+  });
+}
+
 async function flushMicrotasks(): Promise<void> {
   for (let iteration = 0; iteration < 8; iteration += 1) {
     await Promise.resolve();
@@ -38,7 +52,7 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe('PostgreSQL workflow worker runtime', () => {
-  it('starts leadership-safe polling and destroys resources exactly once', async () => {
+  it('does not run migrations by default before leadership-safe polling', async () => {
     const identity = createTestIdentity();
     const database = createDatabase(identity.config);
     const destroyDatabase = vi
@@ -68,21 +82,24 @@ describe('PostgreSQL workflow worker runtime', () => {
       options.startPoller({ database, beforeCycle });
       return leadership;
     });
+    const migrationRunner = vi.fn(() => Promise.resolve({ results: [] }));
 
     const runtime = await startWorker(
       {
         config: identity.config,
         logger: pino({ level: 'silent' }),
-        runMigrations: false,
       },
       {
         databaseFactory: () => database,
+        migrationRunner,
+        schemaCompatibilityChecker: compatibleSchemaChecker,
         leadershipStarter,
         pollerStarter,
         paperMarketMonitorStarter,
       },
     );
 
+    expect(migrationRunner).not.toHaveBeenCalled();
     expect(leadershipStarter).toHaveBeenCalledOnce();
     expect(leadershipStarter.mock.calls[0]?.[0]).toMatchObject({
       retryIntervalMs: identity.config.workflowLeaderRetryIntervalMs,
@@ -155,6 +172,7 @@ describe('PostgreSQL workflow worker runtime', () => {
       },
       {
         databaseFactory: () => database,
+        schemaCompatibilityChecker: compatibleSchemaChecker,
         leadershipStarter,
         pollerStarter,
         paperMarketMonitorStarter,
@@ -204,6 +222,39 @@ describe('PostgreSQL workflow worker runtime', () => {
     expect(monitorCloses).toHaveLength(2);
     expect(monitorCloses.every((close) => close.mock.calls.length === 1)).toBe(true);
     expect(leadershipClose).toHaveBeenCalledOnce();
+    expect(destroyDatabase).toHaveBeenCalledOnce();
+  });
+
+  it('does not start leadership when the configured schema is incompatible', async () => {
+    const identity = createTestIdentity(undefined, { PAPER_ENTRY_ENABLED: 'true' });
+    const database = createDatabase(identity.config);
+    const destroyDatabase = vi
+      .spyOn(database, 'destroy')
+      .mockResolvedValue(undefined);
+    const leadershipStarter = vi.fn<
+      (options: PostgresWorkflowLeaderOptions) => RuntimeHandle
+    >(() => ({ close: vi.fn((): Promise<void> => Promise.resolve()) }));
+    const compatibilityError = new Error(
+      'Database schema version 006 is incompatible with required version 007',
+    );
+    const migrationRunner = vi.fn(() => Promise.resolve({ results: [] }));
+
+    await expect(startWorker(
+      {
+        config: identity.config,
+        logger: pino({ level: 'silent' }),
+      },
+      {
+        databaseFactory: () => database,
+        migrationRunner,
+        schemaCompatibilityChecker: (): Promise<never> =>
+          Promise.reject(compatibilityError),
+        leadershipStarter,
+      },
+    )).rejects.toBe(compatibilityError);
+
+    expect(migrationRunner).not.toHaveBeenCalled();
+    expect(leadershipStarter).not.toHaveBeenCalled();
     expect(destroyDatabase).toHaveBeenCalledOnce();
   });
 

@@ -6,8 +6,9 @@ import { loadLocalEnvironment } from '../../../src/infrastructure/runtime/proces
 
 export async function runDatabaseMigrationCli(
   env: NodeJS.ProcessEnv = process.env,
+  migrationRunner: typeof migrateConfiguredDatabase = migrateConfiguredDatabase,
 ): Promise<void> {
-  const result = await migrateConfiguredDatabase(loadDatabaseConfig(env));
+  const result = await migrationRunner(loadDatabaseConfig(env));
 
   for (const migration of result.results ?? []) {
     process.stdout.write(

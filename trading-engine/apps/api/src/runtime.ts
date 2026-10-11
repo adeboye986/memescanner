@@ -9,6 +9,7 @@ import { RecordPaperPositionCommandHandler } from '../../../src/application/hand
 import type { EngineConfig } from '../../../src/config/env.js';
 import { createDatabase } from '../../../src/infrastructure/database/client.js';
 import { migrateDatabase } from '../../../src/infrastructure/database/migrate.js';
+import { assertDatabaseSchemaCompatible } from '../../../src/infrastructure/database/schema-compatibility.js';
 import { CommandInboxRepository } from '../../../src/infrastructure/database/repositories/command-inbox-repository.js';
 import { OpportunityRepository } from '../../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { PaperEntryRepository } from '../../../src/infrastructure/database/repositories/paper-entry-repository.js';
@@ -32,6 +33,8 @@ export interface StartApiOptions {
 export interface StartApiDependencies {
   readonly databaseFactory?: typeof createDatabase;
   readonly appBuilder?: typeof buildApp;
+  readonly migrationRunner?: typeof migrateDatabase;
+  readonly schemaCompatibilityChecker?: typeof assertDatabaseSchemaCompatible;
 }
 
 export async function startApi(
@@ -40,6 +43,9 @@ export async function startApi(
 ): Promise<RuntimeHandle> {
   const databaseFactory = dependencies.databaseFactory ?? createDatabase;
   const appBuilder = dependencies.appBuilder ?? buildApp;
+  const migrationRunner = dependencies.migrationRunner ?? migrateDatabase;
+  const schemaCompatibilityChecker = dependencies.schemaCompatibilityChecker
+    ?? assertDatabaseSchemaCompatible;
   const database = databaseFactory(options.config);
   const commandInbox = new CommandInboxRepository();
   const outbox = new OutboxRepository();
@@ -114,10 +120,11 @@ export async function startApi(
   });
 
   try {
-    if (options.runMigrations !== false) {
-      await migrateDatabase(database);
+    if (options.runMigrations === true) {
+      await migrationRunner(database);
     }
 
+    await schemaCompatibilityChecker(database, options.config);
     await app.listen({
       host: options.config.host,
       port: options.config.port,

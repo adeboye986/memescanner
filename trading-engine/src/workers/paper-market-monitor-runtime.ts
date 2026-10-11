@@ -1,8 +1,9 @@
-import { sql, type Kysely } from 'kysely';
+import type { Kysely } from 'kysely';
 import type { Logger } from 'pino';
 
 import type { EngineConfig } from '../config/env.js';
 import type { Database } from '../infrastructure/database/client.js';
+import { inspectDatabaseSchemaCompatibility } from '../infrastructure/database/schema-compatibility.js';
 import { PaperPositionMonitoringRepository } from '../infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import {
   DEXSCREENER_MAX_TOKEN_ADDRESSES,
@@ -167,33 +168,13 @@ export function startPaperMarketMonitorRuntime(
 export async function paperMarketMonitoringCapabilitiesAvailable(
   database: Kysely<Database>,
 ): Promise<boolean> {
-  const result = await sql<{ readonly available: boolean }>`
-    select
-      to_regclass('public.paper_position_monitoring_tasks') is not null
-      and to_regclass('public.paper_market_shadow_observations') is not null
-      and exists (
-        select 1
-        from information_schema.columns
-        where table_schema = 'public'
-          and table_name = 'paper_position_monitoring_tasks'
-          and column_name = 'next_attempt_sequence'
-      )
-      and exists (
-        select 1
-        from pg_constraint
-        where conname = 'paper_market_shadow_observations_position_attempt_unique'
-          and conrelid = to_regclass('public.paper_market_shadow_observations')
-      )
-      and exists (
-        select 1
-        from pg_trigger
-        where tgname = 'paper_market_shadow_observations_append_only'
-          and tgrelid = to_regclass('public.paper_market_shadow_observations')
-          and not tgisinternal
-      ) as available
-  `.execute(database);
+  const compatibility = await inspectDatabaseSchemaCompatibility(database, {
+    paperEntryEnabled: false,
+    paperMarketMonitoringEnabled: true,
+    paperMarketMonitorCanaryUserIds: ['capability-check'],
+  });
 
-  return result.rows[0]?.available === true;
+  return compatibility.compatible;
 }
 
 function createMonitoringCycle(

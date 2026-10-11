@@ -1,11 +1,14 @@
 import { generateKeyPairSync, type KeyObject } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import { SignJWT } from 'jose';
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
+import { FileMigrationProvider, Migrator } from 'kysely/migration';
 import { Redis } from 'ioredis';
-import { sql } from 'kysely';
 
 import { loadConfig, type EngineConfig } from '../../src/config/env.js';
 import { createDatabase, type Database } from '../../src/infrastructure/database/client.js';
@@ -198,6 +201,39 @@ export async function assertDedicatedTestDatabase(
 export async function resetDatabase(database: Kysely<Database>): Promise<void> {
   await resetDatabaseSchema(database);
   await migrateDatabase(database);
+}
+
+export async function migrateTestDatabaseTo(
+  database: Kysely<Database>,
+  migrationName: string,
+): Promise<void> {
+  await assertDedicatedTestDatabase(database);
+  const migrationFolder = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../../src/infrastructure/database/migrations',
+  );
+  const migrator = new Migrator({
+    db: database,
+    provider: new FileMigrationProvider({ fs, path, migrationFolder }),
+  });
+  const result = await migrator.migrateTo(migrationName);
+  const failedMigration = result.results?.find(
+    (migration) => migration.status === 'Error',
+  );
+
+  if (result.error !== undefined) {
+    const cause = result.error instanceof Error
+      ? result.error
+      : new Error('Unknown test migration failure');
+
+    throw new Error('Test database migration failed', { cause });
+  }
+
+  if (failedMigration !== undefined) {
+    throw new Error(
+      'Test migration ' + failedMigration.migrationName + ' failed',
+    );
+  }
 }
 
 export async function resetDatabaseSchema(database: Kysely<Database>): Promise<void> {

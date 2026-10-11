@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 import type { EngineConfig } from '../../../src/config/env.js';
 import { createDatabase } from '../../../src/infrastructure/database/client.js';
 import { migrateDatabase } from '../../../src/infrastructure/database/migrate.js';
+import { assertDatabaseSchemaCompatible } from '../../../src/infrastructure/database/schema-compatibility.js';
 import { OpportunityEvaluationRepository } from '../../../src/infrastructure/database/repositories/opportunity-evaluation-repository.js';
 import { OutboxRepository } from '../../../src/infrastructure/database/repositories/outbox-repository.js';
 import { LaravelWebhookClient } from '../../../src/infrastructure/http/laravel-webhook-client.js';
@@ -37,6 +38,8 @@ export interface StartWorkerOptions {
 
 export interface StartWorkerDependencies {
   readonly databaseFactory?: typeof createDatabase;
+  readonly migrationRunner?: typeof migrateDatabase;
+  readonly schemaCompatibilityChecker?: typeof assertDatabaseSchemaCompatible;
   readonly leadershipStarter?: (options: PostgresWorkflowLeaderOptions) => RuntimeHandle;
   readonly pollerStarter?: (options: WorkflowPollerOptions) => WorkflowPollerHandle;
   readonly paperMarketMonitorStarter?: (
@@ -49,6 +52,9 @@ export async function startWorker(
   dependencies: StartWorkerDependencies = {},
 ): Promise<RuntimeHandle> {
   const databaseFactory = dependencies.databaseFactory ?? createDatabase;
+  const migrationRunner = dependencies.migrationRunner ?? migrateDatabase;
+  const schemaCompatibilityChecker = dependencies.schemaCompatibilityChecker
+    ?? assertDatabaseSchemaCompatible;
   const leadershipStarter = dependencies.leadershipStarter ?? startPostgresWorkflowLeader;
   const pollerStarter = dependencies.pollerStarter ?? startWorkflowPoller;
   const paperMarketMonitorStarter = dependencies.paperMarketMonitorStarter
@@ -73,10 +79,11 @@ export async function startWorker(
   });
 
   try {
-    if (options.runMigrations !== false) {
-      await migrateDatabase(database);
+    if (options.runMigrations === true) {
+      await migrationRunner(database);
     }
 
+    await schemaCompatibilityChecker(database, options.config);
     leadership = leadershipStarter({
       backend: new PostgresWorkflowLeadershipBackend(database),
       retryIntervalMs: options.config.workflowLeaderRetryIntervalMs,

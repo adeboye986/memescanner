@@ -9,6 +9,7 @@ import { SOLANA_MAINNET_ID, type OpportunityCommand } from '../../src/contracts/
 import { newEngineId } from '../../src/shared/ids/id.js';
 import type { EngineConfig } from '../../src/config/env.js';
 import { createDatabase, type Database } from '../../src/infrastructure/database/client.js';
+import { inspectDatabaseSchemaCompatibility } from '../../src/infrastructure/database/schema-compatibility.js';
 import { CommandInboxRepository } from '../../src/infrastructure/database/repositories/command-inbox-repository.js';
 import { OpportunityEvaluationRepository } from '../../src/infrastructure/database/repositories/opportunity-evaluation-repository.js';
 import { OpportunityRepository } from '../../src/infrastructure/database/repositories/opportunity-repository.js';
@@ -29,7 +30,9 @@ import {
 } from '../../src/workers/postgres-workflow-leader.js';
 import {
   createTestIdentity,
+  migrateTestDatabaseTo,
   resetDatabase,
+  resetDatabaseSchema,
   startTestEnvironment,
   stopTestEnvironment,
   type TestEnvironment,
@@ -134,7 +137,63 @@ describe('engine-owned PAPER financial entry', () => {
     await stopTestEnvironment(environment);
   });
 
-  it('atomically creates a fresh wallet, balanced ledger, fill, position, lifecycle, and event', async () => {
+  it('fails PAPER entry atomically on schema 006 before monitoring tasks exist', async () => {
+    await resetDatabaseSchema(database);
+    await migrateTestDatabaseTo(database, '006_paper_financial_lifecycle');
+    const compatibility = await inspectDatabaseSchemaCompatibility(database, config);
+    const source = await evaluatedOpportunity('schema-006');
+
+    expect(compatibility).toMatchObject({
+      compatible: false,
+      detectedVersion: 6,
+      requiredVersion: 7,
+      missingCapabilities: [
+        'MIGRATION_007_NOT_APPLIED',
+        'PAPER_ENTRY_MONITORING_TASK_SCHEMA_UNAVAILABLE',
+      ],
+    });
+    await expect(handler().execute(entryCommand(source, 'paper-entry-schema-006')))
+      .rejects.toThrow(/paper_position_monitoring_tasks/);
+    expect(await count('paper_wallets')).toBe(0);
+    expect(await count('paper_ledger_transactions')).toBe(0);
+    expect(await count('paper_ledger_entries')).toBe(0);
+    expect(await count('paper_entry_intents')).toBe(0);
+    expect(await count('paper_positions')).toBe(0);
+    expect(await countEvents('paper.entry.executed.v1')).toBe(0);
+  });
+
+  it('executes PAPER entry on schema 007 and creates exactly one monitoring task', async () => {
+    await resetDatabaseSchema(database);
+    await migrateTestDatabaseTo(database, '007_paper_market_monitoring');
+    const compatibility = await inspectDatabaseSchemaCompatibility(database, config);
+    const source = await evaluatedOpportunity('schema-007');
+    const response = await handler().execute(
+      entryCommand(source, 'paper-entry-schema-007'),
+    );
+    const task = await database.selectFrom('paper_position_monitoring_tasks')
+      .select(['position_id', 'monitoring_state'])
+      .executeTakeFirstOrThrow();
+    const shadowTable = await sql.raw<{ readonly table_name: string | null }>(
+      "select to_regclass('public.paper_market_shadow_observations')::text as table_name",
+    ).execute(database);
+
+    expect(compatibility).toMatchObject({
+      compatible: true,
+      detectedVersion: 7,
+      requiredVersion: 7,
+      missingCapabilities: [],
+    });
+    expect(response.status).toBe('accepted');
+    expect(await count('paper_positions')).toBe(1);
+    expect(task).toEqual({
+      position_id: response.positionId,
+      monitoring_state: 'pending',
+    });
+    expect(shadowTable.rows[0]?.table_name).toBeNull();
+    expect(await countEvents('paper.entry.executed.v1')).toBe(1);
+  });
+
+  it('executes PAPER entry atomically on schema 008 with shadow persistence available', async () => {
     const source = await evaluatedOpportunity('101');
     const response = await handler().execute(entryCommand(source));
     const wallet = await database.selectFrom('paper_wallets').selectAll().executeTakeFirstOrThrow();

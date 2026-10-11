@@ -13,7 +13,7 @@ import type { EngineFastifyInstance } from '../../src/interfaces/http/health-rou
 import { createTestIdentity } from '../support/test-environment.js';
 
 describe('API runtime', () => {
-  it('starts and shuts down without constructing or closing Redis', async () => {
+  it('does not run migrations by default and starts without Redis', async () => {
     const identity = createTestIdentity(undefined, {
       REDIS_URL: 'redis://127.0.0.1:1/15',
     });
@@ -34,21 +34,34 @@ describe('API runtime', () => {
         return app;
       },
     );
+    const schemaCompatibilityChecker = vi.fn(() => Promise.resolve({
+      compatible: true,
+      detectedVersion: 6,
+      requiredVersion: 6,
+      missingCapabilities: [],
+    }));
+    const migrationRunner = vi.fn(() => Promise.resolve({ results: [] }));
     const dependencies: StartApiDependencies = {
       databaseFactory: (): typeof database => database,
       appBuilder,
+      migrationRunner,
+      schemaCompatibilityChecker,
     };
 
     const runtime = await startApi(
       {
         config: identity.config,
         logger: pino({ level: 'silent' }),
-        runMigrations: false,
       },
       dependencies,
     );
 
+    expect(migrationRunner).not.toHaveBeenCalled();
     expect(appBuilder).toHaveBeenCalledOnce();
+    expect(schemaCompatibilityChecker).toHaveBeenCalledWith(
+      database,
+      identity.config,
+    );
     expect(listen).toHaveBeenCalledWith({
       host: identity.config.host,
       port: identity.config.port,
@@ -56,6 +69,43 @@ describe('API runtime', () => {
 
     await Promise.all([runtime.close(), runtime.close()]);
 
+    expect(closeApp).toHaveBeenCalledOnce();
+    expect(destroyDatabase).toHaveBeenCalledOnce();
+  });
+
+  it('fails startup before listen when enabled capabilities require a missing migration', async () => {
+    const identity = createTestIdentity(undefined, { PAPER_ENTRY_ENABLED: 'true' });
+    const database = createDatabase(identity.config);
+    const destroyDatabase = vi
+      .spyOn(database, 'destroy')
+      .mockResolvedValue(undefined);
+    const listen = vi.fn((): Promise<string> => Promise.resolve('http://127.0.0.1:3100'));
+    const closeApp = vi.fn((): Promise<void> => Promise.resolve());
+    const app = {
+      listen,
+      close: closeApp,
+    } as unknown as EngineFastifyInstance;
+    const compatibilityError = new Error(
+      'Database schema version 006 is incompatible with required version 007',
+    );
+    const migrationRunner = vi.fn(() => Promise.resolve({ results: [] }));
+
+    await expect(startApi(
+      {
+        config: identity.config,
+        logger: pino({ level: 'silent' }),
+      },
+      {
+        databaseFactory: (): typeof database => database,
+        appBuilder: (): EngineFastifyInstance => app,
+        migrationRunner,
+        schemaCompatibilityChecker: (): Promise<never> =>
+          Promise.reject(compatibilityError),
+      },
+    )).rejects.toBe(compatibilityError);
+
+    expect(migrationRunner).not.toHaveBeenCalled();
+    expect(listen).not.toHaveBeenCalled();
     expect(closeApp).toHaveBeenCalledOnce();
     expect(destroyDatabase).toHaveBeenCalledOnce();
   });

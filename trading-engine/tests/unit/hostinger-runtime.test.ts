@@ -58,7 +58,7 @@ function dependencies(
 }
 
 describe('combined Hostinger runtime', () => {
-  it('starts the API and PostgreSQL workflow worker without a queue scheduler', async () => {
+  it('starts API and worker without migrations or a queue scheduler', async () => {
     const events: string[] = [];
 
     const runtime = await startHostingerRuntime(dependencies(events));
