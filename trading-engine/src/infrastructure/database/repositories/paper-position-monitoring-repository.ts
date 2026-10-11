@@ -1,4 +1,5 @@
 import {
+  sql,
   type Insertable,
   type Kysely,
   type Selectable,
@@ -244,7 +245,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
     this.assertRequestDetails(request);
 
     return database.transaction().execute(async (transaction) => {
-      const current = await this.lockOwnedTask(transaction, task.position_id, leaseOwner);
+      const current = await this.lockOwnedTask(transaction, task, leaseOwner);
       const position = await this.lockPositionState(transaction, task.position_id);
 
       if (position !== 'open') {
@@ -258,7 +259,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
           current.consecutive_failure_count,
           null,
         );
-        await this.complete(transaction, current, request.receivedAt);
+        await this.complete(transaction, current, leaseOwner, request.receivedAt);
 
         return 'completed';
       }
@@ -274,7 +275,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         0,
         nextAttemptAt,
       );
-      await transaction
+      const updated = await transaction
         .updateTable('paper_position_monitoring_tasks')
         .set({
           monitoring_state: 'pending',
@@ -299,7 +300,12 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         .where('position_id', '=', current.position_id)
         .where('monitoring_state', '=', 'processing')
         .where('lease_owner', '=', leaseOwner)
-        .executeTakeFirstOrThrow();
+        .where('lease_expires_at', '>', sql<Date>`clock_timestamp()`)
+        .where('next_attempt_sequence', '=', task.next_attempt_sequence)
+        .returning('position_id')
+        .executeTakeFirst();
+
+      this.assertTaskFence(updated);
 
       return 'rescheduled';
     });
@@ -318,7 +324,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
     this.assertRequestDetails(request);
 
     return database.transaction().execute(async (transaction) => {
-      const current = await this.lockOwnedTask(transaction, task.position_id, leaseOwner);
+      const current = await this.lockOwnedTask(transaction, task, leaseOwner);
       const position = await this.lockPositionState(transaction, task.position_id);
       const failures = current.consecutive_failure_count + 1;
 
@@ -333,7 +339,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
           failures,
           null,
         );
-        await this.complete(transaction, current, request.receivedAt);
+        await this.complete(transaction, current, leaseOwner, request.receivedAt);
 
         return 'completed';
       }
@@ -352,7 +358,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         failures,
         nextAttemptAt,
       );
-      await transaction
+      const updated = await transaction
         .updateTable('paper_position_monitoring_tasks')
         .set({
           monitoring_state: 'pending',
@@ -370,7 +376,12 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         .where('position_id', '=', current.position_id)
         .where('monitoring_state', '=', 'processing')
         .where('lease_owner', '=', leaseOwner)
-        .executeTakeFirstOrThrow();
+        .where('lease_expires_at', '>', sql<Date>`clock_timestamp()`)
+        .where('next_attempt_sequence', '=', task.next_attempt_sequence)
+        .returning('position_id')
+        .executeTakeFirst();
+
+      this.assertTaskFence(updated);
 
       return 'rescheduled';
     });
@@ -443,20 +454,22 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
 
   private async lockOwnedTask(
     transaction: Transaction<Database>,
-    positionId: string,
+    expectedTask: PaperPositionMonitoringTaskRecord,
     leaseOwner: string,
   ): Promise<PaperPositionMonitoringTaskRecord> {
     const task = await transaction
       .selectFrom('paper_position_monitoring_tasks')
       .selectAll()
-      .where('position_id', '=', positionId)
+      .where('position_id', '=', expectedTask.position_id)
       .where('monitoring_state', '=', 'processing')
       .where('lease_owner', '=', leaseOwner)
+      .where('lease_expires_at', '>', sql<Date>`clock_timestamp()`)
+      .where('next_attempt_sequence', '=', expectedTask.next_attempt_sequence)
       .forUpdate()
       .executeTakeFirst();
 
     if (task === undefined) {
-      throw new Error('PAPER monitoring task lease is no longer owned');
+      throw new Error('PAPER monitoring task lease or attempt fence rejected persistence');
     }
 
     return task;
@@ -479,9 +492,10 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
   private async complete(
     transaction: Transaction<Database>,
     task: PaperPositionMonitoringTaskRecord,
+    leaseOwner: string,
     now: Date,
   ): Promise<void> {
-    await transaction
+    const updated = await transaction
       .updateTable('paper_position_monitoring_tasks')
       .set({
         monitoring_state: 'completed',
@@ -491,7 +505,22 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         updated_at: now,
       })
       .where('position_id', '=', task.position_id)
-      .executeTakeFirstOrThrow();
+      .where('monitoring_state', '=', 'processing')
+      .where('lease_owner', '=', leaseOwner)
+      .where('lease_expires_at', '>', sql<Date>`clock_timestamp()`)
+      .where('next_attempt_sequence', '=', task.next_attempt_sequence)
+      .returning('position_id')
+      .executeTakeFirst();
+
+    this.assertTaskFence(updated);
+  }
+
+  private assertTaskFence(
+    updated: { readonly position_id: string } | undefined,
+  ): void {
+    if (updated === undefined) {
+      throw new Error('PAPER monitoring task lease or attempt fence rejected persistence');
+    }
   }
 
   private assertRequestDetails(request: PaperMarketRequestDetails): void {

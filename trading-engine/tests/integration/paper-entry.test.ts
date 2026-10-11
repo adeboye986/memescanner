@@ -20,6 +20,8 @@ import {
   type PaperMarketRequestDetails,
 } from '../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import { OpportunityEvaluationDispatcher } from '../../src/workers/opportunity-evaluation-dispatcher.js';
+import type { PaperMarketFetchResult } from '../../src/infrastructure/market-data/dexscreener-paper-market-provider.js';
+import { PaperMarketMonitoringCycle } from '../../src/workers/paper-market-monitor.js';
 import {
   createTestIdentity,
   resetDatabase,
@@ -439,6 +441,250 @@ describe('engine-owned PAPER financial entry', () => {
     });
   });
 
+  it('rejects an expired unreclaimed lease without changing persisted state', async () => {
+    const source = await evaluatedOpportunity('fence-expired', 'e'.repeat(64));
+    const opened = await handler().execute(
+      entryCommand(source, 'paper-entry-fence-expired'),
+    );
+    const monitoring = new PaperPositionMonitoringRepository();
+    const owner = '01M50000000000000000000301';
+    const claimedAt = await databaseNow();
+    const [claimed] = await monitoring.claimDue(
+      database,
+      owner,
+      ['7'],
+      1,
+      300_000,
+      claimedAt,
+    );
+
+    if (claimed === undefined) {
+      expect.fail('Expected the monitoring task to be claimable');
+    }
+
+    await database.updateTable('paper_position_monitoring_tasks')
+      .set({ lease_expires_at: sql<Date>`clock_timestamp() - interval '1 second'` })
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+    const ledgerEntriesBefore = await count('paper_ledger_entries');
+    const outboxEventsBefore = await count('event_outbox');
+
+    await expect(monitoring.recordSuccess(
+      database,
+      claimed,
+      owner,
+      marketObservation(),
+      requestDetails(claimedAt),
+      5_000,
+    )).rejects.toThrow(/lease or attempt fence/);
+
+    expect(await count('paper_market_shadow_observations')).toBe(0);
+    expect(await database.selectFrom('paper_position_monitoring_tasks')
+      .select(['monitoring_state', 'lease_owner', 'next_attempt_sequence'])
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      monitoring_state: 'processing',
+      lease_owner: owner,
+      next_attempt_sequence: 1,
+    });
+    expect(await count('paper_ledger_entries')).toBe(ledgerEntriesBefore);
+    expect(await count('event_outbox')).toBe(outboxEventsBefore);
+    expect(await count('paper_position_lifecycle_decisions')).toBe(0);
+    expect(await count('paper_exit_settlements')).toBe(0);
+  });
+
+  it('rejects the old owner after an expired lease is reclaimed', async () => {
+    const source = await evaluatedOpportunity('fence-reclaimed', 'f'.repeat(64));
+    const opened = await handler().execute(
+      entryCommand(source, 'paper-entry-fence-reclaimed'),
+    );
+    const monitoring = new PaperPositionMonitoringRepository();
+    const oldOwner = '01M50000000000000000000302';
+    const newOwner = '01M50000000000000000000303';
+    const claimedAt = await databaseNow();
+    const [oldClaim] = await monitoring.claimDue(
+      database,
+      oldOwner,
+      ['7'],
+      1,
+      300_000,
+      claimedAt,
+    );
+
+    if (oldClaim === undefined) {
+      expect.fail('Expected the monitoring task to be claimable');
+    }
+
+    await database.updateTable('paper_position_monitoring_tasks')
+      .set({ lease_expires_at: sql<Date>`clock_timestamp() - interval '1 second'` })
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow();
+    const reclaimedAt = await databaseNow();
+
+    const [newClaim] = await monitoring.claimDue(
+      database,
+      newOwner,
+      ['7'],
+      1,
+      300_000,
+      reclaimedAt,
+    );
+
+    if (newClaim === undefined) {
+      expect.fail('Expected the expired monitoring lease to be reclaimable');
+    }
+
+    await expect(monitoring.recordSuccess(
+      database,
+      oldClaim,
+      oldOwner,
+      marketObservation(),
+      requestDetails(reclaimedAt),
+      5_000,
+    )).rejects.toThrow(/lease or attempt fence/);
+
+    expect(await count('paper_market_shadow_observations')).toBe(0);
+    expect(await database.selectFrom('paper_position_monitoring_tasks')
+      .select(['monitoring_state', 'lease_owner', 'next_attempt_sequence'])
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      monitoring_state: 'processing',
+      lease_owner: newOwner,
+      next_attempt_sequence: newClaim.next_attempt_sequence,
+    });
+  });
+
+  it('rejects a superseded attempt snapshot even when the lease owner matches', async () => {
+    const source = await evaluatedOpportunity('fence-sequence', 'g'.repeat(64));
+    const opened = await handler().execute(
+      entryCommand(source, 'paper-entry-fence-sequence'),
+    );
+    const monitoring = new PaperPositionMonitoringRepository();
+    const owner = '01M50000000000000000000304';
+    const claimedAt = await databaseNow();
+    const [firstClaim] = await monitoring.claimDue(
+      database,
+      owner,
+      ['7'],
+      1,
+      300_000,
+      claimedAt,
+    );
+
+    if (firstClaim === undefined) {
+      expect.fail('Expected the first monitoring attempt to be claimable');
+    }
+
+    await monitoring.recordSuccess(
+      database,
+      firstClaim,
+      owner,
+      marketObservation(),
+      requestDetails(claimedAt),
+      5_000,
+    );
+    const secondAttemptAt = new Date(claimedAt.getTime() + 5_000);
+    const [secondClaim] = await monitoring.claimDue(
+      database,
+      owner,
+      ['7'],
+      1,
+      300_000,
+      secondAttemptAt,
+    );
+
+    if (secondClaim === undefined) {
+      expect.fail('Expected the second monitoring attempt to be claimable');
+    }
+
+    await expect(monitoring.recordSuccess(
+      database,
+      firstClaim,
+      owner,
+      marketObservation(),
+      requestDetails(secondAttemptAt),
+      5_000,
+    )).rejects.toThrow(/lease or attempt fence/);
+
+    expect(await count('paper_market_shadow_observations')).toBe(1);
+    expect(await database.selectFrom('paper_position_monitoring_tasks')
+      .select(['monitoring_state', 'lease_owner', 'next_attempt_sequence'])
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      monitoring_state: 'processing',
+      lease_owner: owner,
+      next_attempt_sequence: 2,
+    });
+    expect(secondClaim.next_attempt_sequence).toBe(2);
+  });
+
+  it('rejects persistence when the lease expires during provider processing', async () => {
+    const source = await evaluatedOpportunity('fence-provider', 'h'.repeat(64));
+    const opened = await handler().execute(
+      entryCommand(source, 'paper-entry-fence-provider'),
+    );
+    const ledgerEntriesBefore = await count('paper_ledger_entries');
+    const outboxEventsBefore = await count('event_outbox');
+    const cycleNow = await databaseNow();
+    const provider = {
+      fetchSolana: async (): Promise<readonly PaperMarketFetchResult[]> => {
+        await database.updateTable('paper_position_monitoring_tasks')
+          .set({ lease_expires_at: sql<Date>`clock_timestamp() - interval '1 second'` })
+          .where('position_id', '=', opened.positionId)
+          .executeTakeFirstOrThrow();
+
+        return [{
+          available: true,
+          observation: {
+            networkId: SOLANA_MAINNET_ID,
+            assetAddress: source.assetAddress,
+            provider: 'dexscreener',
+            pairAddress: 'pair-address',
+            dex: 'raydium',
+            marketCapUsd: '1000',
+            priceUsd: '0.1',
+            liquidityUsd: '500',
+            fetchedAt: cycleNow,
+            providerObservedAt: null,
+          },
+        }];
+      },
+    };
+    const cycle = new PaperMarketMonitoringCycle(
+      database,
+      new PaperPositionMonitoringRepository(),
+      provider,
+      {
+        enabled: true,
+        eligibleControlPlaneUserIds: ['7'],
+        intervalMs: 5_000,
+        batchSize: 1,
+        requestBudget: 1,
+        maximumBackoffMs: 60_000,
+        leaseDurationMs: 300_000,
+      },
+      pino({ level: 'silent' }),
+      () => cycleNow,
+    );
+
+    await expect(cycle.runCycle()).rejects.toThrow(/lease or attempt fence/);
+
+    expect(await count('paper_market_shadow_observations')).toBe(0);
+    expect(await database.selectFrom('paper_position_monitoring_tasks')
+      .select(['monitoring_state', 'next_attempt_sequence'])
+      .where('position_id', '=', opened.positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      monitoring_state: 'processing',
+      next_attempt_sequence: 1,
+    });
+    expect(await count('paper_ledger_entries')).toBe(ledgerEntriesBefore);
+    expect(await count('event_outbox')).toBe(outboxEventsBefore);
+    expect(await count('paper_position_lifecycle_decisions')).toBe(0);
+    expect(await count('paper_exit_settlements')).toBe(0);
+
+    await cycle.shutdown();
+  });
+
   it('atomically persists one append-only observed sample under concurrent completion', async () => {
     const source = await evaluatedOpportunity('1101');
     const opened = await handler().execute(entryCommand(source, 'paper-entry-1101'));
@@ -853,6 +1099,19 @@ describe('engine-owned PAPER financial entry', () => {
       assetAddress: address,
       controlPlaneUserId,
     };
+  }
+
+  async function databaseNow(): Promise<Date> {
+    const result = await sql<{ readonly database_now: Date }>`
+      select clock_timestamp() as database_now
+    `.execute(database);
+    const databaseNow = result.rows[0]?.database_now;
+
+    if (databaseNow === undefined) {
+      throw new Error('PostgreSQL did not return its current time');
+    }
+
+    return databaseNow;
   }
 
   async function count(table: keyof Database): Promise<number> {
