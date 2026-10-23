@@ -66,8 +66,7 @@ export class ObservePaperFinancialPositionCommandHandler {
         const lifecycle = await this.lifecycles.lock(transaction, command.body.position_id);
 
         if (position === undefined
-          || lifecycle === undefined
-          || position.id !== lifecycle.id
+          || position.id !== lifecycle?.id
           || lifecycle.source_position_id !== position.id
           || position.control_plane_user_id !== command.body.subject.control_plane_user_id
           || lifecycle.control_plane_user_id !== command.body.subject.control_plane_user_id
