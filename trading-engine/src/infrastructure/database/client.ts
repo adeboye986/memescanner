@@ -452,10 +452,6 @@ export interface DatabaseConnectionLossSignal {
   isLost(): boolean;
 }
 
-interface TrackedPoolClient extends PoolClient {
-  readonly processID?: number | null;
-}
-
 class MutableDatabaseConnectionLossSignal implements DatabaseConnectionLossSignal {
   public readonly lost: Promise<void>;
   private lostState = false;
@@ -482,29 +478,56 @@ class MutableDatabaseConnectionLossSignal implements DatabaseConnectionLossSigna
 }
 
 interface TrackedConnection {
-  readonly backendPid: number | null;
+  backendPid: number | null;
   readonly signal: MutableDatabaseConnectionLossSignal;
   readonly onEnd: () => void;
   readonly onError: () => void;
 }
 
-class DatabaseConnectionLossMonitor {
+export class DatabaseConnectionLossMonitor {
   private readonly connections = new WeakMap<PoolClient, TrackedConnection>();
   private readonly connectionsByBackendPid = new Map<number, TrackedConnection>();
+  private attached = false;
 
-  public constructor(pool: Pool) {
+  public attach(pool: Pool): void {
+    if (this.attached) {
+      throw new Error('PostgreSQL connection loss monitor is already attached');
+    }
+
+    this.attached = true;
     pool.on('connect', this.onConnect);
     pool.on('error', this.onPoolError);
     pool.on('remove', this.onRemove);
   }
+
+  public readonly verify = (
+    client: PoolClient,
+    done: (error?: Error) => void,
+  ): void => {
+    void this.initialize(client).then(
+      () => {
+        done();
+      },
+      (error: unknown) => {
+        done(error instanceof Error
+          ? error
+          : new Error(
+              'PostgreSQL connection monitoring initialization failed',
+              { cause: error },
+            ));
+      },
+    );
+  };
 
   public signalForBackendPid(backendPid: number): DatabaseConnectionLossSignal | undefined {
     return this.connectionsByBackendPid.get(backendPid)?.signal;
   }
 
   private readonly onConnect = (client: PoolClient): void => {
-    const processId = (client as TrackedPoolClient).processID;
-    const backendPid = typeof processId === 'number' ? processId : null;
+    if (this.connections.has(client)) {
+      return;
+    }
+
     const signal = new MutableDatabaseConnectionLossSignal();
     const onError = (): void => {
       signal.markLost();
@@ -512,17 +535,44 @@ class DatabaseConnectionLossMonitor {
     const onEnd = (): void => {
       signal.markLost();
     };
-    const connection = { backendPid, signal, onEnd, onError };
+    const connection = { backendPid: null, signal, onEnd, onError };
 
     this.connections.set(client, connection);
-
-    if (backendPid !== null) {
-      this.connectionsByBackendPid.set(backendPid, connection);
-    }
-
     client.on('error', onError);
     client.on('end', onEnd);
   };
+
+  private async initialize(client: PoolClient): Promise<void> {
+    const connection = this.connections.get(client);
+
+    if (connection === undefined) {
+      throw new Error('PostgreSQL connection monitoring was not registered');
+    }
+
+    const result = await client.query<{ readonly pid: number }>(
+      'select pg_backend_pid()::int as pid',
+    );
+    const backendPid = result.rows[0]?.pid;
+
+    if (backendPid === undefined || !Number.isSafeInteger(backendPid) || backendPid <= 0) {
+      throw new Error('PostgreSQL connection monitoring returned an invalid backend PID');
+    }
+
+    if (this.connections.get(client) !== connection || connection.signal.isLost()) {
+      throw new Error('PostgreSQL connection was lost during monitoring initialization');
+    }
+
+    if (
+      connection.backendPid !== null
+      && connection.backendPid !== backendPid
+      && this.connectionsByBackendPid.get(connection.backendPid) === connection
+    ) {
+      this.connectionsByBackendPid.delete(connection.backendPid);
+    }
+
+    connection.backendPid = backendPid;
+    this.connectionsByBackendPid.set(backendPid, connection);
+  }
 
   private readonly onPoolError = (_error: Error, client: PoolClient): void => {
     this.connections.get(client)?.signal.markLost();
@@ -573,8 +623,12 @@ export function createDatabasePoolConfig(config: DatabaseConfig): PoolConfig {
 }
 
 export function createDatabase(config: DatabaseConfig): Kysely<Database> {
-  const pool = new Pool(createDatabasePoolConfig(config));
-  const connectionLossMonitor = new DatabaseConnectionLossMonitor(pool);
+  const connectionLossMonitor = new DatabaseConnectionLossMonitor();
+  const pool = new Pool({
+    ...createDatabasePoolConfig(config),
+    verify: connectionLossMonitor.verify,
+  });
+  connectionLossMonitor.attach(pool);
   const database = new Kysely<Database>({
     dialect: new PostgresDialect({
       pool,
