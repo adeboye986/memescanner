@@ -6,6 +6,7 @@ use App\Chain;
 use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Models\TradingEnginePaperPositionProjection;
+use App\Models\TradingEnginePaperWalletProjection;
 use App\Models\User;
 use App\Models\UserTelegramBot;
 use App\Services\ApplicationSettingsService;
@@ -16,6 +17,7 @@ use App\Services\OperationalHealthService;
 use App\Services\PaperStrategyService;
 use App\Services\PaperWalletService;
 use App\Services\SystemActivityService;
+use App\Services\TradingEngine\TradingEngineHealthStatusService;
 use App\Services\UserTradingPreferenceService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Database\Eloquent\Builder;
@@ -34,6 +36,7 @@ class PaperTradingDashboardController extends Controller
         UserTradingPreferenceService $preferences,
         OperationalHealthService $operationalHealth,
         OnboardingStatusService $onboarding,
+        TradingEngineHealthStatusService $engineHealth,
     ): View {
         $user = $request->user();
         $preference = $preferences->forUser($user);
@@ -61,18 +64,37 @@ class PaperTradingDashboardController extends Controller
             ->where('user_id', $user->id)
             ->orderBy('opened_at')
             ->get();
+        $engineOpenPositions = $enginePositions
+            ->filter(fn (TradingEnginePaperPositionProjection $position): bool => ($position->lifecycleState?->state ?? $position->state) === 'open')
+            ->values();
+        $engineClosedPositions = $enginePositions
+            ->reject(fn (TradingEnginePaperPositionProjection $position): bool => ($position->lifecycleState?->state ?? $position->state) === 'open')
+            ->values();
+        $engineWallets = TradingEnginePaperWalletProjection::query()
+            ->where('user_id', $user->id)
+            ->orderBy('network_id')
+            ->get();
+        $currentActivities = $activities->activeData($user);
+        $activityCollection = collect($currentActivities);
 
         $viewData = [
             'wallets' => $paperWallets,
             'legacyWallets' => $legacyWallets,
             'positions' => $positions,
             'enginePositions' => $enginePositions,
+            'engineOpenPositions' => $engineOpenPositions,
+            'engineClosedPositions' => $engineClosedPositions,
+            'engineWallets' => $engineWallets,
             'dashboardActions' => collect($commands->all())
                 ->when(! $user->is_admin, fn ($actions) => $actions->except('paper-track'))
                 ->all(),
-            'currentActivity' => $activities->currentManualData($user),
+            'currentActivity' => $activityCollection->where('triggered_by', 'manual')->sortByDesc('id')->first(),
+            'currentActivities' => $currentActivities,
             'recentActivities' => $activities->recentData(user: $user),
-            'runningActions' => $activities->runningActions($user),
+            'runningActions' => $activityCollection
+                ->filter(fn (array $activity): bool => $activity['triggered_by'] === 'manual' || $activity['action'] === 'paper-track')
+                ->pluck('action_key')
+                ->all(),
             'systemStatus' => $activities->systemStatus(),
             'paperStrategy' => $strategies->forUser($user),
             'executionMode' => $preference->execution_mode->value,
@@ -83,14 +105,26 @@ class PaperTradingDashboardController extends Controller
             ],
             'integrationSummary' => $integrations->all(),
             'operationalStatus' => $operationalHealth->status(),
+            'engineStatus' => $engineHealth->status(),
             'onboardingStatus' => $user->is_admin ? null : $onboarding->forUser($user),
         ];
 
         if ($user->is_admin) {
+            $engineOpenPositionCount = TradingEnginePaperPositionProjection::query()
+                ->where(function (Builder $query): void {
+                    $query
+                        ->whereHas('lifecycleState', fn (Builder $state): Builder => $state->where('state', 'open'))
+                        ->orWhere(function (Builder $fallback): void {
+                            $fallback->whereDoesntHave('lifecycleState')->where('state', 'open');
+                        });
+                })
+                ->count();
+
             $viewData['adminOverview'] = [
                 'users' => User::query()->count(),
                 'opportunities' => TradeOpportunity::query()->count(),
-                'open_positions' => PaperPosition::query()->where('status', 'open')->where('initial_investment_sol', '>', 0)->count(),
+                'legacy_open_positions' => PaperPosition::query()->where('status', 'open')->where('initial_investment_sol', '>', 0)->count(),
+                'engine_open_positions' => $engineOpenPositionCount,
                 'connected_bots' => UserTelegramBot::query()->where('enabled', true)->whereNotNull('webhook_configured_at')->count(),
             ];
         }

@@ -12,6 +12,8 @@
         </div>
     </header>
 
+    @include('partials.opportunity-lifecycle')
+
     <section class="grid gap-px overflow-hidden rounded-2xl border border-slate-800 bg-slate-800 sm:grid-cols-2 lg:grid-cols-5">
         @foreach ([['Price', $opportunity->price !== null ? '$'.rtrim(rtrim(number_format((float) $opportunity->price, 12, '.', ''), '0'), '.') : 'N/A'], ['Market Cap', $opportunity->market_cap !== null ? '$'.number_format((float) $opportunity->market_cap, 2) : 'N/A'], ['Liquidity', $opportunity->liquidity !== null ? '$'.number_format((float) $opportunity->liquidity, 2) : 'N/A'], ['Volume', $opportunity->volume !== null ? '$'.number_format((float) $opportunity->volume, 2) : 'N/A'], ['Qualified', $opportunity->qualified_at?->format('M j, Y H:i:s') ?? 'N/A']] as [$label, $value])
             <div class="bg-slate-900 px-5 py-5"><p class="text-xs uppercase tracking-wider text-slate-600">{{ $label }}</p><p class="mt-2 font-semibold tabular-nums text-slate-200">{{ $value }}</p></div>

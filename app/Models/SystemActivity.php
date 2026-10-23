@@ -6,6 +6,7 @@ use App\Chain;
 use Database\Factories\SystemActivityFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class SystemActivity extends Model
 {
@@ -37,5 +38,10 @@ class SystemActivity extends Model
             'duration_seconds' => 'integer',
             'exit_code' => 'integer',
         ];
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
     }
 }

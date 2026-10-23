@@ -9,7 +9,6 @@ use DomainException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use Throwable;
 
 class SystemActivityService
@@ -111,6 +110,7 @@ class SystemActivityService
     public function currentManualData(?User $user = null): ?array
     {
         $activity = SystemActivity::query()
+            ->with('user:id,name')
             ->when($user, fn ($query) => $query->where(function ($query) use ($user): void {
                 $query->where('user_id', $user->id);
                 if ($user->is_admin) {
@@ -126,9 +126,28 @@ class SystemActivityService
     }
 
     /** @return list<array<string, mixed>> */
+    public function activeData(?User $user = null): array
+    {
+        return SystemActivity::query()
+            ->with('user:id,name')
+            ->when($user, fn ($query) => $query->where(function ($query) use ($user): void {
+                $query->where('user_id', $user->id);
+                if ($user->is_admin) {
+                    $query->orWhereNull('user_id');
+                }
+            }))
+            ->whereIn('status', ['pending', 'running'])
+            ->oldest('id')
+            ->get()
+            ->map(fn (SystemActivity $activity): array => $this->present($activity))
+            ->all();
+    }
+
+    /** @return list<array<string, mixed>> */
     public function recentData(int $limit = 8, ?User $user = null): array
     {
         return SystemActivity::query()
+            ->with('user:id,name')
             ->when($user, fn ($query) => $query->where(function ($query) use ($user): void {
                 $query->where('user_id', $user->id);
                 if ($user->is_admin) {
@@ -187,9 +206,6 @@ class SystemActivityService
     /** @return array<string, mixed> */
     public function present(SystemActivity $activity): array
     {
-        $output = trim((string) $activity->output);
-        $summarySource = $output !== '' ? $output : (string) $activity->error_message;
-
         return [
             'id' => $activity->id,
             'action' => $activity->action,
@@ -198,6 +214,7 @@ class SystemActivityService
             'label' => $activity->label,
             'status' => $activity->status,
             'triggered_by' => $activity->triggered_by,
+            'initiated_by' => $activity->user?->name ?? ($activity->triggered_by === 'scheduler' ? 'Laravel scheduler' : 'System'),
             'started_at' => $activity->started_at?->format('H:i:s'),
             'started_at_iso' => $activity->started_at?->toIso8601String(),
             'finished_at' => $activity->finished_at?->format('H:i:s'),
@@ -207,9 +224,27 @@ class SystemActivityService
                 : null,
             'exit_code' => $activity->exit_code,
             'relative_time' => $this->activityTime($activity)?->diffForHumans() ?? 'Unknown',
-            'summary' => Str::limit(preg_replace('/\s+/', ' ', $summarySource) ?? '', 220),
-            'output' => $output !== '' ? $output : $activity->error_message,
+            'summary' => $this->safeSummary($activity),
         ];
+    }
+
+    private function safeSummary(SystemActivity $activity): string
+    {
+        $isScanner = in_array($activity->action, ['token-scan', 'momentum-scan'], true);
+
+        return match ($activity->status) {
+            'pending' => 'Accepted by Laravel and waiting for the Laravel queue worker.',
+            'running' => $isScanner
+                ? 'The Laravel scanner command is running. Downstream engine processing is tracked separately.'
+                : 'The Laravel command is running.',
+            'completed' => $isScanner
+                ? 'The Laravel scanner command completed successfully. Per-run discovery and qualification totals are not durably correlated in Stage A.'
+                : 'The Laravel command completed successfully.',
+            'failed' => $isScanner
+                ? 'The Laravel scanner command failed. Internal diagnostics were retained for operators.'
+                : 'The Laravel command failed. Internal diagnostics were retained for operators.',
+            default => 'The command state is not recognized; no result has been inferred.',
+        };
     }
 
     private function activityTime(?SystemActivity $activity): ?Carbon

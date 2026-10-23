@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\SystemActivity;
+use App\Models\User;
 use App\Services\PaperTrackerHealthService;
 use App\Services\SystemActivityService;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
@@ -149,5 +150,67 @@ class SystemActivityServiceTest extends TestCase
         $this->assertSame('failed', $recent[0]['status']);
         $this->assertSame('scheduler', $recent[1]['triggered_by']);
         $this->assertSame('manual', $recent[2]['triggered_by']);
+    }
+
+    public function test_browser_presentation_never_exposes_raw_command_output_or_errors(): void
+    {
+        $activity = SystemActivity::factory()->create([
+            'action' => 'momentum-scan',
+            'status' => 'failed',
+            'output' => 'provider response with secret token',
+            'error_message' => 'database password was rejected',
+        ]);
+
+        $presented = app(SystemActivityService::class)->present($activity);
+
+        $this->assertArrayNotHasKey('output', $presented);
+        $this->assertArrayNotHasKey('error_message', $presented);
+        $this->assertStringNotContainsString('secret', json_encode($presented, JSON_THROW_ON_ERROR));
+        $this->assertStringNotContainsString('password', json_encode($presented, JSON_THROW_ON_ERROR));
+        $this->assertSame(
+            'The Laravel scanner command failed. Internal diagnostics were retained for operators.',
+            $presented['summary'],
+        );
+        $this->assertSame('provider response with secret token', $activity->fresh()->output);
+    }
+
+    public function test_active_data_lists_all_visible_pending_and_running_work_for_the_user(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $other = User::factory()->create(['is_admin' => false]);
+        SystemActivity::factory()->create([
+            'user_id' => $user->id,
+            'label' => 'USER SCAN',
+            'action' => 'momentum-scan',
+            'status' => 'pending',
+            'started_at' => null,
+            'finished_at' => null,
+        ]);
+        SystemActivity::factory()->create([
+            'user_id' => $user->id,
+            'label' => 'USER REPORT',
+            'action' => 'paper-report',
+            'status' => 'running',
+            'finished_at' => null,
+        ]);
+        SystemActivity::factory()->create([
+            'label' => 'SCHEDULED SCAN',
+            'action' => 'token-scan',
+            'triggered_by' => 'scheduler',
+            'status' => 'running',
+            'finished_at' => null,
+        ]);
+        SystemActivity::factory()->create([
+            'user_id' => $other->id,
+            'label' => 'OTHER USER',
+            'status' => 'running',
+            'finished_at' => null,
+        ]);
+
+        $activities = app(SystemActivityService::class)->activeData($user);
+
+        $this->assertSame(['USER SCAN', 'USER REPORT'], array_column($activities, 'label'));
+        $this->assertNotContains('OTHER USER', array_column($activities, 'label'));
+        $this->assertNotContains('SCHEDULED SCAN', array_column($activities, 'label'));
     }
 }

@@ -143,6 +143,16 @@ class TradingEnginePaperEntryProjectionTest extends TestCase
         $this->assertNull($opportunity->fresh()->paper_position_id);
         $this->assertSame($this->id(9), data_get($opportunity->fresh()->execution_data, 'engine_position_id'));
 
+        config()->set('services.trading_engine.enabled', false);
+        $this->withoutVite();
+        $this->actingAs($user)->get(route('dashboard'))
+            ->assertOk()
+            ->assertSee('Legacy Laravel Open PAPER Positions')
+            ->assertSee('Engine-owned PAPER portfolio')
+            ->assertSee('MEME')
+            ->assertViewHas('positions', fn ($positions): bool => $positions->isEmpty())
+            ->assertViewHas('engineOpenPositions', fn ($positions): bool => $positions->count() === 1 && $positions->first()->symbol === 'MEME');
+
         $this->actingAs($user)
             ->post(route('paper-trades.close', ['position' => $this->id(9)]))
             ->assertNotFound();

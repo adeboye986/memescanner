@@ -2,17 +2,21 @@
 
 namespace App\Services;
 
+use App\Services\TradingEngine\TradingEngineHealthStatusService;
+
 class IntegrationStatusService
 {
     public function __construct(
         private ApplicationSettingsService $settings,
         private PaperTrackerHealthService $trackerHealth,
+        private TradingEngineHealthStatusService $engineHealth,
     ) {}
 
     /** @return array<string, array{label: string, status: string, detail: string}> */
     public function all(): array
     {
         $tracker = $this->trackerHealth->status();
+        $engine = $this->engineHealth->status();
         $telegramConfigured = (bool) $this->settings->get('telegram.enabled')
             && $this->settings->getSecret('telegram.bot_token') !== null
             && $this->settings->getSecret('telegram.chat_id') !== null;
@@ -41,9 +45,18 @@ class IntegrationStatusService
                     : 'DexScreener is available; Birdeye credentials are not configured.',
             ],
             'tracker' => [
-                'label' => 'Fast Tracker',
+                'label' => 'Legacy Laravel PAPER Tracker',
                 'status' => $tracker['status'],
                 'detail' => $tracker['last_tracker_check']?->diffForHumans() ?? 'No tracker heartbeat recorded.',
+            ],
+            'trading_engine' => [
+                'label' => 'TypeScript Trading Engine',
+                'status' => $engine['connectivity'] === 'reachable' ? 'active' : $engine['connectivity'],
+                'detail' => match ($engine['connectivity']) {
+                    'disabled' => 'The Laravel trading-engine integration is disabled.',
+                    'reachable' => 'Authenticated engine health responded; readiness and leadership are shown separately on the dashboard.',
+                    default => 'No current authenticated engine health response is available.',
+                },
             ],
         ];
     }

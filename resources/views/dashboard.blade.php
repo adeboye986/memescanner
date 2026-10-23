@@ -9,22 +9,22 @@
         <div class="flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-wider">
             <span class="inline-flex items-center gap-2 rounded-full border border-sky-400/20 bg-sky-400/10 px-3 py-2 text-sky-300">
                 <span class="size-2 rounded-full bg-sky-400"></span>
-                Trading Mode: {{ strtoupper($executionMode) }}
+                Execution Preference: {{ strtoupper($executionMode) }}
             </span>
             <span class="inline-flex items-center rounded-full border border-violet-400/20 bg-violet-400/10 px-3 py-2 text-violet-300">Entry: {{ strtoupper($entryMode) }}</span>
             <span id="tracker-status-badge" @class([
                 'inline-flex items-center gap-2 rounded-full border px-3 py-2',
                 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300' => $systemStatus['status'] === 'active',
-                'border-amber-400/20 bg-amber-400/10 text-amber-300' => $systemStatus['status'] === 'stale',
+                'border-amber-400/20 bg-amber-400/10 text-amber-300' => in_array($systemStatus['status'], ['stale', 'degraded'], true),
                 'border-slate-700 bg-slate-800 text-slate-300' => $systemStatus['status'] === 'unknown',
             ])>
                 <span id="tracker-status-dot" @class([
                     'size-2 rounded-full',
                     'bg-emerald-400' => $systemStatus['status'] === 'active',
-                    'bg-amber-400' => $systemStatus['status'] === 'stale',
+                    'bg-amber-400' => in_array($systemStatus['status'], ['stale', 'degraded'], true),
                     'bg-slate-500' => $systemStatus['status'] === 'unknown',
                 ])></span>
-                Fast Tracker: <span id="tracker-status-text">{{ strtoupper($systemStatus['status']) }}</span>
+                Legacy Laravel PAPER Tracker: <span id="tracker-status-text">{{ strtoupper($systemStatus['status']) }}</span>
             </span>
         </div>
     </header>
@@ -58,42 +58,43 @@
     @endif
 
     <section aria-label="Platform workflow summary" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <article class="rounded-2xl border border-sky-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Trading Mode</p><p class="mt-2 text-lg font-bold text-sky-300">{{ strtoupper($executionMode) }}</p><p class="mt-1 text-xs text-slate-500">{{ $executionMode === 'paper' ? 'Simulated funds' : 'Browser wallet confirmation' }}</p></article>
+        <article class="rounded-2xl border border-sky-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Execution Preference</p><p class="mt-2 text-lg font-bold text-sky-300">{{ strtoupper($executionMode) }}</p><p class="mt-1 text-xs text-slate-500">Preference only; server capability is verified separately</p></article>
         <article class="rounded-2xl border border-violet-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Entry Mode</p><p class="mt-2 text-lg font-bold text-violet-300">{{ str($entryMode)->replace('_', ' ')->upper() }}</p><p class="mt-1 text-xs text-slate-500">Qualification policy</p></article>
         <article class="rounded-2xl border border-amber-400/15 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Opportunities · 24h</p><p class="mt-2 text-lg font-bold text-white">{{ $opportunitySummary['recent'] }}</p><p class="mt-1 text-xs text-amber-300">{{ $opportunitySummary['pending'] }} pending confirmation</p></article>
-        <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Tracker</p><p class="mt-2 text-lg font-bold {{ $systemStatus['status'] === 'active' ? 'text-emerald-300' : ($systemStatus['status'] === 'stale' ? 'text-amber-300' : 'text-slate-300') }}">{{ strtoupper($systemStatus['status']) }}</p><p class="mt-1 text-xs text-slate-500">Fast position monitoring</p></article>
-        <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Integrations</p><p class="mt-2 text-lg font-bold text-emerald-300">{{ collect($integrationSummary)->whereIn('status', ['configured', 'active'])->count() }} / {{ count($integrationSummary) }}</p><p class="mt-1 text-xs text-slate-500">Configured or active</p></article>
+        <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Legacy Laravel PAPER Tracker</p><p class="mt-2 text-lg font-bold {{ $systemStatus['status'] === 'active' ? 'text-emerald-300' : (in_array($systemStatus['status'], ['stale', 'degraded'], true) ? 'text-amber-300' : 'text-slate-300') }}">{{ strtoupper($systemStatus['status']) }}</p><p class="mt-1 text-xs text-slate-500">Laravel-owned legacy positions only</p></article>
+        <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><p class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Configured Integrations</p><p class="mt-2 text-lg font-bold text-emerald-300">{{ collect($integrationSummary)->whereIn('status', ['configured', 'active'])->count() }} / {{ count($integrationSummary) }}</p><p class="mt-1 text-xs text-slate-500">Configuration and health are distinct</p></article>
     </section>
 
     @can('manage-settings')
         <section aria-labelledby="operations-heading" class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
             <div class="flex items-center justify-between gap-4"><div><p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Operations</p><h2 id="operations-heading" class="mt-1 text-xl font-semibold text-white">Background Process Health</h2></div><span class="text-xs text-slate-500">Safe operational metadata only</span></div>
             <div class="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                @foreach (['scheduler' => 'Scheduler', 'queue' => 'Queue', 'fast_tracker' => 'Fast Tracker'] as $key => $label)
+                @foreach (['scheduler' => 'Laravel Scheduler', 'queue' => 'Laravel Queue Worker', 'legacy_paper_tracker' => 'Legacy Laravel PAPER Tracker'] as $key => $label)
                     @php
                         $state = $operationalStatus[$key]['status'];
                     @endphp
-                    <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p class="text-xs uppercase tracking-wider text-slate-500">{{ $label }}</p><p class="mt-2 font-bold {{ $state === 'healthy' ? 'text-emerald-300' : ($state === 'stale' ? 'text-amber-300' : 'text-slate-300') }}">{{ str($state)->replace('_', ' ')->upper() }}</p><p class="mt-1 text-xs text-slate-500">{{ $operationalStatus[$key]['last_run_at']?->diffForHumans() ?? 'No heartbeat recorded' }}</p></article>
+                    <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p class="text-xs uppercase tracking-wider text-slate-500">{{ $label }}</p><p id="operation-{{ str($key)->replace('_', '-') }}" class="mt-2 font-bold {{ $state === 'healthy' ? 'text-emerald-300' : ($state === 'stale' ? 'text-amber-300' : 'text-slate-300') }}">{{ str($state)->replace('_', ' ')->upper() }}</p><p class="mt-1 text-xs text-slate-500">{{ $operationalStatus[$key]['last_run_at']?->diffForHumans() ?? 'No heartbeat recorded' }}</p></article>
                 @endforeach
-                <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p class="text-xs uppercase tracking-wider text-slate-500">Pending Jobs</p><p class="mt-2 text-lg font-bold text-white">{{ $operationalStatus['pending_jobs'] }}</p></article>
-                <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p class="text-xs uppercase tracking-wider text-slate-500">Failed Jobs</p><p class="mt-2 text-lg font-bold {{ $operationalStatus['failed_jobs'] > 0 ? 'text-red-300' : 'text-emerald-300' }}">{{ $operationalStatus['failed_jobs'] }}</p></article>
+                <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p class="text-xs uppercase tracking-wider text-slate-500">Laravel Pending Jobs</p><p id="operation-pending-jobs" class="mt-2 text-lg font-bold text-white">{{ $operationalStatus['pending_jobs'] }}</p></article>
+                <article class="rounded-xl border border-slate-800 bg-slate-950/60 p-4"><p class="text-xs uppercase tracking-wider text-slate-500">Laravel Failed Jobs</p><p id="operation-failed-jobs" class="mt-2 text-lg font-bold {{ $operationalStatus['failed_jobs'] > 0 ? 'text-red-300' : 'text-emerald-300' }}">{{ $operationalStatus['failed_jobs'] }}</p></article>
             </div>
+            <div class="mt-5">@include('partials.engine-health-cards')</div>
         </section>
     @endcan
 
     <form id="trading-preferences" method="POST" action="{{ route('dashboard.trading-preferences.update') }}" class="flex flex-wrap items-end gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
         @csrf @method('PUT')
-        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Execution<select name="execution_mode" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white">@foreach(['paper' => 'PAPER', 'live' => 'LIVE'] as $value => $label)<option value="{{ $value }}" @selected(old('execution_mode', $executionMode) === $value)>{{ $label }}</option>@endforeach</select></label>
+        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Execution Preference<select name="execution_mode" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white">@foreach(['paper' => 'PAPER', 'live' => 'LIVE'] as $value => $label)<option value="{{ $value }}" @selected(old('execution_mode', $executionMode) === $value)>{{ $label }}</option>@endforeach</select></label>
         <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Entry Mode<select name="entry_mode" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white">@foreach(['signal' => 'Signal', 'confirm' => 'Confirm', 'auto' => 'Auto'] as $value => $label)<option value="{{ $value }}" @selected(old('entry_mode', $entryMode) === $value)>{{ $label }}</option>@endforeach</select></label>
-        <button class="rounded-xl bg-violet-400 px-5 py-2.5 text-sm font-semibold text-slate-950">Save Modes</button>
+        <button class="rounded-xl bg-violet-400 px-5 py-2.5 text-sm font-semibold text-slate-950">Save Preferences</button>
         <p class="text-xs text-slate-500">LIVE supports CONFIRM only for Ethereum opportunities and requires browser wallet signing. AUTO and SIGNAL are PAPER only.</p>
     </form>
 
     <section aria-labelledby="wallet-heading" class="flex flex-col gap-4">
         <div class="flex items-center justify-between gap-4">
             <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Portfolio</p>
-                <h2 id="wallet-heading" class="mt-1 text-xl font-semibold text-white">Wallet Summary</h2>
+                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Legacy Laravel Portfolio</p>
+                <h2 id="wallet-heading" class="mt-1 text-xl font-semibold text-white">Legacy Laravel PAPER Wallets</h2>
             </div>
             <span class="text-sm text-slate-500">Virtual paper balances</span>
         </div>
@@ -105,7 +106,7 @@
                 @endphp
                 <article class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10">
                     <div class="flex items-center justify-between gap-3">
-                        <h3 class="font-semibold uppercase tracking-wider text-white">{{ $wallet->chain->label() }} Paper Wallet</h3>
+                        <h3 class="font-semibold uppercase tracking-wider text-white">{{ $wallet->chain->label() }} Legacy PAPER Wallet</h3>
                         <span class="rounded-full bg-violet-400/10 px-2.5 py-1 text-xs font-semibold text-violet-300">{{ $currency }}</span>
                     </div>
                     <dl class="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -171,18 +172,18 @@
     <div class="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
         <section aria-labelledby="controls-heading" class="flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10 sm:p-6">
             <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Manual Operations</p>
-                <h2 id="controls-heading" class="mt-1 text-xl font-semibold text-white">Scanner Controls</h2>
-                <p class="mt-2 text-sm text-slate-400">Commands run through the queue. Scheduled operations continue independently.</p>
+                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Manual Laravel Operations</p>
+                <h2 id="controls-heading" class="mt-1 text-xl font-semibold text-white">Laravel Scanner Commands</h2>
+                <p class="mt-2 text-sm text-slate-400">Buttons submit existing Laravel commands to the Laravel queue. Engine evaluation, when configured, happens downstream and is not proof of scan completion.</p>
             </div>
 
             @php
                 $actionDescriptions = [
-                    'token-scan' => 'Scan newly launched tokens',
-                    'momentum-scan' => 'Evaluate momentum candidates',
-                    'paper-track' => 'Refresh all open paper positions',
-                    'paper-report' => 'Generate current paper performance',
-                    'paper-reconcile' => 'Check wallet ledger without fixing it',
+                    'token-scan' => 'Queue the Laravel new-token scanner',
+                    'momentum-scan' => 'Queue the Laravel momentum scanner',
+                    'paper-track' => 'Run the legacy Laravel PAPER tracker',
+                    'paper-report' => 'Generate a legacy Laravel PAPER report',
+                    'paper-reconcile' => 'Check the legacy Laravel wallet ledger without fixing it',
                 ];
             @endphp
 
@@ -223,90 +224,14 @@
             </div>
         </section>
 
-        <section
-            id="system-activity"
-            data-status-url="{{ route('dashboard.activity') }}"
-            aria-labelledby="activity-heading"
-            class="flex flex-col gap-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10 sm:p-6"
-        >
-            <div class="flex items-start justify-between gap-4">
-                <div>
-                    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Command Monitor</p>
-                    <h2 id="activity-heading" class="mt-1 text-xl font-semibold text-white">System Activity</h2>
-                </div>
-                <span id="activity-live-indicator" class="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-400">Live</span>
-            </div>
-
-            <div class="flex flex-col gap-3">
-                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Current Activity</p>
-                <div id="current-activity-empty" class="{{ $currentActivity ? 'hidden' : '' }} rounded-xl border border-dashed border-slate-700 px-5 py-6 text-center text-sm text-slate-500">
-                    No manual operation currently running.
-                </div>
-                <div id="current-activity-content" class="{{ $currentActivity ? '' : 'hidden' }} rounded-xl border border-blue-400/20 bg-blue-400/5 p-4">
-                    <div class="flex flex-wrap items-center justify-between gap-3">
-                        <h3 id="current-activity-label" class="font-semibold text-white">⚡ {{ $currentActivity['label'] ?? '' }}</h3>
-                        <span id="current-activity-status" class="rounded-full border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider text-blue-300">{{ $currentActivity['status'] ?? '' }}</span>
-                    </div>
-                    <div class="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm">
-                        <p><span class="text-slate-500">Started:</span> <span id="current-activity-started" class="font-medium text-slate-200">{{ $currentActivity['started_at'] ?? 'Waiting for worker' }}</span></p>
-                        <p><span class="text-slate-500">Running for:</span> <span id="current-activity-running" class="font-medium text-slate-200">{{ isset($currentActivity['running_seconds']) ? $currentActivity['running_seconds'].'s' : 'Pending' }}</span></p>
-                    </div>
-                </div>
-            </div>
-
-            <div class="flex flex-col gap-3 border-t border-slate-800 pt-4">
-                <div class="flex items-center justify-between gap-4">
-                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Recent Activity</p>
-                    <span class="text-xs text-slate-600">Latest {{ count($recentActivities) }}</span>
-                </div>
-                <div id="recent-activity-list" class="flex max-h-80 flex-col gap-2 overflow-y-auto">
-                    @forelse ($recentActivities as $activity)
-                        <details class="group rounded-lg border border-slate-800 bg-slate-950/50">
-                            <summary class="grid cursor-pointer list-none grid-cols-[1fr_auto] items-center gap-3 px-3 py-3 marker:hidden">
-                                <span class="min-w-0">
-                                    <span class="block truncate text-sm font-semibold text-slate-200">{{ $activity['label'] }}</span>
-                                    <span class="mt-1 block text-xs text-slate-500">{{ ucfirst($activity['triggered_by']) }} · {{ $activity['relative_time'] }}</span>
-                                </span>
-                                <span class="text-right">
-                                    <span @class([
-                                        'block text-xs font-semibold uppercase tracking-wider',
-                                        'text-amber-300' => $activity['status'] === 'pending',
-                                        'text-blue-300' => $activity['status'] === 'running',
-                                        'text-emerald-300' => $activity['status'] === 'completed',
-                                        'text-red-300' => $activity['status'] === 'failed',
-                                    ])>{{ $activity['status'] }}</span>
-                                    <span class="mt-1 block text-xs text-slate-500">{{ $activity['duration_seconds'] !== null ? $activity['duration_seconds'].'s' : '—' }}</span>
-                                </span>
-                            </summary>
-                            <pre class="max-h-64 overflow-auto border-t border-slate-800 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-slate-400">{{ $activity['output'] ?: 'No output captured yet.' }}</pre>
-                        </details>
-                    @empty
-                        <p class="rounded-lg border border-dashed border-slate-800 px-4 py-5 text-center text-sm text-slate-600">No activity recorded yet.</p>
-                    @endforelse
-                </div>
-            </div>
-
-            <div class="grid gap-3 border-t border-slate-800 pt-4 text-xs sm:grid-cols-3">
-                <div><p class="uppercase tracking-wider text-slate-600">Last Completed Tracker Cycle</p><p id="last-tracker-check" class="mt-1 text-slate-300">{{ $systemStatus['last_tracker_check']?->diffForHumans() ?? 'Never' }}</p></div>
-                <div><p class="uppercase tracking-wider text-slate-600">Last Momentum Scan</p><p id="last-momentum-scan" class="mt-1 text-slate-300">{{ $systemStatus['last_momentum_scan']?->diffForHumans() ?? 'Never' }}</p></div>
-                <div><p class="uppercase tracking-wider text-slate-600">Last Token Scan</p><p id="last-token-scan" class="mt-1 text-slate-300">{{ $systemStatus['last_token_scan']?->diffForHumans() ?? 'Never' }}</p></div>
-            </div>
-            <p class="text-xs text-slate-500">Fast-process lease: <span id="tracker-process-lease">{{ $systemStatus['process_lock_held'] ? 'held' : 'not held' }}</span> · Last process heartbeat: <span id="tracker-process-heartbeat">{{ $systemStatus['last_process_heartbeat'] ?? 'Never' }}</span>. A held lease does not establish healthy market data.</p>
-            <p class="text-xs text-slate-500">Unverified open positions across all batches: <span id="tracker-outstanding-unverified">{{ $systemStatus['outstanding_unverified_positions'] }}</span> · Last successful provider request: <span id="tracker-provider-success">{{ $systemStatus['last_successful_provider_request'] ?? 'Never' }}</span> · Last valid position observation: <span id="tracker-valid-observation">{{ $systemStatus['last_successful_market_observation']?->diffForHumans() ?? 'Never' }}</span>.</p>
-            <div class="grid gap-3 text-xs sm:grid-cols-4">
-                <div><p class="uppercase tracking-wider text-slate-600">Cycle Duration</p><p id="tracker-cycle-duration" class="mt-1 text-slate-300">{{ $systemStatus['cycle_duration_ms'] !== null ? number_format($systemStatus['cycle_duration_ms'], 0).' ms' : 'N/A' }}</p></div>
-                <div><p class="uppercase tracking-wider text-slate-600">Positions in Last Batch</p><p id="tracker-open-positions" class="mt-1 text-slate-300">{{ $systemStatus['open_positions'] ?? 'N/A' }}</p></div>
-                <div><p class="uppercase tracking-wider text-slate-600">Valid in Last Batch</p><p id="tracker-priced-positions" class="mt-1 text-slate-300">{{ $systemStatus['priced_positions'] !== null ? $systemStatus['priced_positions'].' / '.$systemStatus['open_positions'] : 'N/A' }}</p></div>
-                <div><p class="uppercase tracking-wider text-slate-600">Last Batch Provider Failures</p><p id="tracker-provider-failures" class="mt-1 text-slate-300">{{ $systemStatus['provider_failures'] ?? 'N/A' }}</p></div>
-            </div>
-        </section>
+        @include('partials.system-activity')
     </div>
 
     <section aria-labelledby="positions-heading" class="flex flex-col gap-4">
         <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Positions</p>
-                <h2 id="positions-heading" class="mt-1 text-xl font-semibold text-white">Open Trades</h2>
+                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Legacy Laravel Positions</p>
+                <h2 id="positions-heading" class="mt-1 text-xl font-semibold text-white">Legacy Laravel Open PAPER Positions</h2>
             </div>
             <p class="text-sm text-slate-500">Market values are PAPER observations, not executable sell quotes. Check observation status before relying on them.</p>
         </div>
@@ -428,7 +353,7 @@
                 <div><dt class="text-slate-500">Remaining position</dt><dd id="modal-remaining" class="mt-1 font-semibold text-white"></dd></div>
                 <div class="col-span-2"><dt class="text-slate-500">Estimated current value</dt><dd id="modal-value" class="mt-1 font-semibold text-white"></dd></div>
             </dl>
-            <div class="rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm leading-6 text-red-200">This closes 100% of the remaining paper position. Automatic tracking for every other position stays active.</div>
+            <div class="rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm leading-6 text-red-200">This closes 100% of the remaining paper position. Legacy Laravel tracking for every other legacy position stays active.</div>
             <div class="flex justify-end gap-3">
                 <button id="cancel-close" type="button" class="rounded-lg border border-slate-700 px-4 py-2.5 text-sm font-semibold text-slate-300 transition hover:bg-slate-800">Cancel</button>
                 <button type="submit" class="rounded-lg bg-red-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-400">Close Position</button>

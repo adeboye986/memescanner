@@ -19,7 +19,7 @@
         @csrf @method('PUT')
 
         <section class="rounded-3xl border border-emerald-400/20 bg-gradient-to-br from-slate-900 to-slate-900/60 p-6 sm:p-8">
-            <p class="text-xs font-bold uppercase tracking-[0.22em] text-emerald-400">Trading Mode</p><h2 class="mt-2 text-2xl font-semibold text-white">Choose the execution environment</h2>
+            <p class="text-xs font-bold uppercase tracking-[0.22em] text-emerald-400">Execution Preference</p><h2 class="mt-2 text-2xl font-semibold text-white">Choose a requested execution environment</h2>
             <div class="mt-6 grid gap-4 md:grid-cols-2">
                 @foreach ([['paper', 'PAPER', 'Safe sandbox using simulated funds.', 'emerald'], ['live', 'LIVE', 'Generic LIVE execution remains blocked. Use dashboard preferences for Ethereum LIVE + CONFIRM.', 'red']] as [$value, $label, $description, $tone])
                     <label class="relative cursor-pointer"><input class="peer sr-only" type="radio" name="execution_mode" value="{{ $value }}" @checked($executionMode === $value)><span @class(['block h-full rounded-2xl border border-slate-700 bg-slate-950/60 p-5 transition', 'peer-checked:border-emerald-400 peer-checked:bg-emerald-400/10' => $tone === 'emerald', 'peer-checked:border-red-400 peer-checked:bg-red-400/10' => $tone === 'red'])><strong class="text-lg text-white">{{ $label }}</strong><span class="mt-2 block text-sm leading-6 text-slate-400">{{ $description }}</span></span></label>
@@ -29,7 +29,7 @@
         </section>
 
         <section class="rounded-3xl border border-violet-400/20 bg-slate-900/70 p-6 sm:p-8"><p class="text-xs font-bold uppercase tracking-[0.22em] text-violet-400">Entry Behavior</p><h2 class="mt-2 text-2xl font-semibold text-white">What happens after qualification?</h2><div class="mt-6 grid gap-4 lg:grid-cols-3">
-            @foreach ([['signal', 'SIGNAL ONLY', 'Find and notify about qualified opportunities. Never automatically enter.'], ['confirm', 'CONFIRM BEFORE BUY', 'Wait for explicit approval before using the execution pipeline.'], ['auto', 'AUTO BUY', 'Automatically enter according to active strategy and safety configuration.']] as [$value, $label, $description])
+            @foreach ([['signal', 'SIGNAL ONLY', 'Find and notify about qualified opportunities. Never automatically enter.'], ['confirm', 'CONFIRM BEFORE BUY', 'Wait for explicit approval before using the execution pipeline.'], ['auto', 'AUTO ENTRY POLICY', 'Request automatic entry only where the configured server-side pipeline authorizes it.']] as [$value, $label, $description])
                 <label class="cursor-pointer"><input class="peer sr-only" type="radio" name="entry_mode" value="{{ $value }}" @checked($entryMode === $value)><span class="block h-full rounded-2xl border border-slate-700 bg-slate-950/60 p-5 transition peer-checked:border-violet-400 peer-checked:bg-violet-400/10"><strong class="text-sm text-white">{{ $label }}</strong><span class="mt-2 block text-sm leading-6 text-slate-400">{{ $description }}</span></span></label>
             @endforeach
         </div></section>

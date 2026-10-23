@@ -172,7 +172,7 @@ class MultiUserTradingIsolationTest extends TestCase
 
     public function test_dashboard_activity_endpoint_is_authenticated_and_user_scoped(): void
     {
-        SystemActivity::factory()->create(['user_id' => $this->userA->id, 'label' => 'USER A ACTIVITY']);
+        SystemActivity::factory()->create(['user_id' => $this->userA->id, 'label' => 'USER A ACTIVITY', 'output' => 'SECRET RAW OUTPUT']);
         SystemActivity::factory()->create(['user_id' => $this->userB->id, 'label' => 'USER B ACTIVITY']);
 
         $this->get(route('dashboard.activity'))->assertRedirect(route('login'));
@@ -180,6 +180,7 @@ class MultiUserTradingIsolationTest extends TestCase
             ->getJson(route('dashboard.activity'))
             ->assertOk()
             ->assertJsonFragment(['label' => 'USER A ACTIVITY'])
+            ->assertJsonMissing(['output' => 'SECRET RAW OUTPUT'])
             ->assertJsonMissing(['label' => 'USER B ACTIVITY']);
     }
 

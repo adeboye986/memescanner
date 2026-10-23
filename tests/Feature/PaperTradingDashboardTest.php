@@ -54,8 +54,12 @@ class PaperTradingDashboardTest extends TestCase
             ->assertSee('Quick Actions')
             ->assertSee('Run Momentum Scan')
             ->assertSee('Check Wallet Reconciliation')
-            ->assertSee('Position Tracker')
-            ->assertSee('Admin Personal Paper Wallets')
+            ->assertSee('Legacy Laravel PAPER Tracker')
+            ->assertSee('Legacy Laravel Admin PAPER Wallets')
+            ->assertSee('TypeScript Trading Engine')
+            ->assertSee('PostgreSQL Workflow Leader')
+            ->assertSee('NOT AVAILABLE')
+            ->assertSee('Engine-owned PAPER portfolio')
             ->assertSee('Legacy Admin Ledgers')
             ->assertSee('4.5000')
             ->assertSee('5.0000')
@@ -134,6 +138,7 @@ class PaperTradingDashboardTest extends TestCase
             ->assertSee('FAILED ACTIVITY')
             ->assertSee('SCHEDULED TRACKER')
             ->assertSee('Recent Activity')
+            ->assertDontSee('Scanner failed')
             ->assertViewHas('currentActivity', fn (array $activity): bool => $activity['label'] === 'CURRENT MANUAL')
             ->assertViewHas('recentActivities', fn (array $activities): bool => count($activities) === 3);
     }
@@ -157,8 +162,8 @@ class PaperTradingDashboardTest extends TestCase
         $this->get(route('dashboard'))
             ->assertOk()
             ->assertSee('Administrator navigation')
-            ->assertSee('Scanner Control')
-            ->assertSee('Tracker & Queue', false)
+            ->assertSee('Laravel Scanners')
+            ->assertSee('Laravel Queue & Tracker', false)
             ->assertSee('Opportunities')
             ->assertSee('Trade History')
             ->assertSee('Platform Settings')
@@ -177,6 +182,7 @@ class PaperTradingDashboardTest extends TestCase
             ->assertOk()
             ->assertDontSee('Administrator navigation')
             ->assertDontSee('Platform Settings')
+            ->assertSee('Execution Preference')
             ->assertSee('Paper Trading Dashboard');
     }
 

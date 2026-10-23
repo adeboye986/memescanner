@@ -2,6 +2,7 @@ import { mountEthereumOpportunity } from './ethereum-opportunity';
 import { mountWalletCard } from './solana-wallet';
 import { mountSolanaOpportunity } from './solana-opportunity';
 import { mountEthereumWalletCard } from './ethereum-wallet';
+import { createDashboardActivityPoller } from './dashboard-activity-poller';
 
 mountWalletCard(document.querySelector('#solana-wallet'));
 mountEthereumWalletCard(document.querySelector('#ethereum-wallet'));
@@ -189,18 +190,53 @@ if (scannerChain instanceof HTMLSelectElement) {
     });
 }
 
-const updateCurrentActivity = (activity) => {
-    document.querySelector('#current-activity-empty')?.classList.toggle('hidden', activity !== null);
-    document.querySelector('#current-activity-content')?.classList.toggle('hidden', activity === null);
+const activityStatusColors = {
+    pending: 'text-amber-300',
+    running: 'text-blue-300',
+    completed: 'text-emerald-300',
+    failed: 'text-red-300',
+};
 
-    if (!activity) {
+const renderCurrentActivities = (activities) => {
+    const list = document.querySelector('#current-activity-list');
+    const empty = document.querySelector('#current-activity-empty');
+
+    empty?.classList.toggle('hidden', activities.length > 0);
+    list?.classList.toggle('hidden', activities.length === 0);
+
+    if (!list) {
         return;
     }
 
-    setText('#current-activity-label', `⚡ ${activity.label}`);
-    setText('#current-activity-status', activity.status);
-    setText('#current-activity-started', activity.started_at ?? 'Waiting for worker');
-    setText('#current-activity-running', activity.running_seconds === null ? 'Pending' : `${activity.running_seconds}s`);
+    list.replaceChildren();
+
+    activities.forEach((activity) => {
+        const card = document.createElement('article');
+        card.className = 'rounded-xl border border-blue-400/20 bg-blue-400/5 p-4';
+
+        const heading = document.createElement('div');
+        heading.className = 'flex flex-wrap items-center justify-between gap-3';
+        const label = document.createElement('h3');
+        label.className = 'font-semibold text-white';
+        label.textContent = activity.label;
+        const status = document.createElement('span');
+        status.className = 'rounded-full border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider text-blue-300';
+        status.textContent = activity.status;
+        heading.append(label, status);
+
+        const summary = document.createElement('p');
+        summary.className = 'mt-2 text-xs leading-5 text-slate-400';
+        summary.textContent = activity.summary;
+
+        const context = document.createElement('p');
+        context.className = 'mt-2 text-xs text-slate-500';
+        const elapsed = activity.running_seconds === null ? 'Pending' : `${activity.running_seconds}s`;
+        const chain = activity.chain ? ` · ${activity.chain.toUpperCase()}` : '';
+        context.textContent = `Initiated by ${activity.initiated_by}${chain} · ${activity.started_at ?? 'Waiting for Laravel queue worker'} · ${elapsed}`;
+
+        card.append(heading, summary, context);
+        list.append(card);
+    });
 };
 
 const renderRecentActivities = (activities) => {
@@ -211,6 +247,7 @@ const renderRecentActivities = (activities) => {
     }
 
     list.replaceChildren();
+    setText('#recent-activity-count', `Latest ${activities.length}`);
 
     if (activities.length === 0) {
         const empty = document.createElement('p');
@@ -221,19 +258,12 @@ const renderRecentActivities = (activities) => {
         return;
     }
 
-    const statusColors = {
-        pending: 'text-amber-300',
-        running: 'text-blue-300',
-        completed: 'text-emerald-300',
-        failed: 'text-red-300',
-    };
-
     activities.forEach((activity) => {
         const details = document.createElement('details');
         details.className = 'group rounded-lg border border-slate-800 bg-slate-950/50';
 
-        const summary = document.createElement('summary');
-        summary.className = 'grid cursor-pointer list-none grid-cols-[1fr_auto] items-center gap-3 px-3 py-3 marker:hidden';
+        const heading = document.createElement('summary');
+        heading.className = 'grid cursor-pointer list-none grid-cols-[1fr_auto] items-center gap-3 px-3 py-3 marker:hidden';
 
         const identity = document.createElement('span');
         identity.className = 'min-w-0';
@@ -242,72 +272,124 @@ const renderRecentActivities = (activities) => {
         label.textContent = activity.label;
         const context = document.createElement('span');
         context.className = 'mt-1 block text-xs text-slate-500';
-        context.textContent = `${activity.triggered_by.charAt(0).toUpperCase()}${activity.triggered_by.slice(1)} · ${activity.relative_time}`;
+        const trigger = activity.triggered_by.charAt(0).toUpperCase() + activity.triggered_by.slice(1);
+        const chain = activity.chain ? ` · ${activity.chain.toUpperCase()}` : '';
+        context.textContent = `${trigger} · ${activity.initiated_by}${chain} · ${activity.relative_time}`;
         identity.append(label, context);
 
         const result = document.createElement('span');
         result.className = 'text-right';
         const status = document.createElement('span');
-        status.className = `block text-xs font-semibold uppercase tracking-wider ${statusColors[activity.status] ?? 'text-slate-300'}`;
+        status.className = `block text-xs font-semibold uppercase tracking-wider ${activityStatusColors[activity.status] ?? 'text-slate-300'}`;
         status.textContent = activity.status;
         const duration = document.createElement('span');
         duration.className = 'mt-1 block text-xs text-slate-500';
         duration.textContent = activity.duration_seconds === null ? '—' : `${activity.duration_seconds}s`;
         result.append(status, duration);
 
-        const output = document.createElement('pre');
-        output.className = 'max-h-64 overflow-auto border-t border-slate-800 p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-slate-400';
-        output.textContent = activity.output || 'No output captured yet.';
+        const safeSummary = document.createElement('p');
+        safeSummary.className = 'border-t border-slate-800 p-3 text-xs leading-5 text-slate-400';
+        safeSummary.textContent = activity.summary;
 
-        summary.append(identity, result);
-        details.append(summary, output);
+
+        const timing = document.createElement('p');
+        timing.className = 'border-t border-slate-800 px-3 py-2 text-xs text-slate-600';
+        timing.textContent = `Started: ${activity.started_at ?? 'Not started'} · Finished: ${activity.finished_at ?? 'Not finished'}`;
+        heading.append(identity, result);
+        details.append(heading, safeSummary, timing);
         list.append(details);
     });
 };
 
-const pollActivity = async () => {
-    if (!(activitySection instanceof HTMLElement)) {
+const updateStateText = (selector, state) => {
+    const element = document.querySelector(selector);
+
+    if (!element) {
         return;
     }
 
-    try {
-        const statusUrl = activitySection.dataset.statusUrl ?? document.querySelector('#admin-activity-endpoint')?.dataset.statusUrl;
+    element.textContent = String(state).replaceAll('_', ' ').toUpperCase();
+    element.classList.remove('text-emerald-300', 'text-amber-300', 'text-red-300', 'text-slate-300');
 
-        if (!statusUrl) {
-            return;
-        }
-
-        const response = await fetch(statusUrl, {
-            headers: { Accept: 'application/json' },
-        });
-
-        if (!response.ok) {
-            return;
-        }
-
-        const data = await response.json();
-
-        updateCurrentActivity(data.current_activity);
-        renderRecentActivities(data.recent_activities);
-        updateActionButtons(data.running_actions);
-        updateTrackerBadge(data.system_status.status);
-        setText('#last-tracker-check', relativeTime(data.system_status.last_tracker_check));
-        setText('#tracker-cycle-duration', data.system_status.cycle_duration_ms === null ? 'N/A' : `${Math.round(data.system_status.cycle_duration_ms)} ms`);
-        setText('#tracker-open-positions', data.system_status.open_positions ?? 'N/A');
-        setText('#tracker-priced-positions', data.system_status.priced_positions === null ? 'N/A' : `${data.system_status.priced_positions} / ${data.system_status.open_positions}`);
-        setText('#tracker-outstanding-unverified', data.system_status.outstanding_unverified_positions ?? 'N/A');
-        setText('#tracker-provider-success', relativeTime(data.system_status.last_successful_provider_request));
-        setText('#tracker-valid-observation', relativeTime(data.system_status.last_successful_market_observation));
-        setText('#tracker-process-lease', data.system_status.process_lock_held ? 'held' : 'not held');
-        setText('#tracker-process-heartbeat', relativeTime(data.system_status.last_process_heartbeat));
-        setText('#tracker-provider-failures', data.system_status.provider_failures ?? 'N/A');
-        setText('#last-momentum-scan', relativeTime(data.system_status.last_momentum_scan));
-        setText('#last-token-scan', relativeTime(data.system_status.last_token_scan));
-    } catch {
-        setText('#activity-live-indicator', 'Offline');
+    if (['ok', 'up', 'ready', 'reachable', 'healthy', 'active'].includes(state)) {
+        element.classList.add('text-emerald-300');
+    } else if (['unavailable', 'down', 'stale', 'degraded'].includes(state)) {
+        element.classList.add('text-amber-300');
+    } else {
+        element.classList.add('text-slate-300');
     }
 };
 
-if (activitySection) {
-    window.setInterval(pollActivity, 3000);
+const updateEngineStatus = (status) => {
+    updateStateText('#engine-connectivity', status.connectivity);
+    updateStateText('#engine-liveness', status.liveness);
+    updateStateText('#engine-readiness', status.readiness);
+    updateStateText('#engine-postgres', status.postgres);
+    updateStateText('#engine-workflow-leadership', status.workflow_leadership);
+    setText('#engine-last-response', relativeTime(status.last_successful_response_at));
+};
+
+const updateOperationalStatus = (status) => {
+    updateStateText('#operation-scheduler', status.scheduler.status);
+    updateStateText('#operation-queue', status.queue.status);
+    updateStateText('#operation-legacy-paper-tracker', status.legacy_paper_tracker.status);
+    setText('#operation-pending-jobs', status.pending_jobs);
+    setText('#operation-failed-jobs', status.failed_jobs);
+};
+
+const updateDashboardStatus = (data) => {
+    renderCurrentActivities(data.current_activities ?? (data.current_activity ? [data.current_activity] : []));
+    renderRecentActivities(data.recent_activities ?? []);
+    updateActionButtons(data.running_actions ?? []);
+    updateTrackerBadge(data.system_status.status);
+    setText('#last-tracker-check', relativeTime(data.system_status.last_tracker_check));
+    setText('#tracker-cycle-duration', data.system_status.cycle_duration_ms === null ? 'N/A' : `${Math.round(data.system_status.cycle_duration_ms)} ms`);
+    setText('#tracker-open-positions', data.system_status.open_positions ?? 'N/A');
+    setText('#tracker-priced-positions', data.system_status.priced_positions === null ? 'N/A' : `${data.system_status.priced_positions} / ${data.system_status.open_positions}`);
+    setText('#tracker-outstanding-unverified', data.system_status.outstanding_unverified_positions ?? 'N/A');
+    setText('#tracker-provider-success', relativeTime(data.system_status.last_successful_provider_request));
+    setText('#tracker-valid-observation', relativeTime(data.system_status.last_successful_market_observation));
+    setText('#tracker-process-lease', data.system_status.process_lock_held ? 'held' : 'not held');
+    setText('#tracker-process-heartbeat', relativeTime(data.system_status.last_process_heartbeat));
+    setText('#tracker-provider-failures', data.system_status.provider_failures ?? 'N/A');
+    setText('#last-momentum-scan', relativeTime(data.system_status.last_momentum_scan));
+    setText('#last-token-scan', relativeTime(data.system_status.last_token_scan));
+    updateOperationalStatus(data.operational_status);
+    updateEngineStatus(data.engine_status);
+};
+
+const updatePollingState = (state, lastSuccessfulAt) => {
+    const labels = {
+        connected: 'Connected',
+        unavailable: 'Unavailable',
+        stale: 'Stale',
+        paused: 'Paused',
+        authentication_expired: 'Session expired',
+    };
+    const indicator = document.querySelector('#activity-live-indicator');
+
+    if (indicator) {
+        indicator.textContent = labels[state] ?? 'Unknown';
+        indicator.classList.remove('border-emerald-400/20', 'text-emerald-300', 'border-amber-400/20', 'text-amber-300', 'border-red-400/20', 'text-red-300', 'border-slate-700', 'text-slate-400');
+
+        if (state === 'connected') {
+            indicator.classList.add('border-emerald-400/20', 'text-emerald-300');
+        } else if (state === 'authentication_expired') {
+            indicator.classList.add('border-red-400/20', 'text-red-300');
+        } else if (['unavailable', 'stale'].includes(state)) {
+            indicator.classList.add('border-amber-400/20', 'text-amber-300');
+        } else {
+            indicator.classList.add('border-slate-700', 'text-slate-400');
+        }
+    }
+
+    setText('#activity-last-refresh', lastSuccessfulAt === null ? 'Never' : relativeTime(new Date(lastSuccessfulAt).toISOString()));
+};
+
+if (activitySection instanceof HTMLElement && activitySection.dataset.statusUrl) {
+    createDashboardActivityPoller({
+        endpoint: activitySection.dataset.statusUrl,
+        onData: updateDashboardStatus,
+        onState: updatePollingState,
+    }).start();
 }

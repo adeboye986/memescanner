@@ -11,6 +11,7 @@ use App\Models\TradeOpportunity;
 use App\Services\EthereumOpportunityExecutionPolicy;
 use App\Services\OpportunityPresentationService;
 use App\Services\SolanaOpportunityExecutionPolicy;
+use App\Services\TradingEngine\TradingEngineOpportunityLifecyclePresenter;
 use Illuminate\Contracts\View\View;
 
 class OpportunityController extends Controller
@@ -48,10 +49,11 @@ class OpportunityController extends Controller
         OpportunityPresentationService $presenter,
         EthereumOpportunityExecutionPolicy $ethereumPolicy,
         SolanaOpportunityExecutionPolicy $solanaPolicy,
+        TradingEngineOpportunityLifecyclePresenter $lifecyclePresenter,
     ): View {
         $user = request()->user();
         abort_unless($opportunity->user_id === $user->id || ($user->is_admin && $opportunity->user_id === null), 404);
-        $opportunity->load(['paperPosition', 'events.user:id,name']);
+        $opportunity->load(['paperPosition', 'events.user:id,name', 'engineOpportunityLink', 'engineOpportunityEvaluations', 'enginePaperEntryIntent', 'enginePaperPosition']);
         $preference = $user->tradingPreference;
         $ethereumLive = $opportunity->user_id === $user->id && $opportunity->chain === Chain::Ethereum
             && (($opportunity->entry_mode === EntryMode::Confirm
@@ -73,6 +75,7 @@ class OpportunityController extends Controller
         return view('opportunities.show', [
             'opportunity' => $opportunity,
             'presentation' => $presenter->present($opportunity),
+            'engineLifecycle' => $lifecyclePresenter->present($opportunity),
             'ethereumLive' => $ethereumLive,
             'solanaLive' => $solanaLive,
         ]);
