@@ -197,6 +197,61 @@ const activityStatusColors = {
     failed: 'text-red-300',
 };
 
+const appendScanResultSummary = (container, activity) => {
+    const result = activity.result_summary;
+
+    if (!result || result.version !== 1 || result.kind !== 'scanner_execution') {
+        return;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'mt-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3';
+
+    const counts = document.createElement('dl');
+    counts.className = 'grid grid-cols-3 gap-2 text-center sm:grid-cols-6';
+
+    [
+        ['discovered', 'Discovered'],
+        ['examined', 'Examined'],
+        ['qualified', 'Qualified'],
+        ['skipped', 'Skipped'],
+        ['failed', 'Failed'],
+        ['exports_acknowledged', 'Exported'],
+    ].forEach(([field, label]) => {
+        const item = document.createElement('div');
+        const term = document.createElement('dt');
+        term.className = 'text-[10px] uppercase tracking-wider text-slate-600';
+        term.textContent = label;
+        const value = document.createElement('dd');
+        value.className = 'mt-1 font-semibold tabular-nums text-slate-300';
+        value.textContent = result.counts?.[field] ?? 0;
+        item.append(term, value);
+        counts.append(item);
+    });
+
+    const exports = document.createElement('p');
+    exports.className = 'mt-3 text-[11px] leading-5 text-slate-500';
+    const exportStates = Object.entries(result.exports ?? {})
+        .map(([state, count]) => `${state.replaceAll('_', ' ')} ${count}`)
+        .join(' / ');
+    exports.textContent = `Engine exports: ${exportStates || 'unavailable'}`;
+
+    wrapper.append(counts, exports);
+
+    if (Array.isArray(result.provider_failures) && result.provider_failures.length > 0) {
+        const warnings = document.createElement('p');
+        warnings.className = 'mt-1 text-[11px] leading-5 text-amber-300/80';
+        warnings.textContent = `Provider warnings: ${result.provider_failures.map((failure) => `${failure.code} x${failure.count}`).join(', ')}`;
+        wrapper.append(warnings);
+    }
+
+    const progress = document.createElement('p');
+    progress.className = 'mt-1 text-[11px] text-slate-600';
+    progress.textContent = `Last structured progress: ${activity.last_progress_at ?? 'Unavailable'}`;
+    wrapper.append(progress);
+    container.append(wrapper);
+};
+
 const renderCurrentActivities = (activities) => {
     const list = document.querySelector('#current-activity-list');
     const empty = document.querySelector('#current-activity-empty');
@@ -234,7 +289,9 @@ const renderCurrentActivities = (activities) => {
         const chain = activity.chain ? ` · ${activity.chain.toUpperCase()}` : '';
         context.textContent = `Initiated by ${activity.initiated_by}${chain} · ${activity.started_at ?? 'Waiting for Laravel queue worker'} · ${elapsed}`;
 
-        card.append(heading, summary, context);
+        card.append(heading, summary);
+        appendScanResultSummary(card, activity);
+        card.append(context);
         list.append(card);
     });
 };
@@ -296,7 +353,9 @@ const renderRecentActivities = (activities) => {
         timing.className = 'border-t border-slate-800 px-3 py-2 text-xs text-slate-600';
         timing.textContent = `Started: ${activity.started_at ?? 'Not started'} · Finished: ${activity.finished_at ?? 'Not finished'}`;
         heading.append(identity, result);
-        details.append(heading, safeSummary, timing);
+        details.append(heading, safeSummary);
+        appendScanResultSummary(details, activity);
+        details.append(timing);
         list.append(details);
     });
 };

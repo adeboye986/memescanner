@@ -38,6 +38,9 @@ trait RefreshesPaperTradingDatabase
                 'database/migrations/2026_09_28_154011_create_trading_engine_opportunity_evaluations_table.php',
                 'database/migrations/2026_10_07_180000_create_trading_engine_paper_entry_projections.php',
                 'database/migrations/2026_10_07_234711_create_trading_engine_paper_financial_lifecycle_projections.php',
+                'database/migrations/2026_10_23_153837_add_structured_results_to_system_activities_table.php',
+                'database/migrations/2026_10_23_153841_create_system_activity_trade_opportunities_table.php',
+                'database/migrations/2026_10_23_153845_create_trading_engine_opportunity_exports_table.php',
             ],
             '--no-interaction' => true,
         ])->assertSuccessful();

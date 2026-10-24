@@ -3,7 +3,9 @@
 namespace Tests\Unit\Jobs;
 
 use App\Jobs\SubmitTradingEngineOpportunity;
+use App\Models\TradingEngineOpportunityExport;
 use App\Services\TradingEngine\TradingEngineClient;
+use App\Services\TradingEngine\TradingEngineOpportunityExportTracker;
 use App\Services\TradingEngine\TradingEngineServiceAssertionFactory;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Http\Client\Request;
@@ -53,9 +55,18 @@ class SubmitTradingEngineOpportunityTest extends TestCase
         $payload = ['schema_version' => 1, 'source' => ['opportunity_id' => '42']];
         $job = new SubmitTradingEngineOpportunity($payload, 'opportunity:record:laravel:42:v1');
         $client = app(TradingEngineClient::class);
+        $export = new TradingEngineOpportunityExport([
+            'trade_opportunity_id' => 42,
+            'idempotency_key' => $job->idempotencyKey,
+            'status' => TradingEngineOpportunityExport::STATUS_QUEUED,
+        ]);
+        $exports = $this->mock(TradingEngineOpportunityExportTracker::class);
+        $exports->shouldReceive('forJob')->twice()->with($payload, $job->idempotencyKey)->andReturn($export);
+        $exports->shouldReceive('beginAttempt')->twice()->with($export)->andReturnTrue();
+        $exports->shouldReceive('acknowledged')->twice()->with($export, \Mockery::type('array'));
 
-        $job->handle($client);
-        $job->handle($client);
+        $job->handle($client, $exports);
+        $job->handle($client, $exports);
 
         $this->assertCount(2, $requests);
         $this->assertSame($requests[0]->body(), $requests[1]->body());

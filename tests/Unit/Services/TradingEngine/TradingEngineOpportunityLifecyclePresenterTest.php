@@ -17,8 +17,8 @@ class TradingEngineOpportunityLifecyclePresenterTest extends TestCase
     public function test_it_does_not_invent_unpersisted_queue_evaluation_or_entry_states(): void
     {
         $steps = $this->keyedSteps($this->opportunity());
-        $this->assertSame('complete', $steps['Opportunity discovered']['status']);
-        $this->assertNull($steps['Opportunity discovered']['occurred_at']);
+        $this->assertSame('unknown', $steps['Dashboard scan correlation']['status']);
+        $this->assertNull($steps['Dashboard scan correlation']['occurred_at']);
 
         $this->assertSame('not_available', $steps['Engine export queued']['status']);
         $this->assertSame('unknown', $steps['Engine export acknowledged']['status']);
@@ -90,7 +90,9 @@ class TradingEngineOpportunityLifecyclePresenterTest extends TestCase
             'qualified_at' => now(),
         ]);
         $opportunity->setRelation('engineOpportunityLink', null);
+        $opportunity->setRelation('engineOpportunityExport', null);
         $opportunity->setRelation('engineOpportunityEvaluations', new Collection);
+        $opportunity->setRelation('systemActivities', new Collection);
         $opportunity->setRelation('enginePaperEntryIntent', null);
         $opportunity->setRelation('enginePaperPosition', null);
         $opportunity->setRelation('paperPosition', null);

@@ -11,6 +11,8 @@ use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Models\User;
 use App\Services\TradingEngine\TradingEngineOpportunityCommandFactory;
+use App\Services\TradingEngine\TradingEngineOpportunityExportTracker;
+use Illuminate\Support\Facades\DB;
 use Throwable;
 
 class TradeOpportunityService
@@ -21,21 +23,23 @@ class TradeOpportunityService
         private UserTradingPreferenceService $preferences,
         private UserTelegramNotificationService $userTelegram,
         private TradingEngineOpportunityCommandFactory $tradingEngineCommands,
+        private TradingEngineOpportunityExportTracker $tradingEngineExports,
+        private ScanExecutionRecorder $scanExecutions,
     ) {}
 
     /** @param array<string, mixed> $data
      * @return array{opportunity: TradeOpportunity, position: ?PaperPosition}
      */
-    public function qualify(array $data, ?User $requestingUser = null): array
+    public function qualify(array $data, ?User $requestingUser = null, ?int $systemActivityId = null): array
     {
         if ($requestingUser) {
-            return $this->createForUser($data, $requestingUser);
+            return $this->createForUser($data, $requestingUser, $systemActivityId);
         }
 
         $users = User::query()->get();
 
         if ($users->isEmpty()) {
-            return $this->createForUser($data, null);
+            return $this->createForUser($data, null, $systemActivityId);
         }
 
         $results = collect();
@@ -43,7 +47,7 @@ class TradeOpportunityService
 
         foreach ($users as $user) {
             try {
-                $results->push($this->createForUser($data, $user));
+                $results->push($this->createForUser($data, $user, $systemActivityId));
             } catch (Throwable $exception) {
                 report($exception);
                 $firstFailure ??= $exception;
@@ -60,39 +64,54 @@ class TradeOpportunityService
     /** @param array<string, mixed> $data
      * @return array{opportunity: TradeOpportunity, position: ?PaperPosition}
      */
-    private function createForUser(array $data, ?User $user): array
+    private function createForUser(array $data, ?User $user, ?int $systemActivityId): array
     {
         $chain = Chain::fromInput($data['chain'] ?? 'solana');
         $scanner = (string) ($data['scanner'] ?? 'unknown');
         $sendNotification = $user !== null && ($data['send_notification'] ?? true);
         $discoveryKey = (string) ($data['discovery_key'] ?? hash('sha256', implode('|', [$chain->value, $scanner, strtolower((string) $data['address']), (string) ($data['discovery_market_cap'] ?? '')])));
         $preference = $user ? $this->preferences->forUser($user) : null;
-        $opportunity = TradeOpportunity::query()->firstOrCreate([
-            'user_id' => $user?->id,
-            'discovery_key' => $discoveryKey,
-        ], [
-            'chain' => $chain,
-            'address' => $data['address'],
-            'symbol' => $data['symbol'] ?? null,
-            'name' => $data['name'] ?? null,
-            'scanner' => $scanner,
-            'status' => TradeOpportunityStatus::Qualified,
-            'execution_mode' => $preference?->execution_mode ?? ExecutionMode::from((string) $this->settings->get('trading.execution_mode')),
-            'entry_mode' => $preference?->entry_mode ?? EntryMode::from((string) $this->settings->get('trading.entry_mode')),
-            'pair_address' => data_get($data, 'meta.pair_address'),
-            'price' => $data['entry_price'] ?? null,
-            'market_cap' => $data['entry_market_cap'] ?? null,
-            'liquidity' => $data['entry_liquidity'] ?? null,
-            'volume' => $data['volume'] ?? null,
-            'qualification_data' => [
-                'discovery_market_cap' => $data['discovery_market_cap'] ?? null,
-                'move_since_discovery_percent' => $data['move_since_discovery_percent'] ?? null,
-                'send_notification' => $sendNotification,
-                'meta' => $data['meta'] ?? [],
-            ],
-            'security_data' => $data['security_data'] ?? null,
-            'qualified_at' => now(),
-        ]);
+        $opportunity = DB::transaction(function () use (
+            $user,
+            $discoveryKey,
+            $chain,
+            $data,
+            $scanner,
+            $preference,
+            $sendNotification,
+            $systemActivityId,
+        ): TradeOpportunity {
+            $opportunity = TradeOpportunity::query()->firstOrCreate([
+                'user_id' => $user?->id,
+                'discovery_key' => $discoveryKey,
+            ], [
+                'chain' => $chain,
+                'address' => $data['address'],
+                'symbol' => $data['symbol'] ?? null,
+                'name' => $data['name'] ?? null,
+                'scanner' => $scanner,
+                'status' => TradeOpportunityStatus::Qualified,
+                'execution_mode' => $preference?->execution_mode ?? ExecutionMode::from((string) $this->settings->get('trading.execution_mode')),
+                'entry_mode' => $preference?->entry_mode ?? EntryMode::from((string) $this->settings->get('trading.entry_mode')),
+                'pair_address' => data_get($data, 'meta.pair_address'),
+                'price' => $data['entry_price'] ?? null,
+                'market_cap' => $data['entry_market_cap'] ?? null,
+                'liquidity' => $data['entry_liquidity'] ?? null,
+                'volume' => $data['volume'] ?? null,
+                'qualification_data' => [
+                    'discovery_market_cap' => $data['discovery_market_cap'] ?? null,
+                    'move_since_discovery_percent' => $data['move_since_discovery_percent'] ?? null,
+                    'send_notification' => $sendNotification,
+                    'meta' => $data['meta'] ?? [],
+                ],
+                'security_data' => $data['security_data'] ?? null,
+                'qualified_at' => now(),
+            ]);
+
+            $this->scanExecutions->linkOpportunity($systemActivityId, $opportunity);
+
+            return $opportunity;
+        });
 
         if (! $opportunity->wasRecentlyCreated) {
             return ['opportunity' => $opportunity, 'position' => $opportunity->paperPosition];
@@ -130,19 +149,49 @@ class TradeOpportunityService
 
     private function queueTradingEngineExport(TradeOpportunity $opportunity): void
     {
-        if (config('services.trading_engine.enabled') !== true
-            || config('services.trading_engine.opportunity_export_enabled') !== true
-            || $opportunity->user_id === null
+        if ($opportunity->user_id === null
             || ! in_array($opportunity->scanner, ['new-token', 'momentum'], true)) {
             return;
         }
 
         try {
             $command = $this->tradingEngineCommands->make($opportunity);
-            SubmitTradingEngineOpportunity::dispatch(
-                $command['payload'],
-                $command['idempotency_key'],
-            );
+
+            if (config('services.trading_engine.enabled') !== true) {
+                $this->tradingEngineExports->skipped(
+                    $opportunity,
+                    $command['idempotency_key'],
+                    'ENGINE_DISABLED',
+                );
+
+                return;
+            }
+
+            if (config('services.trading_engine.opportunity_export_enabled') !== true) {
+                $this->tradingEngineExports->skipped(
+                    $opportunity,
+                    $command['idempotency_key'],
+                    'EXPORT_DISABLED',
+                );
+
+                return;
+            }
+
+            $export = $this->tradingEngineExports->queued($opportunity, $command['idempotency_key']);
+
+            if (! $export->wasRecentlyCreated) {
+                return;
+            }
+
+            try {
+                SubmitTradingEngineOpportunity::dispatch(
+                    $command['payload'],
+                    $command['idempotency_key'],
+                );
+            } catch (Throwable $exception) {
+                $this->tradingEngineExports->permanentlyFailed($export, 'QUEUE_DISPATCH_FAILED');
+                throw $exception;
+            }
         } catch (Throwable $exception) {
             report($exception);
         }

@@ -28,6 +28,7 @@
                         <span class="rounded-full border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider text-blue-300">{{ $activity['status'] }}</span>
                     </div>
                     <p class="mt-2 text-xs leading-5 text-slate-400">{{ $activity['summary'] }}</p>
+                    @include('partials.scan-result-summary', ['activity' => $activity])
                     <p class="mt-2 text-xs text-slate-500">Initiated by {{ $activity['initiated_by'] }}@if($activity['chain']) · {{ strtoupper($activity['chain']) }}@endif · {{ $activity['started_at'] ?? 'Waiting for Laravel queue worker' }} · {{ $activity['running_seconds'] === null ? 'Pending' : $activity['running_seconds'].'s' }}</p>
                 </article>
             @endforeach
@@ -58,7 +59,10 @@
                             <span class="mt-1 block text-xs text-slate-500">{{ $activity['duration_seconds'] !== null ? $activity['duration_seconds'].'s' : '—' }}</span>
                         </span>
                     </summary>
-                    <p class="border-t border-slate-800 p-3 text-xs leading-5 text-slate-400">{{ $activity['summary'] }}</p>
+                    <div class="border-t border-slate-800 p-3">
+                        <p class="text-xs leading-5 text-slate-400">{{ $activity['summary'] }}</p>
+                        @include('partials.scan-result-summary', ['activity' => $activity])
+                    </div>
                     <p class="border-t border-slate-800 px-3 py-2 text-xs text-slate-600">Started: {{ $activity['started_at'] ?? 'Not started' }} · Finished: {{ $activity['finished_at'] ?? 'Not finished' }}</p>
                 </details>
             @empty

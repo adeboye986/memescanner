@@ -6,6 +6,7 @@ use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Models\TradeOpportunity;
 use App\Models\TradingEngineOpportunityEvaluation;
+use App\Models\TradingEngineOpportunityExport;
 use App\Models\TradingEnginePaperEntryIntent;
 
 class TradingEngineOpportunityLifecyclePresenter
@@ -20,12 +21,17 @@ class TradingEngineOpportunityLifecyclePresenter
         $intent = $opportunity->enginePaperEntryIntent;
         $enginePosition = $opportunity->enginePaperPosition;
         $legacyPosition = $opportunity->paperPosition;
+        $export = $opportunity->engineOpportunityExport;
+        $scanActivity = $opportunity->systemActivities->sortByDesc('id')->first();
 
         return [
             $this->step(
-                'Opportunity discovered',
-                'complete',
-                'The persisted opportunity identifies the '.$opportunity->scanner.' discovery source; a separate discovery timestamp or scan-run correlation is not stored.',
+                'Dashboard scan correlation',
+                $scanActivity ? 'complete' : 'unknown',
+                $scanActivity
+                    ? 'Durably linked to dashboard scan run #'.$scanActivity->getKey().'.'
+                    : 'No dashboard scan-run relationship is stored for this historical or non-dashboard opportunity.',
+                $scanActivity?->started_at?->toIso8601String() ?? $scanActivity?->created_at?->toIso8601String(),
             ),
             $this->step(
                 'Laravel opportunity recorded',
@@ -33,21 +39,8 @@ class TradingEngineOpportunityLifecyclePresenter
                 'The qualified opportunity is durably stored by Laravel.',
                 $opportunity->qualified_at?->toIso8601String() ?? $opportunity->created_at?->toIso8601String(),
             ),
-            $this->step(
-                'Engine export queued',
-                'not_available',
-                $link
-                    ? 'An engine acknowledgement exists, but Laravel does not store queue acceptance as a separate stage.'
-                    : 'Laravel does not persist a separate per-opportunity queue-acceptance record.',
-            ),
-            $this->step(
-                'Engine export acknowledged',
-                $link ? 'complete' : 'unknown',
-                $link
-                    ? 'Laravel recorded the engine opportunity identifier and acknowledgement event.'
-                    : 'No durable engine acknowledgement is linked to this opportunity.',
-                $link?->recorded_at?->toIso8601String(),
-            ),
+            $this->exportQueuedStep($export, $link !== null),
+            $this->exportAcknowledgementStep($export, $link !== null, $link?->recorded_at?->toIso8601String()),
             $this->step(
                 'Engine evaluation execution',
                 $evaluation ? 'complete' : 'not_available',
@@ -75,6 +68,91 @@ class TradingEngineOpportunityLifecyclePresenter
             $this->paperDecisionStep($opportunity, $evaluation, $intent, $legacyPosition !== null, $enginePosition !== null),
             $this->paperEntryStep($opportunity, $intent, $legacyPosition !== null, $enginePosition !== null),
         ];
+    }
+
+    /** @return array{label: string, status: string, detail: string, occurred_at: ?string} */
+    private function exportQueuedStep(?TradingEngineOpportunityExport $export, bool $hasAcknowledgementLink): array
+    {
+        if ($export === null) {
+            return $this->step(
+                'Engine export queued',
+                'not_available',
+                $hasAcknowledgementLink
+                    ? 'This historical acknowledgement predates durable Laravel export-queue tracking.'
+                    : 'No durable export-queue record is linked to this opportunity.',
+            );
+        }
+
+        $status = match ($export->status) {
+            TradingEngineOpportunityExport::STATUS_SKIPPED => 'skipped',
+            TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED => 'failed',
+            default => 'complete',
+        };
+
+        $detail = match ($export->status) {
+            TradingEngineOpportunityExport::STATUS_SKIPPED => 'Export was explicitly skipped by a configured integration boundary'.($this->safeErrorCode($export->last_error_code) ? ': '.$this->safeErrorCode($export->last_error_code).'.' : '.'),
+            TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED => 'The queued export reached a permanent failure'.($this->safeErrorCode($export->last_error_code) ? ': '.$this->safeErrorCode($export->last_error_code).'.' : '.'),
+            default => 'Laravel durably recorded this opportunity for engine export.',
+        };
+
+        return $this->step(
+            'Engine export queued',
+            $status,
+            $detail,
+            $export->queued_at?->toIso8601String() ?? $export->created_at?->toIso8601String(),
+        );
+    }
+
+    /** @return array{label: string, status: string, detail: string, occurred_at: ?string} */
+    private function exportAcknowledgementStep(
+        ?TradingEngineOpportunityExport $export,
+        bool $hasAcknowledgementLink,
+        ?string $linkRecordedAt,
+    ): array {
+        if ($export === null) {
+            return $this->step(
+                'Engine export acknowledged',
+                $hasAcknowledgementLink ? 'complete' : 'unknown',
+                $hasAcknowledgementLink
+                    ? 'Laravel recorded the engine acknowledgement before durable export-state tracking was added.'
+                    : 'No durable engine acknowledgement is linked to this opportunity.',
+                $linkRecordedAt,
+            );
+        }
+
+        $status = match ($export->status) {
+            TradingEngineOpportunityExport::STATUS_ACKNOWLEDGED => 'complete',
+            TradingEngineOpportunityExport::STATUS_QUEUED,
+            TradingEngineOpportunityExport::STATUS_SUBMITTING,
+            TradingEngineOpportunityExport::STATUS_RETRYING => 'pending',
+            TradingEngineOpportunityExport::STATUS_SKIPPED => 'skipped',
+            TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED => 'failed',
+            default => 'unknown',
+        };
+
+        $detail = match ($export->status) {
+            TradingEngineOpportunityExport::STATUS_ACKNOWLEDGED => 'The TypeScript engine acknowledged the immutable opportunity command.',
+            TradingEngineOpportunityExport::STATUS_QUEUED => 'The export is queued; no engine acknowledgement has been recorded.',
+            TradingEngineOpportunityExport::STATUS_SUBMITTING => 'A Laravel queue worker is submitting the export; no acknowledgement has been recorded.',
+            TradingEngineOpportunityExport::STATUS_RETRYING => 'The export is waiting for another bounded queue attempt'.($this->safeErrorCode($export->last_error_code) ? ': '.$this->safeErrorCode($export->last_error_code).'.' : '.'),
+            TradingEngineOpportunityExport::STATUS_SKIPPED => 'The export was skipped; engine evaluation and PAPER entry were not implied.',
+            TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED => 'The export permanently failed; no engine acknowledgement was recorded.',
+            default => 'The durable export record has an unrecognized state; no downstream state has been inferred.',
+        };
+
+        return $this->step(
+            'Engine export acknowledged',
+            $status,
+            $detail,
+            $export->acknowledged_at?->toIso8601String() ?? $export->last_attempt_at?->toIso8601String(),
+        );
+    }
+
+    private function safeErrorCode(?string $errorCode): ?string
+    {
+        return is_string($errorCode) && preg_match('/^[A-Z][A-Z0-9_]{0,127}$/D', $errorCode) === 1
+            ? $errorCode
+            : null;
     }
 
     /** @return array{label: string, status: string, detail: string, occurred_at: ?string} */

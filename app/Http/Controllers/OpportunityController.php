@@ -53,7 +53,7 @@ class OpportunityController extends Controller
     ): View {
         $user = request()->user();
         abort_unless($opportunity->user_id === $user->id || ($user->is_admin && $opportunity->user_id === null), 404);
-        $opportunity->load(['paperPosition', 'events.user:id,name', 'engineOpportunityLink', 'engineOpportunityEvaluations', 'enginePaperEntryIntent', 'enginePaperPosition']);
+        $opportunity->load(['paperPosition', 'events.user:id,name', 'engineOpportunityLink', 'engineOpportunityExport', 'engineOpportunityEvaluations', 'systemActivities', 'enginePaperEntryIntent', 'enginePaperPosition']);
         $preference = $user->tradingPreference;
         $ethereumLive = $opportunity->user_id === $user->id && $opportunity->chain === Chain::Ethereum
             && (($opportunity->entry_mode === EntryMode::Confirm

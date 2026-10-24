@@ -13,9 +13,11 @@ use App\Services\EthereumScannerService;
 use App\Services\GoPlusService;
 use App\Services\NewTokenClassificationService;
 use App\Services\PaperTradeEntryService;
+use App\Services\ScanExecutionRecorder;
 use App\Services\TelegramService;
 use App\Services\TradeOpportunityService;
 use App\Services\UserTelegramNotificationService;
+use DomainException;
 use Illuminate\Console\Command;
 use Illuminate\Http\Client\ConnectionException;
 use InvalidArgumentException;
@@ -24,17 +26,18 @@ use Throwable;
 
 class ScanNewTokens extends Command
 {
-    protected $signature = 'tokens:scan {--chain=solana : Blockchain to scan (solana or ethereum)} {--user= : Limit opportunity distribution to one user ID} {--max-qualified= : Stop after this many qualified Solana listings enter opportunity handling}';
+    protected $signature = 'tokens:scan {--chain=solana : Blockchain to scan (solana or ethereum)} {--user= : Limit opportunity distribution to one user ID} {--max-qualified= : Stop after this many qualified Solana listings enter opportunity handling} {--activity-id= : Internal dashboard scan activity identifier}';
 
     protected $description = 'Scan newly listed tokens on a supported blockchain';
 
-    public function handle(BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener, TradeOpportunityService $opportunities, EthereumScannerService $ethereumScanner, NewTokenClassificationService $classifications, ApplicationSettingsService $settings, PaperTradeEntryService $entries, UserTelegramNotificationService $userTelegram): int
+    public function handle(BirdeyeService $birdeye, GoPlusService $goplus, TelegramService $telegram, DexScreenerService $dexscreener, TradeOpportunityService $opportunities, EthereumScannerService $ethereumScanner, NewTokenClassificationService $classifications, ApplicationSettingsService $settings, PaperTradeEntryService $entries, UserTelegramNotificationService $userTelegram, ScanExecutionRecorder $scanExecutions): int
     {
         try {
             $chain = Chain::fromInput($this->option('chain'));
             $maxQualified = $this->maxQualified();
             $requestingUser = $this->option('user') ? User::query()->findOrFail($this->option('user')) : null;
-        } catch (InvalidArgumentException $exception) {
+            $activityId = $scanExecutions->begin($this->option('activity-id'), 'token-scan', 'new-token', $chain, $requestingUser);
+        } catch (InvalidArgumentException|DomainException $exception) {
             $this->error($exception->getMessage());
 
             return self::FAILURE;
@@ -48,7 +51,7 @@ class ScanNewTokens extends Command
 
         if ($chain === Chain::Ethereum) {
             $this->warn('Ethereum security status: Solana-specific Birdeye, GoPlus, holder, developer-sale, and Pump.fun checks are unavailable and are not reported as passed.');
-            $result = $ethereumScanner->scan('new-token', $requestingUser);
+            $result = $ethereumScanner->scan('new-token', $requestingUser, $activityId);
             $this->info(sprintf('Ethereum new-token scan finished: %d profiles, %d qualified, %d paper buys.', $result['profiles'], $result['qualified'], $result['positions']));
 
             return self::SUCCESS;
@@ -64,6 +67,7 @@ class ScanNewTokens extends Command
         try {
             $response = $birdeye->newListings();
         } catch (Throwable $e) {
+            $scanExecutions->providerFailed($activityId, 'DISCOVERY_PROVIDER_UNAVAILABLE');
             $this->error(
                 'Could not fetch Birdeye listings: '.$e->getMessage()
             );
@@ -72,6 +76,7 @@ class ScanNewTokens extends Command
         }
 
         $items = $response['data']['items'] ?? [];
+        $scanExecutions->discovered($activityId, count($items));
 
         if (empty($items)) {
             $this->warn('No new listings returned.');
@@ -91,6 +96,7 @@ class ScanNewTokens extends Command
                 break;
             }
 
+            $scanExecutions->examined($activityId);
             $address = $listing['address'] ?? null;
 
             if (! $address || isset($seenAddresses[$address])) {
@@ -212,6 +218,7 @@ class ScanNewTokens extends Command
                 try {
                     $security = $goplus->evaluateToken($address);
                 } catch (ConnectionException $e) {
+                    $scanExecutions->providerFailed($activityId, 'SECURITY_PROVIDER_UNAVAILABLE');
                     $securityUnavailable = true;
 
                     $security = [
@@ -225,6 +232,7 @@ class ScanNewTokens extends Command
                     );
 
                 } catch (Throwable $e) {
+                    $scanExecutions->providerFailed($activityId, 'SECURITY_PROVIDER_UNAVAILABLE');
                     $securityUnavailable = true;
 
                     $security = [
@@ -381,6 +389,7 @@ class ScanNewTokens extends Command
                     try {
                         $dexData = $dexscreener->analyzeToken($address);
                     } catch (Throwable $e) {
+                        $scanExecutions->providerFailed($activityId, 'MARKET_PROVIDER_UNAVAILABLE');
                         $this->warn(
                             "DEXSCREENER UNAVAILABLE: {$symbol} | ".$e->getMessage()
                         );
@@ -598,7 +607,8 @@ class ScanNewTokens extends Command
                                     'pair_address' => $dexData['pair_address'] ?? null,
                                     'dex' => $dexData['dex'] ?? null,
                                 ],
-                            ], $requestingUser);
+                            ], $requestingUser, $activityId);
+                            $scanExecutions->qualified($activityId);
 
                             $paperPosition = $execution['position'];
                             $paperBuyExecuted = $paperPosition?->wasRecentlyCreated ?? false;
@@ -629,6 +639,7 @@ class ScanNewTokens extends Command
                                     : "PAPER BUY SKIPPED: {$symbol} | position already open"
                             );
                         } catch (Throwable $exception) {
+                            $scanExecutions->candidateFailed($activityId, 'OPPORTUNITY_HANDLING_FAILED');
                             $paperEntryDecision['paper_entry_status'] = 'rejected';
                             $paperEntryDecision['paper_entry_reason'] = $exception->getMessage();
 
@@ -716,6 +727,7 @@ class ScanNewTokens extends Command
                 );
 
             } catch (Throwable $e) {
+                $scanExecutions->candidateFailed($activityId, 'CANDIDATE_PROCESSING_FAILED');
                 $this->error(
                     "{$symbol}: {$e->getMessage()}"
                 );

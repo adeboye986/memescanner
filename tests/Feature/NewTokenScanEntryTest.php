@@ -5,21 +5,28 @@ namespace Tests\Feature;
 use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
+use App\Jobs\RunDashboardCommand;
+use App\Jobs\SubmitTradingEngineOpportunity;
 use App\Models\PaperPosition;
 use App\Models\PaperWallet;
+use App\Models\SystemActivity;
 use App\Models\TokenScan;
 use App\Models\TradeOpportunity;
 use App\Models\User;
 use App\Models\UserTradingPreference;
 use App\Services\BirdeyeService;
+use App\Services\DashboardCommandRegistry;
 use App\Services\DexScreenerService;
 use App\Services\EthereumScannerService;
 use App\Services\GoPlusService;
 use App\Services\PaperTradeEntryService;
+use App\Services\SystemActivityService;
 use App\Services\TelegramService;
 use App\Services\Trading\LiveTradeExecutor;
 use App\Services\UserTelegramNotificationService;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
@@ -125,6 +132,130 @@ class NewTokenScanEntryTest extends TestCase
         $this->assertTrue($strongOpportunity->security_data['passed']);
         $this->assertSame(2, TradeOpportunity::query()->count());
         $this->assertEqualsWithDelta(4.8, (float) PaperWallet::query()->sole()->available_balance_sol, 0.000001);
+    }
+
+    public function test_dashboard_scan_records_structured_counts_correlation_and_queued_export(): void
+    {
+        config()->set([
+            'services.trading_engine.enabled' => true,
+            'services.trading_engine.opportunity_export_enabled' => true,
+        ]);
+        Queue::fake([SubmitTradingEngineOpportunity::class]);
+        $user = User::factory()->create();
+        $activity = $this->createScanActivity($user);
+        $this->mockQualifiedListings(['stage-b-qualified']);
+        $this->expectUserCandidateAlerts(1);
+
+        $this->runDashboardScan($activity);
+
+        $activity->refresh();
+        $opportunity = TradeOpportunity::query()->sole();
+        $summary = $activity->result_summary;
+
+        $this->assertSame('completed', $activity->status);
+        $this->assertSame('succeeded', $summary['outcome']);
+        $this->assertFalse($summary['zero_result']);
+        $this->assertSame([
+            'discovered' => 1,
+            'examined' => 1,
+            'qualified' => 1,
+            'skipped' => 0,
+            'failed' => 0,
+            'opportunities_correlated' => 1,
+            'exports_queued' => 1,
+            'exports_acknowledged' => 0,
+        ], $summary['counts']);
+        $this->assertSame(1, $summary['exports']['queued']);
+        $this->assertDatabaseHas('system_activity_trade_opportunities', [
+            'system_activity_id' => $activity->getKey(),
+            'trade_opportunity_id' => $opportunity->getKey(),
+        ]);
+        Queue::assertPushed(SubmitTradingEngineOpportunity::class, 1);
+    }
+
+    public function test_dashboard_scan_distinguishes_a_successful_zero_result(): void
+    {
+        $user = User::factory()->create();
+        $activity = $this->createScanActivity($user);
+        $this->mock(BirdeyeService::class)
+            ->shouldReceive('newListings')
+            ->once()
+            ->andReturn(['data' => ['items' => []]]);
+
+        $this->runDashboardScan($activity);
+
+        $summary = $activity->fresh()->result_summary;
+
+        $this->assertSame('succeeded', $summary['outcome']);
+        $this->assertTrue($summary['zero_result']);
+        $this->assertSame(0, $summary['counts']['discovered']);
+        $this->assertSame(0, $summary['counts']['qualified']);
+        $this->assertDatabaseCount('trade_opportunities', 0);
+    }
+
+    public function test_fatal_discovery_failure_is_not_reported_as_a_zero_result(): void
+    {
+        $user = User::factory()->create();
+        $activity = $this->createScanActivity($user);
+        $this->mock(BirdeyeService::class)
+            ->shouldReceive('newListings')
+            ->once()
+            ->andThrow(new RuntimeException('provider token must remain internal'));
+
+        $this->runDashboardScan($activity);
+
+        $activity->refresh();
+        $summary = $activity->result_summary;
+        $presented = app(SystemActivityService::class)->present($activity);
+
+        $this->assertSame('failed', $activity->status);
+        $this->assertSame('failed', $summary['outcome']);
+        $this->assertFalse($summary['zero_result']);
+        $this->assertSame('COMMAND_EXIT_NONZERO', $summary['error_code']);
+        $this->assertSame([
+            ['code' => 'DISCOVERY_PROVIDER_UNAVAILABLE', 'count' => 1],
+        ], $summary['provider_failures']);
+        $this->assertStringNotContainsString('provider token', json_encode($presented, JSON_THROW_ON_ERROR));
+    }
+
+    public function test_recoverable_provider_failure_is_recorded_as_a_safe_warning(): void
+    {
+        $user = User::factory()->create();
+        $activity = $this->createScanActivity($user);
+        $birdeye = $this->mock(BirdeyeService::class);
+        $birdeye->shouldReceive('newListings')->once()->andReturn(['data' => ['items' => [[
+            'address' => 'provider-warning',
+            'symbol' => 'WARN',
+            'name' => 'Warning',
+            'liquidity' => 1_000,
+        ]]]]);
+        $birdeye->shouldReceive('tokenOverview')->with('provider-warning')->twice()->andReturn([
+            'data' => $this->token('WARN', 5_000, 50, 9, 1, 30, 10),
+        ]);
+        $this->mock(GoPlusService::class)
+            ->shouldReceive('evaluateToken')
+            ->with('provider-warning')
+            ->once()
+            ->andThrow(new ConnectionException('credential=must-not-reach-browser'));
+        $this->mock(DexScreenerService::class)
+            ->shouldReceive('analyzeToken')
+            ->with('provider-warning')
+            ->once()
+            ->andReturn($this->dexData('provider-warning'));
+        $this->expectUserCandidateAlerts(1);
+
+        $this->runDashboardScan($activity);
+
+        $activity->refresh();
+        $summary = $activity->result_summary;
+        $presented = app(SystemActivityService::class)->present($activity);
+
+        $this->assertSame('succeeded_with_warnings', $summary['outcome']);
+        $this->assertTrue($summary['zero_result']);
+        $this->assertSame([
+            ['code' => 'SECURITY_PROVIDER_UNAVAILABLE', 'count' => 1],
+        ], $summary['provider_failures']);
+        $this->assertStringNotContainsString('credential=', json_encode($presented, JSON_THROW_ON_ERROR));
     }
 
     public function test_max_qualified_stops_before_a_second_qualified_opportunity_is_created(): void
@@ -315,6 +446,30 @@ class NewTokenScanEntryTest extends TestCase
 
         $this->assertCount(1, $messages);
         $this->assertSame(1, PaperPosition::query()->count());
+    }
+
+    private function createScanActivity(User $user): SystemActivity
+    {
+        return SystemActivity::factory()->for($user)->create([
+            'action' => 'token-scan',
+            'chain' => 'solana',
+            'command' => 'tokens:scan',
+            'label' => 'Run Token Scan - Solana',
+            'status' => 'pending',
+            'started_at' => null,
+            'finished_at' => null,
+            'duration_seconds' => null,
+            'exit_code' => null,
+            'output' => null,
+        ]);
+    }
+
+    private function runDashboardScan(SystemActivity $activity): void
+    {
+        (new RunDashboardCommand($activity->getKey()))->handle(
+            app(DashboardCommandRegistry::class),
+            app(SystemActivityService::class),
+        );
     }
 
     /**

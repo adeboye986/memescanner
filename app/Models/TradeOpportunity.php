@@ -10,6 +10,7 @@ use Database\Factories\TradeOpportunityFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -80,6 +81,16 @@ class TradeOpportunity extends Model
     public function engineOpportunityLink(): HasOne
     {
         return $this->hasOne(TradingEngineOpportunityLink::class, 'trade_opportunity_id');
+    }
+
+    public function engineOpportunityExport(): HasOne
+    {
+        return $this->hasOne(TradingEngineOpportunityExport::class, 'trade_opportunity_id');
+    }
+
+    public function systemActivities(): BelongsToMany
+    {
+        return $this->belongsToMany(SystemActivity::class, 'system_activity_trade_opportunities')->withTimestamps();
     }
 
     public function engineOpportunityEvaluations(): HasMany

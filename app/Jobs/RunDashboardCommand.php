@@ -40,6 +40,9 @@ class RunDashboardCommand implements ShouldQueue
 
         try {
             $options = $activity->chain ? ['--chain' => $activity->chain->value] : [];
+            if (in_array($activity->action, ['token-scan', 'momentum-scan'], true)) {
+                $options['--activity-id'] = (string) $activity->getKey();
+            }
             if ($activity->user_id && in_array($activity->action, ['token-scan', 'momentum-scan', 'paper-report', 'paper-reconcile'], true)) {
                 $options['--user'] = $activity->user_id;
             }
@@ -60,15 +63,9 @@ class RunDashboardCommand implements ShouldQueue
             return;
         }
 
-        $message = $exception?->getMessage() ?? 'The queued command failed unexpectedly.';
-        $activity->update([
-            'status' => 'failed',
-            'finished_at' => now(),
-            'duration_seconds' => $activity->started_at
-                ? max(0, $activity->started_at->diffInSeconds(now()))
-                : 0,
-            'exit_code' => 1,
-            'error_message' => $message,
-        ]);
+        app(SystemActivityService::class)->fail(
+            $activity,
+            $exception ?? new \RuntimeException('The queued command failed unexpectedly.'),
+        );
     }
 }

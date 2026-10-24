@@ -12,10 +12,12 @@ use App\Services\DexScreenerService;
 use App\Services\EthereumScannerService;
 use App\Services\GoPlusService;
 use App\Services\PaperWalletService;
+use App\Services\ScanExecutionRecorder;
 use App\Services\SolanaService;
 use App\Services\TelegramService;
 use App\Services\TradeOpportunityService;
 use App\Services\UserTelegramNotificationService;
+use DomainException;
 use Illuminate\Console\Command;
 use InvalidArgumentException;
 
@@ -24,6 +26,7 @@ class ScanMomentumTokens extends Command
     protected $signature = 'tokens:momentum
                         {--chain=solana : Blockchain to scan (solana or ethereum)}
                         {--user= : Limit opportunity distribution to one user ID}
+                        {--activity-id= : Internal dashboard scan activity identifier}
                         {--dry-run : Run DexScreener discovery/ranking without Birdeye, GoPlus, database writes, or Telegram}';
 
     protected $description = 'Scan supported-chain tokens showing early momentum';
@@ -39,11 +42,13 @@ class ScanMomentumTokens extends Command
         EthereumScannerService $ethereumScanner,
         ApplicationSettingsService $settings,
         UserTelegramNotificationService $userTelegram,
+        ScanExecutionRecorder $scanExecutions,
     ): int {
         try {
             $chain = Chain::fromInput($this->option('chain'));
             $requestingUser = $this->option('user') ? User::query()->findOrFail($this->option('user')) : null;
-        } catch (InvalidArgumentException $exception) {
+            $activityId = $scanExecutions->begin($this->option('activity-id'), 'momentum-scan', 'momentum', $chain, $requestingUser);
+        } catch (InvalidArgumentException|DomainException $exception) {
             $this->error($exception->getMessage());
 
             return self::FAILURE;
@@ -51,7 +56,7 @@ class ScanMomentumTokens extends Command
 
         if ($chain === Chain::Ethereum) {
             $this->warn('Ethereum security status: Solana-specific Birdeye, GoPlus, holder, developer-sale, and Pump.fun checks are unavailable and are not reported as passed.');
-            $result = $ethereumScanner->scan('momentum', $requestingUser);
+            $result = $ethereumScanner->scan('momentum', $requestingUser, $activityId);
             $this->info(sprintf('Ethereum momentum scan finished: %d profiles, %d qualified, %d paper buys.', $result['profiles'], $result['qualified'], $result['positions']));
 
             return self::SUCCESS;
@@ -62,12 +67,15 @@ class ScanMomentumTokens extends Command
         try {
             $profiles = $dexscreener->latestSolanaProfiles(30);
         } catch (\Throwable $e) {
+            $scanExecutions->providerFailed($activityId, 'DISCOVERY_PROVIDER_UNAVAILABLE');
             $this->error(
                 'Dex discovery failed: '.$e->getMessage()
             );
 
             return self::FAILURE;
         }
+
+        $scanExecutions->discovered($activityId, count($profiles));
 
         if (empty($profiles)) {
             $this->warn('No Solana DexScreener profiles returned.');
@@ -106,6 +114,7 @@ class ScanMomentumTokens extends Command
         $dexCandidates = [];
 
         foreach ($profiles as $profile) {
+            $scanExecutions->examined($activityId);
             $address = $profile['tokenAddress'] ?? null;
 
             if (! $address) {
@@ -119,6 +128,8 @@ class ScanMomentumTokens extends Command
             try {
                 $discoveryDex = $dexscreener->analyzeToken($address);
             } catch (\Throwable $e) {
+                $scanExecutions->providerFailed($activityId, 'MARKET_PROVIDER_UNAVAILABLE');
+                $scanExecutions->candidateFailed($activityId, 'CANDIDATE_PROCESSING_FAILED');
                 $this->line(
                     'DEX DISCOVERY SKIP: '.
                     $address.
@@ -374,6 +385,7 @@ class ScanMomentumTokens extends Command
                     $candidate;
 
             } catch (\Throwable $e) {
+                $scanExecutions->providerFailed($activityId, 'HOLDER_PROVIDER_UNAVAILABLE');
                 $this->warn(
                     sprintf(
                         'HOLDER UNAVAILABLE: %s | %s',
@@ -738,7 +750,8 @@ class ScanMomentumTokens extends Command
                                     'source' => 'momentum_fast_paper',
                                 ],
                                 'scanner' => 'momentum',
-                            ], $requestingUser);
+                            ], $requestingUser, $activityId);
+                            $scanExecutions->qualified($activityId);
 
                             $paperPosition = $execution['position'];
                             $paperBuyExecuted =
@@ -770,6 +783,7 @@ class ScanMomentumTokens extends Command
                                 };
                             }
                         } catch (\Throwable $e) {
+                            $scanExecutions->candidateFailed($activityId, 'OPPORTUNITY_HANDLING_FAILED');
                             $paperStatus = 'buy_failed';
                             $paperReason = $e->getMessage();
                             $paperBuyExecuted = false;
@@ -951,6 +965,7 @@ class ScanMomentumTokens extends Command
                 }
 
             } catch (\Throwable $e) {
+                $scanExecutions->providerFailed($activityId, 'METADATA_PROVIDER_UNAVAILABLE');
                 $this->warn(
                     "Overview unavailable: {$symbol} | ".
                     $e->getMessage()
@@ -1096,6 +1111,7 @@ class ScanMomentumTokens extends Command
                 $security = $goplus->evaluateToken($address);
 
             } catch (\Throwable $e) {
+                $scanExecutions->providerFailed($activityId, 'SECURITY_PROVIDER_UNAVAILABLE');
                 $securityUnavailable = true;
 
                 $security = [
@@ -1250,6 +1266,7 @@ class ScanMomentumTokens extends Command
                     $pairAge !== null ? number_format($pairAge, 0) : 'N/A'
                 ));
             } catch (\Throwable $e) {
+                $scanExecutions->providerFailed($activityId, 'MARKET_PROVIDER_UNAVAILABLE');
                 $this->warn("DEX UNAVAILABLE: {$symbol} | ".$e->getMessage());
 
                 continue;
@@ -1288,6 +1305,7 @@ class ScanMomentumTokens extends Command
                     continue;
                 }
             } catch (\Throwable $e) {
+                $scanExecutions->providerFailed($activityId, 'MARKET_PROVIDER_UNAVAILABLE');
                 $this->warn("DEX CONFIRMATION FAILED: {$symbol} | ".$e->getMessage());
 
                 continue;
@@ -1425,6 +1443,7 @@ class ScanMomentumTokens extends Command
                 }
 
             } catch (\Throwable $e) {
+                $scanExecutions->providerFailed($activityId, 'MARKET_PROVIDER_UNAVAILABLE');
                 $this->warn(
                     "DEX PAID UNAVAILABLE: {$symbol} | ".
                     $e->getMessage()
@@ -1488,6 +1507,7 @@ class ScanMomentumTokens extends Command
                 );
 
             } catch (\Throwable $e) {
+                $scanExecutions->providerFailed($activityId, 'CHAIN_PROVIDER_UNAVAILABLE');
                 $this->warn(
                     "PUMP ACTIVITY UNAVAILABLE: {$symbol} | ".
                     $e->getMessage()
@@ -1561,6 +1581,7 @@ class ScanMomentumTokens extends Command
                     );
                 }
             } catch (\Throwable $e) {
+                $scanExecutions->providerFailed($activityId, 'CHAIN_PROVIDER_UNAVAILABLE');
                 $this->warn(
                     "DEV UNAVAILABLE: {$symbol} | ".
                     $e->getMessage()

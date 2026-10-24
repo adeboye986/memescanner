@@ -16,6 +16,7 @@ class SystemActivityService
     public function __construct(
         private DashboardCommandRegistry $commands,
         private PaperTrackerHealthService $trackerHealth,
+        private ScanExecutionRecorder $scanExecutions,
     ) {}
 
     public function createManual(string $action, ?Chain $chain = null, ?User $user = null): SystemActivity
@@ -71,6 +72,8 @@ class SystemActivityService
             'exit_code' => null,
             'output' => null,
             'error_message' => null,
+            'result_summary' => null,
+            'last_progress_at' => null,
         ]);
     }
 
@@ -87,6 +90,11 @@ class SystemActivityService
             'output' => $output,
             'error_message' => $exitCode === 0 ? null : "Command exited with code {$exitCode}.",
         ]);
+        $this->scanExecutions->complete(
+            $activity->getKey(),
+            $exitCode,
+            $exitCode === 0 ? null : 'COMMAND_EXIT_NONZERO',
+        );
     }
 
     public function fail(SystemActivity $activity, Throwable $exception, string $output = ''): void
@@ -102,6 +110,7 @@ class SystemActivityService
             'output' => $output,
             'error_message' => $exception->getMessage(),
         ]);
+        $this->scanExecutions->complete($activity->getKey(), 1, 'COMMAND_EXCEPTION');
     }
 
     /**
@@ -224,6 +233,8 @@ class SystemActivityService
                 : null,
             'exit_code' => $activity->exit_code,
             'relative_time' => $this->activityTime($activity)?->diffForHumans() ?? 'Unknown',
+            'last_progress_at' => $activity->last_progress_at?->toIso8601String(),
+            'result_summary' => $this->safeResultSummary($activity),
             'summary' => $this->safeSummary($activity),
         ];
     }
@@ -231,6 +242,34 @@ class SystemActivityService
     private function safeSummary(SystemActivity $activity): string
     {
         $isScanner = in_array($activity->action, ['token-scan', 'momentum-scan'], true);
+        $result = $this->safeResultSummary($activity);
+
+        if ($isScanner && $result !== null && in_array($activity->status, ['completed', 'failed'], true)) {
+            $counts = $result['counts'];
+            $errorCode = $result['error_code'];
+
+            if ($activity->status === 'failed') {
+                return 'The Laravel scanner command failed with safe code '.($errorCode ?? 'COMMAND_FAILED').'. Internal diagnostics were retained for operators.';
+            }
+
+            if ($result['zero_result'] === true) {
+                return sprintf(
+                    'The Laravel scanner completed successfully with zero qualified opportunities after examining %d of %d discovered candidates.',
+                    $counts['examined'],
+                    $counts['discovered'],
+                );
+            }
+
+            return sprintf(
+                'The Laravel scanner completed: %d discovered, %d examined, %d qualified, %d skipped, %d failed; %d engine exports acknowledged.',
+                $counts['discovered'],
+                $counts['examined'],
+                $counts['qualified'],
+                $counts['skipped'],
+                $counts['failed'],
+                $counts['exports_acknowledged'],
+            );
+        }
 
         return match ($activity->status) {
             'pending' => 'Accepted by Laravel and waiting for the Laravel queue worker.',
@@ -238,13 +277,70 @@ class SystemActivityService
                 ? 'The Laravel scanner command is running. Downstream engine processing is tracked separately.'
                 : 'The Laravel command is running.',
             'completed' => $isScanner
-                ? 'The Laravel scanner command completed successfully. Per-run discovery and qualification totals are not durably correlated in Stage A.'
+                ? 'The Laravel scanner command completed successfully. No structured per-run evidence is available for this historical scan.'
                 : 'The Laravel command completed successfully.',
             'failed' => $isScanner
                 ? 'The Laravel scanner command failed. Internal diagnostics were retained for operators.'
                 : 'The Laravel command failed. Internal diagnostics were retained for operators.',
             default => 'The command state is not recognized; no result has been inferred.',
         };
+    }
+
+    /** @return array<string, mixed>|null */
+    private function safeResultSummary(SystemActivity $activity): ?array
+    {
+        $summary = $activity->result_summary;
+
+        if (! is_array($summary)
+            || ($summary['version'] ?? null) !== 1
+            || ($summary['kind'] ?? null) !== 'scanner_execution') {
+            return null;
+        }
+
+        $counts = [];
+        foreach (['discovered', 'examined', 'qualified', 'skipped', 'failed', 'opportunities_correlated', 'exports_queued', 'exports_acknowledged'] as $field) {
+            $counts[$field] = max(0, (int) data_get($summary, 'counts.'.$field, 0));
+        }
+
+        $exports = [];
+        foreach (['queued', 'submitting', 'retrying', 'acknowledged', 'skipped', 'permanently_failed'] as $status) {
+            $exports[$status] = max(0, (int) data_get($summary, 'exports.'.$status, 0));
+        }
+
+        $safeCodes = fn (mixed $items): array => collect(is_array($items) ? $items : [])
+            ->filter(fn (mixed $item): bool => is_array($item)
+                && is_string($item['code'] ?? null)
+                && preg_match('/^[A-Z][A-Z0-9_]{0,127}$/D', $item['code']) === 1)
+            ->map(fn (array $item): array => [
+                'code' => $item['code'],
+                'count' => max(1, (int) ($item['count'] ?? 1)),
+            ])
+            ->values()
+            ->all();
+
+        $errorCode = $summary['error_code'] ?? null;
+
+        return [
+            'version' => 1,
+            'kind' => 'scanner_execution',
+            'scanner' => in_array($summary['scanner'] ?? null, ['new-token', 'momentum'], true)
+                ? $summary['scanner']
+                : 'unknown',
+            'chain' => in_array($summary['chain'] ?? null, ['solana', 'ethereum'], true)
+                ? $summary['chain']
+                : 'unknown',
+            'outcome' => in_array($summary['outcome'] ?? null, ['running', 'succeeded', 'succeeded_with_warnings', 'failed'], true)
+                ? $summary['outcome']
+                : 'unknown',
+            'zero_result' => is_bool($summary['zero_result'] ?? null) ? $summary['zero_result'] : null,
+            'counts' => $counts,
+            'provider_failures' => $safeCodes($summary['provider_failures'] ?? []),
+            'failure_codes' => $safeCodes($summary['failure_codes'] ?? []),
+            'exports' => $exports,
+            'error_code' => is_string($errorCode) && preg_match('/^[A-Z][A-Z0-9_]{0,127}$/D', $errorCode) === 1
+                ? $errorCode
+                : null,
+        ];
     }
 
     private function activityTime(?SystemActivity $activity): ?Carbon

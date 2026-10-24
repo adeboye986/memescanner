@@ -13,24 +13,42 @@ class EthereumScannerService
         private ChainManager $chains,
         private TradeOpportunityService $opportunities,
         private EthereumQualificationEvaluator $qualification,
+        private ScanExecutionRecorder $scanExecutions,
     ) {}
 
     /** @return array{profiles: int, qualified: int, positions: int, unavailable_checks: list<string>} */
-    public function scan(string $scanner, ?User $requestingUser = null): array
+    public function scan(string $scanner, ?User $requestingUser = null, ?int $systemActivityId = null): array
     {
         $adapter = $this->chains->for(Chain::Ethereum);
-        $profiles = $adapter->latestProfiles(30);
+
+        try {
+            $profiles = $adapter->latestProfiles(30);
+        } catch (\Throwable $exception) {
+            $this->scanExecutions->providerFailed($systemActivityId, 'DISCOVERY_PROVIDER_UNAVAILABLE');
+
+            throw $exception;
+        }
+
+        $this->scanExecutions->discovered($systemActivityId, count($profiles));
         $qualified = 0;
         $positions = 0;
 
         foreach ($profiles as $profile) {
+            $this->scanExecutions->examined($systemActivityId);
             $address = strtolower((string) ($profile['tokenAddress'] ?? ''));
 
             if ($address === '') {
                 continue;
             }
 
-            $market = $adapter->marketData($address);
+            try {
+                $market = $adapter->marketData($address);
+            } catch (\Throwable $exception) {
+                $this->scanExecutions->providerFailed($systemActivityId, 'MARKET_PROVIDER_UNAVAILABLE');
+                $this->scanExecutions->candidateFailed($systemActivityId, 'CANDIDATE_PROCESSING_FAILED');
+
+                throw $exception;
+            }
 
             if (! ($market['available'] ?? false) || ! ($market['requested_token_is_base'] ?? false)) {
                 continue;
@@ -102,7 +120,8 @@ class EthereumScannerService
                     'security_status' => 'unavailable',
                     'unavailable_security_checks' => $adapter->unavailableSecurityChecks(),
                 ],
-            ], $requestingUser);
+            ], $requestingUser, $systemActivityId);
+            $this->scanExecutions->qualified($systemActivityId);
 
             if ($execution['position']?->wasRecentlyCreated) {
                 $positions++;

@@ -7,6 +7,7 @@ use Database\Factories\SystemActivityFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class SystemActivity extends Model
 {
@@ -26,6 +27,8 @@ class SystemActivity extends Model
         'exit_code',
         'output',
         'error_message',
+        'result_summary',
+        'last_progress_at',
         'triggered_by',
     ];
 
@@ -37,11 +40,18 @@ class SystemActivity extends Model
             'finished_at' => 'datetime',
             'duration_seconds' => 'integer',
             'exit_code' => 'integer',
+            'result_summary' => 'array',
+            'last_progress_at' => 'datetime',
         ];
     }
 
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function tradeOpportunities(): BelongsToMany
+    {
+        return $this->belongsToMany(TradeOpportunity::class, 'system_activity_trade_opportunities')->withTimestamps();
     }
 }
