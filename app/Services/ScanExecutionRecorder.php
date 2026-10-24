@@ -18,6 +18,10 @@ class ScanExecutionRecorder
         'discovered',
         'examined',
         'qualified',
+        'qualified_candidates',
+        'opportunities_created',
+        'opportunities_existing',
+        'downstream_failed',
         'skipped',
         'failed',
         'opportunities_correlated',
@@ -30,6 +34,7 @@ class ScanExecutionRecorder
         TradingEngineOpportunityExport::STATUS_QUEUED,
         TradingEngineOpportunityExport::STATUS_SUBMITTING,
         TradingEngineOpportunityExport::STATUS_RETRYING,
+        TradingEngineOpportunityExport::STATUS_ACCEPTANCE_UNKNOWN,
         TradingEngineOpportunityExport::STATUS_ACKNOWLEDGED,
         TradingEngineOpportunityExport::STATUS_SKIPPED,
         TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED,
@@ -74,6 +79,7 @@ class ScanExecutionRecorder
                     'counts' => array_fill_keys(self::COUNT_FIELDS, 0),
                     'provider_failures' => [],
                     'failure_codes' => [],
+                    'downstream_failure_codes' => [],
                     'exports' => array_fill_keys(self::EXPORT_STATUSES, 0),
                     'error_code' => null,
                 ],
@@ -94,9 +100,20 @@ class ScanExecutionRecorder
         $this->increment($activityId, 'examined');
     }
 
+    public function qualifiedCandidate(?int $activityId): void
+    {
+        $this->mutate($activityId, function (array $summary): array {
+            $qualified = ((int) data_get($summary, 'counts.qualified_candidates', 0)) + 1;
+            $summary['counts']['qualified_candidates'] = $qualified;
+            $summary['counts']['qualified'] = $qualified;
+
+            return $summary;
+        });
+    }
+
     public function qualified(?int $activityId): void
     {
-        $this->increment($activityId, 'qualified');
+        $this->qualifiedCandidate($activityId);
     }
 
     public function candidateFailed(?int $activityId, string $errorCode): void
@@ -104,6 +121,19 @@ class ScanExecutionRecorder
         $this->mutate($activityId, function (array $summary) use ($errorCode): array {
             $summary['counts']['failed'] = ((int) data_get($summary, 'counts.failed', 0)) + 1;
             $summary['failure_codes'] = $this->incrementCode((array) ($summary['failure_codes'] ?? []), $errorCode);
+
+            return $summary;
+        });
+    }
+
+    public function downstreamFailed(?int $activityId, string $errorCode): void
+    {
+        $this->mutate($activityId, function (array $summary) use ($errorCode): array {
+            $summary['counts']['downstream_failed'] = ((int) data_get($summary, 'counts.downstream_failed', 0)) + 1;
+            $summary['downstream_failure_codes'] = $this->incrementCode(
+                (array) ($summary['downstream_failure_codes'] ?? []),
+                $errorCode,
+            );
 
             return $summary;
         });
@@ -126,14 +156,28 @@ class ScanExecutionRecorder
 
         DB::transaction(function () use ($activityId, $opportunity): void {
             $activity = SystemActivity::query()->lockForUpdate()->find($activityId);
+            $summary = $activity?->result_summary;
 
-            if (! $activity || ! $this->matchesOpportunity($activity, $opportunity)) {
-                throw new DomainException('The opportunity does not match the scan activity boundary.');
+            if (! $activity
+                || ! is_array($summary)
+                || ! $this->isActiveScanSummary($activity, $summary, $opportunity)
+                || ! $this->matchesOpportunity($activity, $opportunity)) {
+                throw new DomainException('The opportunity does not match an active scan activity boundary.');
             }
 
-            $activity->tradeOpportunities()->syncWithoutDetaching([$opportunity->getKey()]);
-            $this->refreshDownstream($activity);
-        });
+            $changes = $activity->tradeOpportunities()->syncWithoutDetaching([$opportunity->getKey()]);
+
+            if (($changes['attached'] ?? []) !== []) {
+                $field = $opportunity->wasRecentlyCreated ? 'opportunities_created' : 'opportunities_existing';
+                $summary['counts'][$field] = ((int) data_get($summary, 'counts.'.$field, 0)) + 1;
+            }
+
+            $this->refreshDownstream($activity, $summary);
+            $activity->forceFill([
+                'result_summary' => $summary,
+                'last_progress_at' => now(),
+            ])->save();
+        }, 3);
     }
 
     public function complete(SystemActivity|int $activity, int $exitCode, ?string $errorCode = null): void
@@ -143,16 +187,18 @@ class ScanExecutionRecorder
         $this->mutate($activityId, function (array $summary, SystemActivity $locked) use ($exitCode, $errorCode): array {
             $this->refreshDownstream($locked, $summary);
             $examined = (int) data_get($summary, 'counts.examined', 0);
-            $qualified = (int) data_get($summary, 'counts.qualified', 0);
+            $qualified = (int) data_get($summary, 'counts.qualified_candidates', data_get($summary, 'counts.qualified', 0));
+            $summary['counts']['qualified'] = $qualified;
             $failed = (int) data_get($summary, 'counts.failed', 0);
             $summary['counts']['skipped'] = max(0, $examined - $qualified - $failed);
             $providerFailures = array_sum(array_column((array) ($summary['provider_failures'] ?? []), 'count'));
+            $downstreamFailures = (int) data_get($summary, 'counts.downstream_failed', 0);
 
             if ($exitCode !== 0) {
                 $summary['outcome'] = 'failed';
                 $summary['error_code'] = $this->safeCode($errorCode ?? 'COMMAND_FAILED');
             } else {
-                $summary['outcome'] = $providerFailures > 0 ? 'succeeded_with_warnings' : 'succeeded';
+                $summary['outcome'] = $providerFailures > 0 || $downstreamFailures > 0 ? 'succeeded_with_warnings' : 'succeeded';
                 $summary['error_code'] = null;
             }
 
@@ -205,7 +251,8 @@ class ScanExecutionRecorder
             $activity = SystemActivity::query()->lockForUpdate()->find($activityId);
             $summary = $activity?->result_summary;
 
-            if (! $activity || ! is_array($summary) || ($summary['version'] ?? null) !== 1) {
+            if (! $activity || ! is_array($summary) || ($summary['version'] ?? null) !== 1
+                || ($summary['kind'] ?? null) !== 'scanner_execution') {
                 return;
             }
 
@@ -233,13 +280,26 @@ class ScanExecutionRecorder
         }
 
         $summary['counts']['opportunities_correlated'] = $opportunityIds->count();
-        $summary['counts']['exports_queued'] = $exports
-            ->whereNotIn('status', [TradingEngineOpportunityExport::STATUS_SKIPPED])
-            ->count();
+        $summary['counts']['exports_queued'] = $exports->whereNotNull('queued_at')->count();
         $summary['counts']['exports_acknowledged'] = $exportCounts[TradingEngineOpportunityExport::STATUS_ACKNOWLEDGED];
         $summary['exports'] = $exportCounts;
 
         $activity->result_summary = $summary;
+    }
+
+    /** @param array<string, mixed> $summary */
+    private function isActiveScanSummary(
+        SystemActivity $activity,
+        array $summary,
+        TradeOpportunity $opportunity,
+    ): bool {
+        return $activity->status === 'running'
+            && $activity->finished_at === null
+            && ($summary['version'] ?? null) === 1
+            && ($summary['kind'] ?? null) === 'scanner_execution'
+            && ($summary['outcome'] ?? null) === 'running'
+            && ($summary['scanner'] ?? null) === $opportunity->scanner
+            && ($summary['chain'] ?? null) === $opportunity->chain->value;
     }
 
     private function matchesOpportunity(SystemActivity $activity, TradeOpportunity $opportunity): bool
@@ -250,13 +310,10 @@ class ScanExecutionRecorder
             default => null,
         };
 
-        if ($expectedAction === null
-            || $activity->action !== $expectedAction
-            || $activity->chain !== $opportunity->chain) {
-            return false;
-        }
-
-        return $activity->user_id === null || $activity->user_id === $opportunity->user_id;
+        return $expectedAction !== null
+            && $activity->action === $expectedAction
+            && $activity->chain === $opportunity->chain
+            && $activity->user_id === $opportunity->user_id;
     }
 
     /**

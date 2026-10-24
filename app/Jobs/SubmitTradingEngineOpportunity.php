@@ -18,7 +18,9 @@ class SubmitTradingEngineOpportunity implements ShouldQueue
 
     public int $timeout = 30;
 
-    public bool $failOnTimeout = true;
+    public bool $failOnTimeout = false;
+
+    private ?int $claimedAttempt = null;
 
     /** @param array<string, mixed> $payload */
     public function __construct(
@@ -50,26 +52,30 @@ class SubmitTradingEngineOpportunity implements ShouldQueue
             return;
         }
 
-        if (! $exports->beginAttempt($export)) {
+        $attempt = $exports->beginAttempt($export);
+
+        if ($attempt === null) {
             return;
         }
 
+        $this->claimedAttempt = $attempt;
+
         try {
             $response = $client->recordOpportunity($this->idempotencyKey, $this->payload);
-            $exports->acknowledged($export, $response);
+            $exports->acknowledged($export, $response, $attempt);
         } catch (TradingEngineException $exception) {
             if (! $exception->retryable) {
-                $exports->permanentlyFailed($export, $exception->errorCode);
+                $exports->rejected($export, $exception->errorCode, $attempt);
                 $this->fail($exception);
 
                 return;
             }
 
-            $exports->retrying($export, $exception->errorCode);
+            $exports->retrying($export, $exception->errorCode, $attempt);
 
             throw $exception;
         } catch (Throwable $exception) {
-            $exports->retrying($export, 'UNEXPECTED_FAILURE');
+            $exports->retrying($export, 'UNEXPECTED_FAILURE', $attempt);
 
             throw $exception;
         }
@@ -89,6 +95,10 @@ class SubmitTradingEngineOpportunity implements ShouldQueue
             ? $exception->errorCode
             : 'JOB_FAILED';
 
-        app(TradingEngineOpportunityExportTracker::class)->permanentlyFailed($export, $errorCode);
+        app(TradingEngineOpportunityExportTracker::class)->acceptanceUnknown(
+            $export,
+            $errorCode,
+            $this->claimedAttempt,
+        );
     }
 }

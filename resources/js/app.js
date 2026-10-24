@@ -214,8 +214,11 @@ const appendScanResultSummary = (container, activity) => {
         ['discovered', 'Discovered'],
         ['examined', 'Examined'],
         ['qualified', 'Qualified'],
+        ['opportunities_created', 'Created'],
+        ['opportunities_existing', 'Existing'],
+        ['downstream_failed', 'Downstream failures'],
         ['skipped', 'Skipped'],
-        ['failed', 'Failed'],
+        ['failed', 'Candidate failures'],
         ['exports_acknowledged', 'Exported'],
     ].forEach(([field, label]) => {
         const item = document.createElement('div');
@@ -242,6 +245,13 @@ const appendScanResultSummary = (container, activity) => {
         const warnings = document.createElement('p');
         warnings.className = 'mt-1 text-[11px] leading-5 text-amber-300/80';
         warnings.textContent = `Provider warnings: ${result.provider_failures.map((failure) => `${failure.code} x${failure.count}`).join(', ')}`;
+        wrapper.append(warnings);
+    }
+
+    if (Array.isArray(result.downstream_failure_codes) && result.downstream_failure_codes.length > 0) {
+        const warnings = document.createElement('p');
+        warnings.className = 'mt-1 text-[11px] leading-5 text-amber-300/80';
+        warnings.textContent = `Downstream warnings: ${result.downstream_failure_codes.map((failure) => `${failure.code} x${failure.count}`).join(', ')}`;
         wrapper.append(warnings);
     }
 

@@ -64,6 +64,7 @@ class EthereumScannerService
             }
 
             $qualified++;
+            $this->scanExecutions->qualifiedCandidate($systemActivityId);
             $raw = $market['raw'] ?? [];
             $symbol = $market['base_token_symbol'] ?? data_get($raw, 'baseToken.symbol');
             $name = data_get($raw, 'baseToken.name');
@@ -92,36 +93,41 @@ class EthereumScannerService
                 continue;
             }
 
-            $execution = $this->opportunities->qualify([
-                'chain' => Chain::Ethereum->value,
-                'address' => $address,
-                'symbol' => $symbol,
-                'name' => $name,
-                'discovery_market_cap' => $marketCap,
-                'entry_market_cap' => $marketCap,
-                'entry_price' => $market['price_usd'] ?? null,
-                'entry_liquidity' => $liquidity,
-                'volume' => $volume,
-                'move_since_discovery_percent' => 0,
-                'scanner' => $scanner,
-                'send_notification' => true,
-                'security_data' => [
-                    'status' => 'unavailable',
-                    'coverage' => 'No Ethereum token-security provider is configured.',
-                    'market_validation' => [
-                        'provider' => 'DexScreener',
-                        'requested_token_is_base' => true,
-                        'pair_available' => true,
+            try {
+                $execution = $this->opportunities->qualify([
+                    'chain' => Chain::Ethereum->value,
+                    'address' => $address,
+                    'symbol' => $symbol,
+                    'name' => $name,
+                    'discovery_market_cap' => $marketCap,
+                    'entry_market_cap' => $marketCap,
+                    'entry_price' => $market['price_usd'] ?? null,
+                    'entry_liquidity' => $liquidity,
+                    'volume' => $volume,
+                    'move_since_discovery_percent' => 0,
+                    'scanner' => $scanner,
+                    'send_notification' => true,
+                    'security_data' => [
+                        'status' => 'unavailable',
+                        'coverage' => 'No Ethereum token-security provider is configured.',
+                        'market_validation' => [
+                            'provider' => 'DexScreener',
+                            'requested_token_is_base' => true,
+                            'pair_available' => true,
+                        ],
                     ],
-                ],
-                'meta' => [
-                    'pair_address' => $market['pair_address'] ?? null,
-                    'dex' => $market['dex'] ?? null,
-                    'security_status' => 'unavailable',
-                    'unavailable_security_checks' => $adapter->unavailableSecurityChecks(),
-                ],
-            ], $requestingUser, $systemActivityId);
-            $this->scanExecutions->qualified($systemActivityId);
+                    'meta' => [
+                        'pair_address' => $market['pair_address'] ?? null,
+                        'dex' => $market['dex'] ?? null,
+                        'security_status' => 'unavailable',
+                        'unavailable_security_checks' => $adapter->unavailableSecurityChecks(),
+                    ],
+                ], $requestingUser, $systemActivityId);
+            } catch (\Throwable $exception) {
+                $this->scanExecutions->downstreamFailed($systemActivityId, 'OPPORTUNITY_HANDLING_FAILED');
+
+                throw $exception;
+            }
 
             if ($execution['position']?->wasRecentlyCreated) {
                 $positions++;

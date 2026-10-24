@@ -706,6 +706,7 @@ class ScanMomentumTokens extends Command
                     ];
 
                     if ($paperStatus === 'simulated_buy') {
+                        $scanExecutions->qualifiedCandidate($activityId);
                         try {
                             $execution = $opportunities->qualify([
                                 'chain' => $chain->value,
@@ -751,7 +752,6 @@ class ScanMomentumTokens extends Command
                                 ],
                                 'scanner' => 'momentum',
                             ], $requestingUser, $activityId);
-                            $scanExecutions->qualified($activityId);
 
                             $paperPosition = $execution['position'];
                             $paperBuyExecuted =
@@ -783,7 +783,7 @@ class ScanMomentumTokens extends Command
                                 };
                             }
                         } catch (\Throwable $e) {
-                            $scanExecutions->candidateFailed($activityId, 'OPPORTUNITY_HANDLING_FAILED');
+                            $scanExecutions->downstreamFailed($activityId, 'OPPORTUNITY_HANDLING_FAILED');
                             $paperStatus = 'buy_failed';
                             $paperReason = $e->getMessage();
                             $paperBuyExecuted = false;

@@ -13,6 +13,8 @@ class TradingEngineOpportunityExport extends Model
 
     public const STATUS_RETRYING = 'retrying';
 
+    public const STATUS_ACCEPTANCE_UNKNOWN = 'acceptance_unknown';
+
     public const STATUS_ACKNOWLEDGED = 'acknowledged';
 
     public const STATUS_SKIPPED = 'skipped';

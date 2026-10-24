@@ -12,8 +12,13 @@ use App\Services\TradeOpportunityService;
 use App\Services\TradingEngine\TradingEngineClient;
 use App\Services\TradingEngine\TradingEngineOpportunityCommandFactory;
 use App\Services\TradingEngine\TradingEngineOpportunityExportTracker;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Queue\QueueManager;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schema;
 use Mockery;
+use RuntimeException;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
 
@@ -21,9 +26,12 @@ class StageBOpportunityExportStateTest extends TestCase
 {
     use RefreshesPaperTradingDatabase;
 
+    private QueueManager $realQueue;
+
     protected function setUp(): void
     {
         parent::setUp();
+        $this->realQueue = app('queue');
         $this->refreshPaperTradingDatabase();
         app(ApplicationSettingsService::class)->update(['trading.entry_mode' => 'signal']);
         config()->set([
@@ -61,7 +69,11 @@ class StageBOpportunityExportStateTest extends TestCase
         $acknowledgingClient->shouldReceive('recordOpportunity')
             ->once()
             ->with($command['idempotency_key'], $command['payload'])
-            ->andReturn($this->acknowledgement());
+            ->andReturnUsing(function (): array {
+                $this->assertSame(0, DB::transactionLevel());
+
+                return $this->acknowledgement();
+            });
 
         $job->handle($acknowledgingClient, $tracker);
 
@@ -135,6 +147,120 @@ class StageBOpportunityExportStateTest extends TestCase
         $this->assertSame('EXPORT_DISABLED', $export->last_error_code);
         $this->assertNull($export->queued_at);
         $this->assertNotNull($export->skipped_at);
+    }
+
+    public function test_exhausted_transport_timeout_is_durably_ambiguous(): void
+    {
+        [$opportunity, $command] = $this->queuedOpportunity();
+        $job = new SubmitTradingEngineOpportunity($command['payload'], $command['idempotency_key']);
+        $timeout = new TradingEngineException('TRANSPORT_TIMEOUT', 'The response may have been lost.', true);
+        $client = Mockery::mock(TradingEngineClient::class);
+        $client->shouldReceive('recordOpportunity')->once()->andThrow($timeout);
+
+        try {
+            $job->handle($client, app(TradingEngineOpportunityExportTracker::class));
+            $this->fail('Expected the timeout to be retried.');
+        } catch (TradingEngineException) {
+        }
+
+        $job->failed($timeout);
+        $export = $opportunity->engineOpportunityExport()->sole();
+
+        $this->assertSame(TradingEngineOpportunityExport::STATUS_ACCEPTANCE_UNKNOWN, $export->status);
+        $this->assertSame('TRANSPORT_TIMEOUT', $export->last_error_code);
+        $this->assertNull($export->permanently_failed_at);
+    }
+
+    public function test_attempt_fencing_blocks_duplicates_and_stale_callbacks_after_recovery(): void
+    {
+        [$opportunity] = $this->queuedOpportunity();
+        $tracker = app(TradingEngineOpportunityExportTracker::class);
+        $export = $opportunity->engineOpportunityExport()->sole();
+
+        $firstAttempt = $tracker->beginAttempt($export);
+        $this->assertSame(1, $firstAttempt);
+        $this->assertNull($tracker->beginAttempt($export));
+
+        $this->travel(121)->seconds();
+        $secondAttempt = $tracker->beginAttempt($export);
+        $this->assertSame(2, $secondAttempt);
+
+        $tracker->acknowledged($export, $this->acknowledgement(), $secondAttempt);
+        $tracker->retrying($export, 'TRANSPORT_TIMEOUT', $firstAttempt);
+        $tracker->acceptanceUnknown($export, 'JOB_FAILED', $firstAttempt);
+
+        $export->refresh();
+        $this->assertSame(TradingEngineOpportunityExport::STATUS_ACKNOWLEDGED, $export->status);
+        $this->assertSame(2, $export->attempt_count);
+        $this->assertNull($export->last_error_code);
+        $this->assertSame('IMMEDIATE', strtoupper((string) config('database.connections.sqlite.transaction_mode')));
+        $this->assertGreaterThan(120, (int) config('queue.connections.database.retry_after'));
+        $this->assertNull(config('queue.connections.database.connection'));
+    }
+
+    public function test_export_tracking_and_database_queue_persistence_roll_back_together(): void
+    {
+        Schema::create('jobs', function (Blueprint $table): void {
+            $table->id();
+            $table->string('queue')->index();
+            $table->longText('payload');
+            $table->unsignedTinyInteger('attempts');
+            $table->unsignedInteger('reserved_at')->nullable();
+            $table->unsignedInteger('available_at');
+            $table->unsignedInteger('created_at');
+        });
+
+        [$opportunity, $command] = $this->queuedOpportunity();
+        $opportunity->engineOpportunityExport()->delete();
+        $this->assertDatabaseCount('jobs', 0);
+
+        try {
+            app(TradingEngineOpportunityExportTracker::class)->queueAndDispatch(
+                $opportunity,
+                $command['idempotency_key'],
+                function () use ($command): void {
+                    $this->realQueue->connection('database')->push(
+                        new SubmitTradingEngineOpportunity($command['payload'], $command['idempotency_key']),
+                    );
+
+                    throw new RuntimeException('Simulated process interruption before transaction commit.');
+                },
+            );
+            $this->fail('Expected the simulated interruption.');
+        } catch (RuntimeException) {
+        }
+
+        $this->assertDatabaseCount('trading_engine_opportunity_exports', 0);
+        $this->assertDatabaseCount('jobs', 0);
+    }
+
+    public function test_actual_pre_stage_b_serialized_job_payload_remains_executable(): void
+    {
+        $opportunity = TradeOpportunity::factory()->for(User::factory()->create())->create([
+            'id' => 41,
+            'chain' => 'solana',
+            'scanner' => 'new-token',
+            'discovery_key' => str_repeat('a', 64),
+            'address' => 'So11111111111111111111111111111111111111112',
+        ]);
+        $serialized = base64_decode(
+            'TzozOToiQXBwXEpvYnNcU3VibWl0VHJhZGluZ0VuZ2luZU9wcG9ydHVuaXR5IjoyOntzOjc6InBheWxvYWQiO2E6MTp7czo2OiJzb3VyY2UiO2E6MTp7czoxNDoib3Bwb3J0dW5pdHlfaWQiO3M6MjoiNDEiO319czoxNDoiaWRlbXBvdGVuY3lLZXkiO3M6MzI6Im9wcG9ydHVuaXR5OnJlY29yZDpsYXJhdmVsOjQxOnYxIjt9',
+            true,
+        );
+        $this->assertIsString($serialized);
+        $job = unserialize($serialized, ['allowed_classes' => [SubmitTradingEngineOpportunity::class]]);
+        $this->assertInstanceOf(SubmitTradingEngineOpportunity::class, $job);
+        $client = Mockery::mock(TradingEngineClient::class);
+        $client->shouldReceive('recordOpportunity')
+            ->once()
+            ->with('opportunity:record:laravel:41:v1', ['source' => ['opportunity_id' => '41']])
+            ->andReturn($this->acknowledgement());
+
+        $job->handle($client, app(TradingEngineOpportunityExportTracker::class));
+
+        $export = $opportunity->engineOpportunityExport()->sole();
+        $this->assertSame(TradingEngineOpportunityExport::STATUS_ACKNOWLEDGED, $export->status);
+        $this->assertSame(1, $export->attempt_count);
     }
 
     /** @return array{0: TradeOpportunity, 1: array{payload: array<string, mixed>, idempotency_key: string}} */

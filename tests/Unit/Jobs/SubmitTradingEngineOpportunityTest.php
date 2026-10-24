@@ -62,8 +62,8 @@ class SubmitTradingEngineOpportunityTest extends TestCase
         ]);
         $exports = $this->mock(TradingEngineOpportunityExportTracker::class);
         $exports->shouldReceive('forJob')->twice()->with($payload, $job->idempotencyKey)->andReturn($export);
-        $exports->shouldReceive('beginAttempt')->twice()->with($export)->andReturnTrue();
-        $exports->shouldReceive('acknowledged')->twice()->with($export, \Mockery::type('array'));
+        $exports->shouldReceive('beginAttempt')->twice()->with($export)->andReturn(1, 2);
+        $exports->shouldReceive('acknowledged')->twice()->with($export, \Mockery::type('array'), \Mockery::type('int'));
 
         $job->handle($client, $exports);
         $job->handle($client, $exports);

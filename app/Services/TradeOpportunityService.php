@@ -12,6 +12,7 @@ use App\Models\TradeOpportunity;
 use App\Models\User;
 use App\Services\TradingEngine\TradingEngineOpportunityCommandFactory;
 use App\Services\TradingEngine\TradingEngineOpportunityExportTracker;
+use Illuminate\Contracts\Bus\Dispatcher;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
@@ -25,6 +26,7 @@ class TradeOpportunityService
         private TradingEngineOpportunityCommandFactory $tradingEngineCommands,
         private TradingEngineOpportunityExportTracker $tradingEngineExports,
         private ScanExecutionRecorder $scanExecutions,
+        private Dispatcher $bus,
     ) {}
 
     /** @param array<string, mixed> $data
@@ -177,19 +179,22 @@ class TradeOpportunityService
                 return;
             }
 
-            $export = $this->tradingEngineExports->queued($opportunity, $command['idempotency_key']);
-
-            if (! $export->wasRecentlyCreated) {
-                return;
-            }
-
             try {
-                SubmitTradingEngineOpportunity::dispatch(
-                    $command['payload'],
+                $this->tradingEngineExports->queueAndDispatch(
+                    $opportunity,
                     $command['idempotency_key'],
+                    fn () => $this->bus->dispatch(
+                        (new SubmitTradingEngineOpportunity(
+                            $command['payload'],
+                            $command['idempotency_key'],
+                        ))->onConnection('database'),
+                    ),
                 );
             } catch (Throwable $exception) {
-                $this->tradingEngineExports->permanentlyFailed($export, 'QUEUE_DISPATCH_FAILED');
+                $this->tradingEngineExports->dispatchFailed(
+                    $opportunity,
+                    $command['idempotency_key'],
+                );
                 throw $exception;
             }
         } catch (Throwable $exception) {

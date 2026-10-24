@@ -162,7 +162,7 @@ class TradingEngineClient
         );
 
         $this->requireStatus($response, [202]);
-        $this->requireResponseContext($response, $correlationId, $traceparent);
+        $this->requireResponseContext($response, $correlationId, $traceparent, true);
         $result = $response->json();
 
         if (! is_array($result)
@@ -172,7 +172,7 @@ class TradingEngineClient
             || ! $this->validEngineId($result['eventId'] ?? null)
             || $result['status'] !== 'accepted'
             || ! is_bool($result['duplicate'])) {
-            throw $this->invalidResponse($response->status());
+            throw $this->invalidResponse($response->status(), true);
         }
 
         return $result;
@@ -501,11 +501,15 @@ class TradingEngineClient
             : null;
     }
 
-    private function requireResponseContext(Response $response, string $correlationId, string $traceparent): void
-    {
+    private function requireResponseContext(
+        Response $response,
+        string $correlationId,
+        string $traceparent,
+        bool $ambiguous = false,
+    ): void {
         if ($response->header('X-Correlation-Id') !== $correlationId
             || $response->header('traceparent') !== $traceparent) {
-            throw $this->invalidResponse($response->status());
+            throw $this->invalidResponse($response->status(), $ambiguous);
         }
     }
 
@@ -585,8 +589,8 @@ class TradingEngineClient
             : '00-'.bin2hex(random_bytes(16)).'-'.bin2hex(random_bytes(8)).'-01';
     }
 
-    private function invalidResponse(int $responseStatus): TradingEngineException
+    private function invalidResponse(int $responseStatus, bool $retryable = false): TradingEngineException
     {
-        return new TradingEngineException('INVALID_RESPONSE', 'The trading engine returned an invalid response.', false, $responseStatus);
+        return new TradingEngineException('INVALID_RESPONSE', 'The trading engine returned an invalid response.', $retryable, $responseStatus);
     }
 }

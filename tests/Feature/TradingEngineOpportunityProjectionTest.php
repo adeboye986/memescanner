@@ -11,7 +11,9 @@ use App\Jobs\ProjectTradingEngineEvent;
 use App\Models\TradeOpportunity;
 use App\Models\TradingEngineEvent;
 use App\Models\TradingEngineOpportunityEvaluation;
+use App\Models\TradingEngineOpportunityExport;
 use App\Models\User;
+use App\Services\TradingEngine\TradingEngineOpportunityExportTracker;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
 use App\Services\UserTelegramNotificationService;
 use Illuminate\Database\QueryException;
@@ -81,6 +83,38 @@ class TradingEngineOpportunityProjectionTest extends TestCase
         ]);
         $this->assertSame(1, $recorded->fresh()->handling_attempts);
         $this->assertNotNull($recorded->fresh()->handled_at);
+    }
+
+    public function test_recorded_event_supersedes_ambiguous_delivery_and_stale_callbacks(): void
+    {
+        $opportunity = $this->opportunity();
+        $export = $opportunity->engineOpportunityExport()->create([
+            'idempotency_key' => 'opportunity:record:laravel:'.$opportunity->getKey().':v1',
+            'status' => TradingEngineOpportunityExport::STATUS_ACCEPTANCE_UNKNOWN,
+            'attempt_count' => 1,
+            'last_error_code' => 'TRANSPORT_TIMEOUT',
+            'queued_at' => now()->subMinute(),
+            'last_attempt_at' => now()->subSeconds(30),
+        ]);
+        $recorded = $this->storeEvent($this->recordedEvent($opportunity));
+        $projector = app(TradingEngineOpportunityProjector::class);
+
+        $projector->project($recorded->event_id);
+        $projector->project($recorded->event_id);
+
+        $tracker = app(TradingEngineOpportunityExportTracker::class);
+        $tracker->acceptanceUnknown($export, 'JOB_FAILED', 1);
+        $tracker->rejected($export, 'VALIDATION_FAILED', 1);
+
+        $export->refresh();
+        $this->assertSame(TradingEngineOpportunityExport::STATUS_ACKNOWLEDGED, $export->status);
+        $this->assertSame('01K9ZYXWVTSRQPNMKJHGFEDCBF', $export->engine_operation_id);
+        $this->assertSame(self::ENGINE_OPPORTUNITY_ID, $export->engine_opportunity_id);
+        $this->assertSame(self::RECORDED_EVENT_ID, $export->engine_event_id);
+        $this->assertNull($export->last_error_code);
+        $this->assertNull($export->permanently_failed_at);
+        $this->assertDatabaseCount('trading_engine_opportunity_links', 1);
+        $this->assertDatabaseCount('trading_engine_opportunity_exports', 1);
     }
 
     public function test_evaluation_after_recorded_event_projects_once_without_business_or_execution_side_effects(): void

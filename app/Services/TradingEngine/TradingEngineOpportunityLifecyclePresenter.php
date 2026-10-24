@@ -83,6 +83,14 @@ class TradingEngineOpportunityLifecyclePresenter
             );
         }
 
+        if ($export->queued_at === null && $hasAcknowledgementLink) {
+            return $this->step(
+                'Engine export queued',
+                'not_available',
+                'Authenticated engine acceptance exists, but this historical export has no durable queue-acceptance timestamp.',
+            );
+        }
+
         $status = match ($export->status) {
             TradingEngineOpportunityExport::STATUS_SKIPPED => 'skipped',
             TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED => 'failed',
@@ -91,7 +99,9 @@ class TradingEngineOpportunityLifecyclePresenter
 
         $detail = match ($export->status) {
             TradingEngineOpportunityExport::STATUS_SKIPPED => 'Export was explicitly skipped by a configured integration boundary'.($this->safeErrorCode($export->last_error_code) ? ': '.$this->safeErrorCode($export->last_error_code).'.' : '.'),
-            TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED => 'The queued export reached a permanent failure'.($this->safeErrorCode($export->last_error_code) ? ': '.$this->safeErrorCode($export->last_error_code).'.' : '.'),
+            TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED => $export->queued_at === null
+                ? 'Queue persistence failed before durable queue acceptance'.($this->safeErrorCode($export->last_error_code) ? ': '.$this->safeErrorCode($export->last_error_code).'.' : '.')
+                : 'The queued export reached a permanent failure'.($this->safeErrorCode($export->last_error_code) ? ': '.$this->safeErrorCode($export->last_error_code).'.' : '.'),
             default => 'Laravel durably recorded this opportunity for engine export.',
         };
 
@@ -120,11 +130,21 @@ class TradingEngineOpportunityLifecyclePresenter
             );
         }
 
+        if ($hasAcknowledgementLink && $export->status !== TradingEngineOpportunityExport::STATUS_ACKNOWLEDGED) {
+            return $this->step(
+                'Engine export acknowledged',
+                'complete',
+                'An authenticated opportunity.recorded event proves engine acceptance and supersedes an earlier delivery outcome.',
+                $linkRecordedAt,
+            );
+        }
+
         $status = match ($export->status) {
             TradingEngineOpportunityExport::STATUS_ACKNOWLEDGED => 'complete',
             TradingEngineOpportunityExport::STATUS_QUEUED,
             TradingEngineOpportunityExport::STATUS_SUBMITTING,
             TradingEngineOpportunityExport::STATUS_RETRYING => 'pending',
+            TradingEngineOpportunityExport::STATUS_ACCEPTANCE_UNKNOWN => 'unknown',
             TradingEngineOpportunityExport::STATUS_SKIPPED => 'skipped',
             TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED => 'failed',
             default => 'unknown',
@@ -135,6 +155,7 @@ class TradingEngineOpportunityLifecyclePresenter
             TradingEngineOpportunityExport::STATUS_QUEUED => 'The export is queued; no engine acknowledgement has been recorded.',
             TradingEngineOpportunityExport::STATUS_SUBMITTING => 'A Laravel queue worker is submitting the export; no acknowledgement has been recorded.',
             TradingEngineOpportunityExport::STATUS_RETRYING => 'The export is waiting for another bounded queue attempt'.($this->safeErrorCode($export->last_error_code) ? ': '.$this->safeErrorCode($export->last_error_code).'.' : '.'),
+            TradingEngineOpportunityExport::STATUS_ACCEPTANCE_UNKNOWN => 'Laravel could not establish whether the engine accepted this immutable command. Missing webhook evidence is not treated as rejection.',
             TradingEngineOpportunityExport::STATUS_SKIPPED => 'The export was skipped; engine evaluation and PAPER entry were not implied.',
             TradingEngineOpportunityExport::STATUS_PERMANENTLY_FAILED => 'The export permanently failed; no engine acknowledgement was recorded.',
             default => 'The durable export record has an unrecognized state; no downstream state has been inferred.',

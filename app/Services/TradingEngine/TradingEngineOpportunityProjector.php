@@ -9,6 +9,7 @@ use App\Models\TradingEngineEvent;
 use App\Models\TradingEngineOpportunityEvaluation;
 use App\Models\TradingEngineOpportunityLink;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 use Throwable;
 
 class TradingEngineOpportunityProjector
@@ -17,6 +18,7 @@ class TradingEngineOpportunityProjector
         private TradingEnginePaperLifecycleProjector $paperLifecycle,
         private TradingEnginePaperEntryProjector $paperEntries,
         private TradingEnginePaperFinancialLifecycleProjector $paperFinancialLifecycle,
+        private TradingEngineOpportunityExportTracker $opportunityExports,
     ) {}
 
     private const ETHEREUM_MAINNET_ID = 'eip155:1';
@@ -155,6 +157,7 @@ class TradingEngineOpportunityProjector
         $network = $this->arrayValue($payload['network'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
         $asset = $this->arrayValue($payload['asset'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
         $localOpportunityId = $this->stringValue($source['opportunity_id'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $operationId = $this->stringValue($payload['operation_id'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
 
         if (preg_match('/^[1-9][0-9]*$/D', $localOpportunityId) !== 1) {
             $this->reject('RECORDED_EVENT_PAYLOAD_INVALID');
@@ -209,6 +212,8 @@ class TradingEngineOpportunityProjector
                 $this->reject('OPPORTUNITY_LINK_CONFLICT');
             }
 
+            $this->reconcileRecordedExport($opportunity, $event, $operationId, $engineOpportunityId);
+
             return;
         }
 
@@ -224,6 +229,27 @@ class TradingEngineOpportunityProjector
             'recorded_at' => $event->occurred_at,
             'linked_at' => now(),
         ]);
+
+        $this->reconcileRecordedExport($opportunity, $event, $operationId, $engineOpportunityId);
+    }
+
+    private function reconcileRecordedExport(
+        TradeOpportunity $opportunity,
+        TradingEngineEvent $event,
+        string $operationId,
+        string $engineOpportunityId,
+    ): void {
+        try {
+            $this->opportunityExports->acknowledgedByRecordedEvent(
+                $opportunity,
+                $event->idempotency_key,
+                $operationId,
+                $engineOpportunityId,
+                $event->event_id,
+            );
+        } catch (LogicException) {
+            $this->reject('OPPORTUNITY_EXPORT_ACKNOWLEDGEMENT_CONFLICT');
+        }
     }
 
     private function projectEvaluatedEvent(TradingEngineEvent $event): string

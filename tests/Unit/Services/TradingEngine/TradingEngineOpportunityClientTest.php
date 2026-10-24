@@ -89,10 +89,14 @@ class TradingEngineOpportunityClientTest extends TestCase
             'https://engine.test/v1/commands/opportunities' => fn (Request $request): PromiseInterface => $this->responseFor($request, $response),
         ]);
 
-        $this->expectException(TradingEngineException::class);
-        $this->expectExceptionMessage('invalid response');
-
-        app(TradingEngineClient::class)->recordOpportunity('opportunity:42', []);
+        try {
+            app(TradingEngineClient::class)->recordOpportunity('opportunity:42', []);
+            $this->fail('A malformed acknowledgement was accepted.');
+        } catch (TradingEngineException $exception) {
+            $this->assertSame('INVALID_RESPONSE', $exception->errorCode);
+            $this->assertTrue($exception->retryable);
+            $this->assertSame(202, $exception->responseStatus);
+        }
     }
 
     public static function invalidResponseProvider(): array

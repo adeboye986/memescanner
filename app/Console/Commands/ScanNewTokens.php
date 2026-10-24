@@ -570,6 +570,7 @@ class ScanNewTokens extends Command
 
                     if ($paperEntryDecision['paper_entry_reason'] === 'Entry checks passed.') {
                         $qualifiedOpportunityCount++;
+                        $scanExecutions->qualifiedCandidate($activityId);
 
                         try {
                             $execution = $opportunities->qualify([
@@ -608,7 +609,6 @@ class ScanNewTokens extends Command
                                     'dex' => $dexData['dex'] ?? null,
                                 ],
                             ], $requestingUser, $activityId);
-                            $scanExecutions->qualified($activityId);
 
                             $paperPosition = $execution['position'];
                             $paperBuyExecuted = $paperPosition?->wasRecentlyCreated ?? false;
@@ -639,7 +639,7 @@ class ScanNewTokens extends Command
                                     : "PAPER BUY SKIPPED: {$symbol} | position already open"
                             );
                         } catch (Throwable $exception) {
-                            $scanExecutions->candidateFailed($activityId, 'OPPORTUNITY_HANDLING_FAILED');
+                            $scanExecutions->downstreamFailed($activityId, 'OPPORTUNITY_HANDLING_FAILED');
                             $paperEntryDecision['paper_entry_status'] = 'rejected';
                             $paperEntryDecision['paper_entry_reason'] = $exception->getMessage();
 

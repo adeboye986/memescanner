@@ -261,10 +261,13 @@ class SystemActivityService
             }
 
             return sprintf(
-                'The Laravel scanner completed: %d discovered, %d examined, %d qualified, %d skipped, %d failed; %d engine exports acknowledged.',
+                'The Laravel scanner completed: %d discovered, %d examined, %d qualified candidates, %d opportunities created, %d existing opportunities, %d downstream failures, %d skipped, %d candidate failures; %d engine exports acknowledged.',
                 $counts['discovered'],
                 $counts['examined'],
                 $counts['qualified'],
+                $counts['opportunities_created'],
+                $counts['opportunities_existing'],
+                $counts['downstream_failed'],
                 $counts['skipped'],
                 $counts['failed'],
                 $counts['exports_acknowledged'],
@@ -298,12 +301,12 @@ class SystemActivityService
         }
 
         $counts = [];
-        foreach (['discovered', 'examined', 'qualified', 'skipped', 'failed', 'opportunities_correlated', 'exports_queued', 'exports_acknowledged'] as $field) {
+        foreach (['discovered', 'examined', 'qualified', 'qualified_candidates', 'opportunities_created', 'opportunities_existing', 'downstream_failed', 'skipped', 'failed', 'opportunities_correlated', 'exports_queued', 'exports_acknowledged'] as $field) {
             $counts[$field] = max(0, (int) data_get($summary, 'counts.'.$field, 0));
         }
 
         $exports = [];
-        foreach (['queued', 'submitting', 'retrying', 'acknowledged', 'skipped', 'permanently_failed'] as $status) {
+        foreach (['queued', 'submitting', 'retrying', 'acceptance_unknown', 'acknowledged', 'skipped', 'permanently_failed'] as $status) {
             $exports[$status] = max(0, (int) data_get($summary, 'exports.'.$status, 0));
         }
 
@@ -336,6 +339,7 @@ class SystemActivityService
             'counts' => $counts,
             'provider_failures' => $safeCodes($summary['provider_failures'] ?? []),
             'failure_codes' => $safeCodes($summary['failure_codes'] ?? []),
+            'downstream_failure_codes' => $safeCodes($summary['downstream_failure_codes'] ?? []),
             'exports' => $exports,
             'error_code' => is_string($errorCode) && preg_match('/^[A-Z][A-Z0-9_]{0,127}$/D', $errorCode) === 1
                 ? $errorCode
