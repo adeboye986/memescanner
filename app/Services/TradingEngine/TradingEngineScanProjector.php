@@ -95,16 +95,29 @@ class TradingEngineScanProjector
             $failed = $payload['outcome'] === 'failed';
             $completedAt = $event->occurred_at;
             $startedAt = $activity->started_at ?? $activity->created_at ?? $completedAt;
+            $providerFailures = collect($payload['provider_failures'])
+                ->countBy()
+                ->map(fn (int $count, string $code): array => [
+                    'code' => $code,
+                    'count' => $count,
+                ])
+                ->values()
+                ->all();
             $summary = [
+                'version' => 1,
                 'schema_version' => 1,
                 'kind' => 'scanner_execution',
                 'owner' => 'trading-engine',
                 'scanner' => $request->scanner,
+                'chain' => $expectedChain->value,
                 'network_id' => $request->network_id,
                 'scan_execution_id' => $payload['scan_execution_id'],
                 'outcome' => $payload['outcome'],
+                'zero_result' => $payload['counts']['qualified'] === 0
+                    && $payload['counts']['opportunities_created'] === 0
+                    && $payload['counts']['opportunities_existing'] === 0,
                 'counts' => $payload['counts'],
-                'provider_failures' => $payload['provider_failures'],
+                'provider_failures' => $providerFailures,
                 'error_code' => $payload['error_code'],
             ];
 

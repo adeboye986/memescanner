@@ -7,8 +7,12 @@ import { GoPlusScannerProvider } from '../../src/infrastructure/scanning/goplus-
 import {
   SCANNER_MAX_RESPONSE_BYTES,
   ScannerHttpClient,
-  type ScannerProviderError,
+  ScannerProviderError,
 } from '../../src/infrastructure/scanning/scanner-http-client.js';
+import {
+  sanitizeScannerDiagnostic,
+  scannerErrorDiagnostic,
+} from '../../src/workers/token-scan-dispatcher.js';
 import { evaluateHolderRisk } from '../../src/infrastructure/scanning/solana-rpc-scanner-provider.js';
 
 function fetchUsing(handler: (url: URL, init: RequestInit) => Response | Promise<Response>): typeof fetch {
@@ -269,6 +273,89 @@ describe('scanner provider adapters', () => {
 
     await expect(rateLimited.json(new URL('http://provider.example/data'), { timeoutMs: 1_000 }))
       .rejects.toMatchObject({ code: 'PROVIDER_URL_INVALID', retryable: false });
+  });
+
+  it('distinguishes permanent authentication errors from retryable provider failures', async () => {
+    const authenticationFailure = new ScannerHttpClient(fetchUsing(() => new Response('', {
+      status: 401,
+    })));
+    const serviceFailure = new ScannerHttpClient(fetchUsing(() => new Response('', {
+      status: 503,
+    })));
+    const timeoutFailure = new ScannerHttpClient(fetchUsing(() => Promise.reject(
+      new DOMException('provider deadline exceeded', 'TimeoutError'),
+    )));
+
+    await expect(authenticationFailure.json(new URL('https://provider.example/data'), {
+      timeoutMs: 1_000,
+      provider: 'birdeye',
+    })).rejects.toMatchObject({
+      code: 'PROVIDER_AUTHENTICATION_FAILED',
+      retryable: false,
+      statusCode: 401,
+      provider: 'birdeye',
+    });
+    await expect(serviceFailure.json(new URL('https://provider.example/data'), {
+      timeoutMs: 1_000,
+      provider: 'dexscreener',
+    })).rejects.toMatchObject({
+      code: 'PROVIDER_SERVICE_FAILED',
+      retryable: true,
+      statusCode: 503,
+      provider: 'dexscreener',
+    });
+    await expect(timeoutFailure.json(new URL('https://provider.example/data'), {
+      timeoutMs: 1_000,
+      provider: 'goplus',
+    })).rejects.toMatchObject({
+      code: 'PROVIDER_TIMEOUT',
+      retryable: true,
+      statusCode: null,
+      provider: 'goplus',
+    });
+  });
+
+  it('classifies scanner diagnostics and redacts credential-bearing text', () => {
+    const authentication = scannerErrorDiagnostic(
+      new ScannerProviderError('PROVIDER_AUTHENTICATION_FAILED', false, 403, 'birdeye'),
+    );
+    const database = scannerErrorDiagnostic(Object.assign(
+      new Error('postgresql://db-user:db-password@example.test/database'),
+      { code: '08006' },
+    ));
+    const unexpected = scannerErrorDiagnostic(
+      new Error(
+        'Bearer super-secret authorization=raw-secret '
+        + 'https://user:password@example.test/path?api_key=also-secret',
+      ),
+    );
+
+    expect(authentication).toMatchObject({
+      classification: 'provider_authentication',
+      errorCode: 'PROVIDER_AUTHENTICATION_FAILED',
+      retryable: false,
+      httpStatus: 403,
+      provider: 'birdeye',
+    });
+    expect(database).toMatchObject({
+      classification: 'database',
+      errorCode: 'SCANNER_DATABASE_UNAVAILABLE',
+      retryable: true,
+      databaseCategory: 'connection',
+      provider: 'postgresql',
+    });
+    expect(unexpected).toMatchObject({
+      classification: 'unexpected_application',
+      errorCode: 'SCANNER_UNEXPECTED_ERROR',
+      retryable: false,
+    });
+    expect(unexpected.sanitizedMessage).not.toContain('super-secret');
+    expect(unexpected.sanitizedMessage).not.toContain('raw-secret');
+    expect(unexpected.sanitizedMessage).not.toContain('password');
+    expect(unexpected.sanitizedMessage).not.toContain('also-secret');
+    expect(sanitizeScannerDiagnostic('token=my-token\nsecond line')).toBe(
+      'token=[redacted] second line',
+    );
   });
 
   it('preserves the Laravel holder concentration safety thresholds', () => {

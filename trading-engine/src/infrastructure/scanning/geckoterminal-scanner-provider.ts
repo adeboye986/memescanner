@@ -26,12 +26,13 @@ export class GeckoTerminalScannerProvider {
     url.searchParams.set('page', '1');
     const payload = objectValue(await this.client.json(url, {
       timeoutMs: this.timeoutMs,
+      provider: 'geckoterminal',
       ...(signal === undefined ? {} : { signal }),
     }));
     const pools = arrayValue(payload?.['data']);
 
     if (pools === undefined) {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, null, 'geckoterminal');
     }
 
     const maximum = Math.max(1, Math.min(limit, 30));

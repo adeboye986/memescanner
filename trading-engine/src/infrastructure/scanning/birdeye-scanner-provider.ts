@@ -46,7 +46,7 @@ export class BirdeyeScannerProvider {
     const items = arrayValue(data?.['items']);
 
     if (items === undefined) {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, null, 'birdeye');
     }
 
     const seen = new Set<string>();
@@ -79,7 +79,7 @@ export class BirdeyeScannerProvider {
     const data = objectValue(payload?.['data']);
 
     if (data === undefined) {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, null, 'birdeye');
     }
 
     return {
@@ -105,6 +105,7 @@ export class BirdeyeScannerProvider {
         'x-chain': 'solana',
       },
       timeoutMs: this.timeoutMs,
+      provider: 'birdeye',
       ...(signal === undefined ? {} : { signal }),
     });
   }

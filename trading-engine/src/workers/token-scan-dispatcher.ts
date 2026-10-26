@@ -36,7 +36,10 @@ import type {
   ScannerSecurityResult,
 } from '../infrastructure/scanning/goplus-scanner-provider.js';
 import type { GeckoTerminalScannerProvider } from '../infrastructure/scanning/geckoterminal-scanner-provider.js';
-import { ScannerProviderError } from '../infrastructure/scanning/scanner-http-client.js';
+import {
+  ScannerProviderError,
+  type ScannerProviderName,
+} from '../infrastructure/scanning/scanner-http-client.js';
 import type {
   HolderRisk,
   SolanaRpcScannerProvider,
@@ -79,12 +82,49 @@ interface MutableCounts {
   failed: number;
 }
 
+type ScannerDiagnosticProvider = ScannerProviderName | 'postgresql' | null;
+
+export interface ScannerErrorDiagnostic {
+  readonly workflowStage: string;
+  readonly provider: ScannerDiagnosticProvider;
+  readonly classification: string;
+  readonly errorCode: string;
+  readonly sanitizedMessage: string;
+  readonly retryable: boolean;
+  readonly httpStatus: number | null;
+  readonly timeout: boolean;
+  readonly databaseCategory: string | null;
+  readonly diagnosticStack: string | null;
+}
+
+class ScannerWorkflowError extends Error {
+  public constructor(
+    public readonly workflowStage: string,
+    public readonly provider: ScannerDiagnosticProvider,
+    public override readonly cause: unknown,
+  ) {
+    super('Scanner workflow stage failed', { cause });
+    this.name = 'ScannerWorkflowError';
+  }
+}
+
 export class TokenScanDispatcher implements WorkflowDispatcher {
   private readonly claimedBy = newEngineId();
 
   public constructor(private readonly options: TokenScanDispatcherOptions) {}
 
   public async dispatchBatch(): Promise<WorkflowDispatchResult> {
+    try {
+      return await this.dispatchBatchInternal();
+    } catch (error) {
+      return this.throwSafeBoundary(
+        error,
+        'token scan workflow failed outside an owned execution',
+      );
+    }
+  }
+
+  private async dispatchBatchInternal(): Promise<WorkflowDispatchResult> {
     await this.failExhausted();
     const executions = await this.options.repository.claimBatch(
       this.options.database,
@@ -94,6 +134,17 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
     );
 
     for (const execution of executions) {
+      const engineOperationId = await this.operationIdFor(execution);
+      this.options.logger.info(
+        {
+          scanExecutionId: execution.id,
+          engineOperationId,
+          workflowStage: 'execution',
+          attemptNumber: execution.attempt_count,
+        },
+        'token scan execution started',
+      );
+
       try {
         const command = execution.request as unknown as TokenScanCommand;
         const result = command.network.id === ETHEREUM_MAINNET_ID
@@ -102,33 +153,83 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
             ? await this.scanSolanaNewTokens(execution, command)
             : await this.scanSolanaMomentum(execution, command);
         await this.complete(execution, command, result);
+        this.options.logger.info(
+          {
+            scanExecutionId: execution.id,
+            engineOperationId,
+            workflowStage: 'terminal_persistence',
+            attemptNumber: execution.attempt_count,
+            terminalOutcome: result.providerFailures.length > 0 || result.counts.failed > 0
+              ? 'succeeded_with_warnings'
+              : 'succeeded',
+            counts: result.counts,
+            providerFailures: result.providerFailures,
+          },
+          'token scan execution completed',
+        );
       } catch (error) {
-        const errorCode = safeErrorCode(error);
+        const diagnostic = scannerErrorDiagnostic(error);
+        const logContext = {
+          scanExecutionId: execution.id,
+          engineOperationId,
+          attemptNumber: execution.attempt_count,
+          ...diagnosticLogFields(diagnostic),
+        };
 
-        if (error instanceof ApplicationError && error.code === 'SCANNER_CLAIM_LOST') {
+        if (diagnostic.errorCode === 'SCANNER_CLAIM_LOST') {
           this.options.logger.warn(
-            { scanExecutionId: execution.id, attemptCount: execution.attempt_count },
+            logContext,
             'token scan execution claim was superseded',
           );
           continue;
         }
 
-        if (isRetryable(error) && execution.attempt_count < maximumAttempts) {
+        const progress = await this.durableProgress(execution, diagnostic);
+
+        if (diagnostic.retryable && execution.attempt_count < maximumAttempts) {
           const delayMs = retryDelayMs(execution.attempt_count);
-          const retained = await this.options.repository.retry(
-            this.options.database,
-            execution,
-            errorCode,
-            delayMs,
-          );
+          let retained: boolean;
+
+          try {
+            retained = await this.options.repository.retry(
+              this.options.database,
+              execution,
+              diagnostic.errorCode,
+              delayMs,
+            );
+          } catch (persistenceError) {
+            const persistenceDiagnostic = scannerErrorDiagnostic(
+              new ScannerWorkflowError('retry_persistence', 'postgresql', persistenceError),
+            );
+            this.options.logger.error(
+              {
+                ...logContext,
+                ...diagnosticLogFields(persistenceDiagnostic),
+              },
+              'token scan retry state could not be persisted',
+            );
+            throw persistenceError;
+          }
+
           this.options.logger.warn(
-            { scanExecutionId: execution.id, errorCode, delayMs, retained },
+            {
+              ...logContext,
+              retryDelayMs: delayMs,
+              transitionRetained: retained,
+              counts: progress.counts,
+              providerFailures: progress.providerFailures,
+            },
             'token scan execution scheduled for retry',
           );
         } else {
-          await this.fail(execution, errorCode);
+          await this.fail(execution, diagnostic.errorCode, progress);
           this.options.logger.error(
-            { scanExecutionId: execution.id, errorCode },
+            {
+              ...logContext,
+              terminalOutcome: 'failed',
+              counts: progress.counts,
+              providerFailures: progress.providerFailures,
+            },
             'token scan execution failed',
           );
         }
@@ -139,23 +240,171 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
   }
 
   public async shutdown(): Promise<void> {
-    await this.options.repository.releaseClaims(this.options.database, this.claimedBy);
+    try {
+      await this.options.repository.releaseClaims(this.options.database, this.claimedBy);
+    } catch (error) {
+      return this.throwSafeBoundary(
+        new ScannerWorkflowError('shutdown_release', 'postgresql', error),
+        'token scan claims could not be released during shutdown',
+      );
+    }
+  }
+
+  private throwSafeBoundary(error: unknown, message: string): never {
+    const diagnostic = scannerErrorDiagnostic(error);
+    this.options.logger.error(diagnosticLogFields(diagnostic), message);
+
+    throw new Error(`Token scan workflow failed with safe code ${diagnostic.errorCode}`);
+  }
+
+  private async operationIdFor(execution: TokenScanExecutionRecord): Promise<string | null> {
+    try {
+      const operation = await this.options.database
+        .selectFrom('command_inbox')
+        .select('id')
+        .where('idempotency_key', '=', execution.idempotency_key)
+        .executeTakeFirst();
+
+      return operation?.id ?? null;
+    } catch (error) {
+      const diagnostic = scannerErrorDiagnostic(
+        new ScannerWorkflowError('diagnostic_lookup', 'postgresql', error),
+      );
+      this.options.logger.warn(
+        {
+          scanExecutionId: execution.id,
+          attemptNumber: execution.attempt_count,
+          ...diagnosticLogFields(diagnostic),
+        },
+        'token scan operation diagnostic lookup failed',
+      );
+
+      return null;
+    }
+  }
+
+  private async durableProgress(
+    execution: TokenScanExecutionRecord,
+    rootDiagnostic?: ScannerErrorDiagnostic,
+  ): Promise<ScanResult> {
+    try {
+      const discoveries = await this.options.database
+        .selectFrom('token_discoveries')
+        .select(['state', 'reason_code'])
+        .where('scan_execution_id', '=', execution.id)
+        .execute();
+      const qualifiedStates = new Set([
+        'qualified',
+        'qualified_downstream_failed',
+        'opportunity_created',
+        'opportunity_existing',
+      ]);
+      const providerFailures = new Set(
+        discoveries
+          .map((discovery) => discovery.reason_code)
+          .filter((code): code is string => code !== null && providerFailureCode(code)),
+      );
+
+      if (rootDiagnostic !== undefined && providerFailureCode(rootDiagnostic.errorCode)) {
+        providerFailures.add(rootDiagnostic.errorCode);
+      }
+
+      return {
+        counts: {
+          discovered: discoveries.length,
+          examined: discoveries.length,
+          qualified: discoveries.filter((discovery) => qualifiedStates.has(discovery.state)).length,
+          opportunitiesCreated: discoveries.filter(
+            (discovery) => discovery.state === 'opportunity_created',
+          ).length,
+          opportunitiesExisting: discoveries.filter(
+            (discovery) => discovery.state === 'opportunity_existing',
+          ).length,
+          skipped: discoveries.filter((discovery) => discovery.state === 'skipped').length,
+          failed: discoveries.filter(
+            (discovery) => ['failed', 'qualified_downstream_failed'].includes(discovery.state),
+          ).length,
+        },
+        providerFailures: [...providerFailures].slice(0, 32),
+      };
+    } catch (error) {
+      const diagnostic = scannerErrorDiagnostic(
+        new ScannerWorkflowError('diagnostic_persistence', 'postgresql', error),
+      );
+      this.options.logger.error(
+        {
+          scanExecutionId: execution.id,
+          attemptNumber: execution.attempt_count,
+          ...diagnosticLogFields(diagnostic),
+        },
+        'token scan durable progress could not be read',
+      );
+
+      return {
+        counts: emptyCounts(),
+        providerFailures: rootDiagnostic !== undefined
+          && providerFailureCode(rootDiagnostic.errorCode)
+          ? [rootDiagnostic.errorCode]
+          : [],
+      };
+    }
+  }
+
+  private async logNonTerminalFailure(
+    execution: TokenScanExecutionRecord,
+    error: unknown,
+    message: string,
+  ): Promise<void> {
+    const diagnostic = scannerErrorDiagnostic(error);
+    this.options.logger.warn(
+      {
+        scanExecutionId: execution.id,
+        engineOperationId: await this.operationIdFor(execution),
+        attemptNumber: execution.attempt_count,
+        ...diagnosticLogFields(diagnostic),
+      },
+      message,
+    );
   }
 
   private async renewLease(execution: TokenScanExecutionRecord): Promise<void> {
-    const renewed = await this.options.repository.renewLease(
-      this.options.database,
-      execution,
-      this.options.leaseDurationMs,
+    const renewed = await this.runStage(
+      'lease_renewal',
+      'postgresql',
+      () => this.options.repository.renewLease(
+        this.options.database,
+        execution,
+        this.options.leaseDurationMs,
+      ),
     );
 
     if (!renewed) {
-      throw new ApplicationError(
-        'SCANNER_CLAIM_LOST',
-        'The token scan execution claim is no longer owned',
-        409,
-        true,
+      throw new ScannerWorkflowError(
+        'lease_renewal',
+        'postgresql',
+        new ApplicationError(
+          'SCANNER_CLAIM_LOST',
+          'The token scan execution claim is no longer owned',
+          409,
+          true,
+        ),
       );
+    }
+  }
+
+  private async runStage<T>(
+    workflowStage: string,
+    provider: ScannerDiagnosticProvider,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof ScannerWorkflowError) {
+        throw error;
+      }
+
+      throw new ScannerWorkflowError(workflowStage, provider, error);
     }
   }
 
@@ -166,7 +415,11 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
     const failures = new Set<string>();
     const counts = emptyCounts();
     await this.renewLease(execution);
-    const listings = await this.options.birdeye.newListings(20);
+    const listings = await this.runStage(
+      'token_discovery',
+      'birdeye',
+      () => this.options.birdeye.newListings(20),
+    );
     counts.discovered = listings.length;
     const seen = new Set<string>();
 
@@ -204,7 +457,11 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
 
       try {
         await this.renewLease(execution);
-        const initial = await this.options.birdeye.overview(listing.address);
+        const initial = await this.runStage(
+          'provider_enrichment',
+          'birdeye',
+          () => this.options.birdeye.overview(listing.address),
+        );
         const basicQualification = qualifyNewToken(initial, true, true);
 
         if ([
@@ -237,9 +494,14 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
 
         try {
           await this.renewLease(execution);
-          security = await this.options.goplus.solana(listing.address);
+          security = await this.runStage(
+            'security_check',
+            'goplus',
+            () => this.options.goplus.solana(listing.address),
+          );
         } catch (error) {
           securityFailure(failures, error, 'SECURITY_PROVIDER_UNAVAILABLE');
+          await this.logNonTerminalFailure(execution, error, 'token scan security provider failed');
           security = unavailableSecurity();
         }
 
@@ -248,7 +510,11 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
 
         if (initialScore >= 40) {
           await this.renewLease(execution);
-          selected = await this.options.birdeye.overview(listing.address);
+          selected = await this.runStage(
+            'provider_enrichment',
+            'birdeye',
+            () => this.options.birdeye.overview(listing.address),
+          );
         }
 
         const qualification = qualifyNewToken(selected, security.available, security.passed);
@@ -275,7 +541,7 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
         }
 
         await this.renewLease(execution);
-        const dex = await this.optionalDex(listing.address, 'solana', failures);
+        const dex = await this.optionalDex(execution, listing.address, 'solana', failures);
         const entryMarketCap = dex?.available === true && dex.requestedTokenIsBase
           ? dex.marketCap
           : selected.marketCap;
@@ -362,6 +628,7 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
         });
       } catch (error) {
         securityFailure(failures, error);
+        await this.logNonTerminalFailure(execution, error, 'token scan candidate failed');
         counts.failed += 1;
         await this.persistCandidateFailure(execution, command, discoveryId, listing.address, index, 'birdeye', error);
       }
@@ -377,7 +644,11 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
     const failures = new Set<string>();
     const counts = emptyCounts();
     await this.renewLease(execution);
-    const profiles = await this.options.dexscreener.latestProfiles('solana', 30);
+    const profiles = await this.runStage(
+      'token_discovery',
+      'dexscreener',
+      () => this.options.dexscreener.latestProfiles('solana', 30),
+    );
     counts.discovered = profiles.length;
     const candidates: {
       readonly index: number;
@@ -393,7 +664,11 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
 
       try {
         await this.renewLease(execution);
-        const market = await this.options.dexscreener.market(profile.address, 'solana');
+        const market = await this.runStage(
+          'provider_enrichment',
+          'dexscreener',
+          () => this.options.dexscreener.market(profile.address, 'solana'),
+        );
 
         if (!qualifiesMomentumDiscovery(market)) {
           counts.skipped += 1;
@@ -420,9 +695,14 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
 
         try {
           await this.renewLease(execution);
-          holderRisk = await this.options.solanaRpc.holderRisk(profile.address);
+          holderRisk = await this.runStage(
+            'security_check',
+            'solana_rpc',
+            () => this.options.solanaRpc.holderRisk(profile.address),
+          );
         } catch (error) {
           securityFailure(failures, error, 'HOLDER_PROVIDER_UNAVAILABLE');
+          await this.logNonTerminalFailure(execution, error, 'token scan holder analysis failed');
           holderRisk = unavailableHolderRisk();
         }
 
@@ -473,6 +753,7 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
         candidates.push({ index, discoveryId, market, holderRisk, score });
       } catch (error) {
         securityFailure(failures, error);
+        await this.logNonTerminalFailure(execution, error, 'token scan candidate failed');
         counts.failed += 1;
         await this.persistCandidateFailure(execution, command, discoveryId, profile.address, index, 'dexscreener', error);
       }
@@ -506,7 +787,11 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
 
     for (const candidate of selected) {
       await this.renewLease(execution);
-      const market = await this.options.dexscreener.market(candidate.market.address, 'solana');
+      const market = await this.runStage(
+        'provider_enrichment',
+        'dexscreener',
+        () => this.options.dexscreener.market(candidate.market.address, 'solana'),
+      );
       const move = movement(candidate.market.marketCap, market.marketCap);
       const maximumChase = Number(command.policy.max_chase_percent);
 
@@ -597,7 +882,11 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
     const failures = new Set<string>();
     const counts = emptyCounts();
     await this.renewLease(execution);
-    const profiles = await this.options.geckoTerminal.latestEthereumTokens(30);
+    const profiles = await this.runStage(
+      'token_discovery',
+      'geckoterminal',
+      () => this.options.geckoTerminal.latestEthereumTokens(30),
+    );
     counts.discovered = profiles.length;
 
     for (const [index, profile] of profiles.entries()) {
@@ -606,7 +895,11 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
 
       try {
         await this.renewLease(execution);
-        const market = await this.options.dexscreener.market(profile.address, 'ethereum');
+        const market = await this.runStage(
+          'provider_enrichment',
+          'dexscreener',
+          () => this.options.dexscreener.market(profile.address, 'ethereum'),
+        );
 
         if (!qualifiesEthereum(command.scanner, market)) {
           counts.skipped += 1;
@@ -633,9 +926,14 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
 
         try {
           await this.renewLease(execution);
-          security = await this.options.goplus.ethereum(profile.address);
+          security = await this.runStage(
+            'security_check',
+            'goplus',
+            () => this.options.goplus.ethereum(profile.address),
+          );
         } catch (error) {
           securityFailure(failures, error, 'SECURITY_PROVIDER_UNAVAILABLE');
+          await this.logNonTerminalFailure(execution, error, 'token scan security provider failed');
           security = unavailableSecurity();
         }
 
@@ -693,6 +991,7 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
         });
       } catch (error) {
         securityFailure(failures, error);
+        await this.logNonTerminalFailure(execution, error, 'token scan candidate failed');
         counts.failed += 1;
         await this.persistCandidateFailure(execution, command, discoveryId, profile.address, index, 'geckoterminal', error);
       }
@@ -724,7 +1023,8 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
       readonly holderRisk: HolderRisk | null;
     },
   ): Promise<{ readonly opportunityId: string; readonly duplicate: boolean }> {
-    const body = opportunityCommand(execution, command, discoveryId, candidate);
+    return this.runStage('opportunity_creation', null, async () => {
+      const body = opportunityCommand(execution, command, discoveryId, candidate);
     const createdByThisScan = await this.options.database
       .selectFrom('opportunities')
       .select('id')
@@ -771,8 +1071,9 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
         }
       }
 
-      throw error;
-    }
+        throw error;
+      }
+    });
   }
 
   private findExistingOpportunity(
@@ -788,22 +1089,28 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
   }
 
   private async discoveryId(execution: TokenScanExecutionRecord, address: string): Promise<string> {
-    const existing = await this.options.database
-      .selectFrom('token_discoveries')
-      .select('id')
-      .where('scan_execution_id', '=', execution.id)
-      .where('network_id', '=', execution.network_id)
-      .where('asset_address', '=', address)
-      .executeTakeFirst();
+    return this.runStage('discovery_persistence', 'postgresql', async () => {
+      const existing = await this.options.database
+        .selectFrom('token_discoveries')
+        .select('id')
+        .where('scan_execution_id', '=', execution.id)
+        .where('network_id', '=', execution.network_id)
+        .where('asset_address', '=', address)
+        .executeTakeFirst();
 
-    return existing?.id ?? newEngineId();
+      return existing?.id ?? newEngineId();
+    });
   }
 
   private persistDiscovery(
     execution: TokenScanExecutionRecord,
     input: TokenDiscoveryInput,
   ): Promise<void> {
-    return this.options.repository.recordDiscovery(this.options.database, execution, input);
+    return this.runStage(
+      'discovery_persistence',
+      'postgresql',
+      () => this.options.repository.recordDiscovery(this.options.database, execution, input),
+    );
   }
 
   private async persistCandidateFailure(
@@ -815,13 +1122,17 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
     provider: 'birdeye' | 'dexscreener' | 'geckoterminal',
     error: unknown,
   ): Promise<void> {
-    const existing = await this.options.database
-      .selectFrom('token_discoveries')
-      .selectAll()
-      .where('scan_execution_id', '=', execution.id)
-      .where('network_id', '=', command.network.id)
-      .where('asset_address', '=', address)
-      .executeTakeFirst();
+    const existing = await this.runStage(
+      'discovery_persistence',
+      'postgresql',
+      () => this.options.database
+        .selectFrom('token_discoveries')
+        .selectAll()
+        .where('scan_execution_id', '=', execution.id)
+        .where('network_id', '=', command.network.id)
+        .where('asset_address', '=', address)
+        .executeTakeFirst(),
+    );
     const qualified = existing?.state === 'qualified';
 
     await this.persistDiscovery(execution, {
@@ -843,14 +1154,20 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
   }
 
   private async optionalDex(
+    execution: TokenScanExecutionRecord,
     address: string,
     chain: 'solana' | 'ethereum',
     failures: Set<string>,
   ): Promise<DexMarket | null> {
     try {
-      return await this.options.dexscreener.market(address, chain);
+      return await this.runStage(
+        'provider_enrichment',
+        'dexscreener',
+        () => this.options.dexscreener.market(address, chain),
+      );
     } catch (error) {
       securityFailure(failures, error, 'MARKET_PROVIDER_UNAVAILABLE');
+      await this.logNonTerminalFailure(execution, error, 'token scan optional market provider failed');
       return null;
     }
   }
@@ -860,12 +1177,24 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
     command: TokenScanCommand,
     result: ScanResult,
   ): Promise<void> {
-    await this.persistTerminalEvent(execution, command, result, null);
+    await this.runStage(
+      'terminal_persistence',
+      'postgresql',
+      () => this.persistTerminalEvent(execution, command, result, null),
+    );
   }
 
-  private async fail(execution: TokenScanExecutionRecord, errorCode: string): Promise<void> {
+  private async fail(
+    execution: TokenScanExecutionRecord,
+    errorCode: string,
+    result: ScanResult,
+  ): Promise<void> {
     const command = execution.request as unknown as TokenScanCommand;
-    await this.persistTerminalEvent(execution, command, { counts: emptyCounts(), providerFailures: [] }, errorCode);
+    await this.runStage(
+      'terminal_persistence',
+      'postgresql',
+      () => this.persistTerminalEvent(execution, command, result, errorCode),
+    );
   }
 
   private async persistTerminalEvent(
@@ -911,7 +1240,12 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
         .executeTakeFirst();
 
       if (update.numUpdatedRows !== 1n) {
-        throw new Error('Token scan terminal transition is no longer owned');
+        throw new ApplicationError(
+          'SCANNER_CLAIM_LOST',
+          'The token scan terminal transition is no longer owned',
+          409,
+          true,
+        );
       }
 
       const payload = {
@@ -966,12 +1300,39 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
 
     for (const execution of exhausted) {
       const command = execution.request as unknown as TokenScanCommand;
-      await this.persistTerminalEvent(
-        execution,
-        command,
-        { counts: emptyCounts(), providerFailures: [] },
-        'SCANNER_ATTEMPTS_EXHAUSTED',
-        true,
+      const result = await this.durableProgress(execution);
+      const providerFailures = new Set(result.providerFailures);
+
+      if (execution.last_error_code !== null && providerFailureCode(execution.last_error_code)) {
+        providerFailures.add(execution.last_error_code);
+      }
+
+      await this.runStage(
+        'terminal_persistence',
+        'postgresql',
+        () => this.persistTerminalEvent(
+          execution,
+          command,
+          { counts: result.counts, providerFailures: [...providerFailures].slice(0, 32) },
+          'SCANNER_ATTEMPTS_EXHAUSTED',
+          true,
+        ),
+      );
+      this.options.logger.error(
+        {
+          scanExecutionId: execution.id,
+          engineOperationId: await this.operationIdFor(execution),
+          workflowStage: 'terminal_persistence',
+          attemptNumber: execution.attempt_count,
+          errorClassification: 'attempts_exhausted',
+          errorCode: 'SCANNER_ATTEMPTS_EXHAUSTED',
+          priorErrorCode: execution.last_error_code,
+          retryable: false,
+          terminalOutcome: 'failed',
+          counts: result.counts,
+          providerFailures: [...providerFailures].slice(0, 32),
+        },
+        'token scan execution exhausted retry attempts',
       );
     }
   }
@@ -1134,24 +1495,213 @@ function unavailableSecurity(): ScannerSecurityResult {
   return { available: false, passed: null, score: null, risks: [], checks: {} };
 }
 
-function safeErrorCode(error: unknown): string {
-  if (error instanceof ScannerProviderError) {
-    return error.code;
+export function scannerErrorDiagnostic(error: unknown): ScannerErrorDiagnostic {
+  const workflow = error instanceof ScannerWorkflowError ? error : undefined;
+  const cause = workflow?.cause ?? error;
+  const workflowStage = workflow?.workflowStage ?? 'execution';
+  const contextualProvider = workflow?.provider ?? null;
+
+  if (cause instanceof ScannerProviderError) {
+    return {
+      workflowStage,
+      provider: cause.provider ?? contextualProvider,
+      classification: providerClassification(cause.code),
+      errorCode: cause.code,
+      sanitizedMessage: cause.message,
+      retryable: cause.retryable,
+      httpStatus: cause.statusCode,
+      timeout: cause.code === 'PROVIDER_TIMEOUT',
+      databaseCategory: null,
+      diagnosticStack: safeDiagnosticStack(cause),
+    };
   }
 
-  if (error instanceof ApplicationError) {
-    return error.code;
+  if (cause instanceof ApplicationError) {
+    return {
+      workflowStage,
+      provider: contextualProvider,
+      classification: cause.code === 'SCANNER_CLAIM_LOST'
+        ? 'lease_ownership'
+        : cause.code === 'SCANNER_VALUE_INVALID'
+          ? 'invalid_scanner_data'
+          : 'application',
+      errorCode: cause.code,
+      sanitizedMessage: sanitizeScannerDiagnostic(cause.message),
+      retryable: cause.retryable,
+      httpStatus: null,
+      timeout: false,
+      databaseCategory: null,
+      diagnosticStack: safeDiagnosticStack(cause),
+    };
   }
 
-  return 'SCANNER_EXECUTION_FAILED';
+  if (contextualProvider === 'postgresql' || postgresErrorCode(cause) !== null) {
+    const databaseCategory = databaseErrorCategory(cause);
+    const retryable = databaseErrorIsRetryable(cause);
+
+    return {
+      workflowStage,
+      provider: 'postgresql',
+      classification: 'database',
+      errorCode: retryable ? 'SCANNER_DATABASE_UNAVAILABLE' : 'SCANNER_DATABASE_FAILED',
+      sanitizedMessage: 'PostgreSQL scanner persistence failed',
+      retryable,
+      httpStatus: null,
+      timeout: databaseCategory === 'timeout',
+      databaseCategory,
+      diagnosticStack: safeDiagnosticStack(cause),
+    };
+  }
+
+  const message = cause instanceof Error ? cause.message : 'Unknown scanner exception';
+
+  return {
+    workflowStage,
+    provider: contextualProvider,
+    classification: 'unexpected_application',
+    errorCode: 'SCANNER_UNEXPECTED_ERROR',
+    sanitizedMessage: sanitizeScannerDiagnostic(message),
+    retryable: false,
+    httpStatus: null,
+    timeout: false,
+    databaseCategory: null,
+    diagnosticStack: safeDiagnosticStack(cause),
+  };
 }
 
-function isRetryable(error: unknown): boolean {
-  if (error instanceof ScannerProviderError || error instanceof ApplicationError) {
-    return error.retryable;
+export function sanitizeScannerDiagnostic(value: string): string {
+  return value
+    .replace(/\r|\n|\t/g, ' ')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/\b(authorization|api[_ -]?key|token|secret|password|credential)\b\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+:[^\s@]+@/gi, '$1[redacted]@')
+    .replace(/(https?:\/\/[^\s?]+)\?[^\s]+/gi, '$1?[redacted]')
+    .replace(/[^\x20-\x7E]/g, '?')
+    .slice(0, 512);
+}
+
+function safeErrorCode(error: unknown): string {
+  return scannerErrorDiagnostic(error).errorCode;
+}
+
+function diagnosticLogFields(diagnostic: ScannerErrorDiagnostic): Readonly<Record<string, unknown>> {
+  return {
+    workflowStage: diagnostic.workflowStage,
+    provider: diagnostic.provider,
+    errorClassification: diagnostic.classification,
+    errorCode: diagnostic.errorCode,
+    sanitizedErrorMessage: diagnostic.sanitizedMessage,
+    retryable: diagnostic.retryable,
+    httpStatus: diagnostic.httpStatus,
+    timeout: diagnostic.timeout,
+    databaseErrorCategory: diagnostic.databaseCategory,
+    diagnosticStack: diagnostic.diagnosticStack,
+  };
+}
+
+function providerFailureCode(code: string): boolean {
+  return code.startsWith('PROVIDER_')
+    || code.endsWith('_PROVIDER_UNAVAILABLE')
+    || code === 'MARKET_PROVIDER_UNAVAILABLE';
+}
+
+function providerClassification(code: string): string {
+  if (code === 'PROVIDER_AUTHENTICATION_FAILED') {
+    return 'provider_authentication';
   }
 
-  return true;
+  if (code === 'PROVIDER_RATE_LIMITED') {
+    return 'provider_rate_limit';
+  }
+
+  if (code === 'PROVIDER_TIMEOUT') {
+    return 'provider_timeout';
+  }
+
+  if (code === 'PROVIDER_SERVICE_FAILED' || code === 'PROVIDER_TRANSPORT_FAILED') {
+    return 'provider_service';
+  }
+
+  if (code === 'PROVIDER_RESPONSE_MALFORMED' || code === 'PROVIDER_RESPONSE_TOO_LARGE') {
+    return 'provider_malformed_response';
+  }
+
+  return code === 'PROVIDER_URL_INVALID' ? 'provider_configuration' : 'provider';
+}
+
+function postgresErrorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return null;
+  }
+
+  const code = (error as { readonly code?: unknown }).code;
+
+  if (typeof code !== 'string') {
+    return null;
+  }
+
+  return [
+    'ETIMEDOUT',
+    'ESOCKETTIMEDOUT',
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'EPIPE',
+    'ENOTFOUND',
+  ].includes(code) || /^[0-9A-Z]{5}$/.test(code)
+    ? code
+    : null;
+}
+
+function databaseErrorCategory(error: unknown): string {
+  const code = postgresErrorCode(error);
+
+  if (code === null) {
+    return 'unknown';
+  }
+
+  if (['ETIMEDOUT', 'ESOCKETTIMEDOUT'].includes(code)) {
+    return 'timeout';
+  }
+
+  if (['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ENOTFOUND'].includes(code) || code.startsWith('08')) {
+    return 'connection';
+  }
+
+  if (code.startsWith('40')) {
+    return 'transaction';
+  }
+
+  if (code === '55P03') {
+    return 'lock';
+  }
+
+  if (code.startsWith('53') || code.startsWith('57') || code.startsWith('58')) {
+    return 'resource';
+  }
+
+  if (code.startsWith('23')) {
+    return 'integrity';
+  }
+
+  return 'other';
+}
+
+function databaseErrorIsRetryable(error: unknown): boolean {
+  return ['connection', 'lock', 'resource', 'timeout', 'transaction']
+    .includes(databaseErrorCategory(error));
+}
+
+function safeDiagnosticStack(error: unknown): string | null {
+  if (!(error instanceof Error) || error.stack === undefined) {
+    return null;
+  }
+
+  const frames = error.stack.split('\n')
+    .slice(1, 9)
+    .filter((line) => /^\s*at /.test(line))
+    .map((line) => sanitizeScannerDiagnostic(line));
+
+  return frames.length === 0 ? null : frames.join('\n');
 }
 
 function retryDelayMs(attemptCount: number): number {
@@ -1163,5 +1713,6 @@ function securityFailure(
   error: unknown,
   fallback = 'PROVIDER_UNAVAILABLE',
 ): void {
-  failures.add(error instanceof ScannerProviderError ? error.code : fallback);
+  const cause = error instanceof ScannerWorkflowError ? error.cause : error;
+  failures.add(cause instanceof ScannerProviderError ? cause.code : fallback);
 }

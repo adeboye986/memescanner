@@ -13,6 +13,7 @@ use App\Models\TradingEngineEvent;
 use App\Models\TradingEngineScanRequest;
 use App\Models\User;
 use App\Models\UserTradingPreference;
+use App\Services\SystemActivityService;
 use App\Services\TradingEngine\TradingEngineCanonicalJson;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
 use App\Services\TradingEngine\TradingEngineScanDeliveryTracker;
@@ -191,10 +192,48 @@ class TradingEngineTokenScanTest extends TestCase
         $this->assertSame('completed', $activity->status);
         $this->assertSame(2, data_get($activity->result_summary, 'counts.qualified'));
         $this->assertSame(1, data_get($activity->result_summary, 'counts.opportunities_created'));
+        $this->assertSame(
+            'SECURITY_PROVIDER_UNAVAILABLE',
+            data_get($activity->result_summary, 'provider_failures.0.code'),
+        );
+        $presented = app(SystemActivityService::class)->present($activity);
+        $this->assertSame(
+            'SECURITY_PROVIDER_UNAVAILABLE',
+            data_get($presented, 'result_summary.provider_failures.0.code'),
+        );
 
         app(TradingEngineScanDeliveryTracker::class)
             ->acceptanceUnknown($request, 'JOB_FAILED', 1);
         $this->assertSame(TradingEngineScanRequest::STATUS_PROJECTED, $request->fresh()->status);
+    }
+
+    public function test_successful_scanner_completion_with_no_opportunities_is_terminal_and_idempotent(): void
+    {
+        Queue::fake([SubmitTradingEngineTokenScan::class]);
+        $request = $this->queueEngineScan();
+        $scanId = '01J0000000000000000000000M';
+        $event = $this->scannerTerminalEvent(
+            $request,
+            $scanId,
+            '01J0000000000000000000000N',
+            'succeeded',
+            null,
+        );
+        $projector = app(TradingEngineScanProjector::class);
+
+        $this->assertTrue($projector->project($event->event_id));
+        $this->assertTrue($projector->project($event->event_id));
+
+        $request->refresh();
+        $activity = $request->activity()->firstOrFail();
+        $event->refresh();
+        $this->assertSame(TradingEngineScanRequest::STATUS_PROJECTED, $request->status);
+        $this->assertSame('completed', $activity->status);
+        $this->assertSame(0, data_get($activity->result_summary, 'counts.opportunities_created'));
+        $this->assertSame(0, data_get($activity->result_summary, 'counts.opportunities_existing'));
+        $this->assertSame(TradingEngineEvent::STATUS_PROJECTED, $event->handling_status);
+        $this->assertSame(1, $event->handling_attempts);
+        $this->assertDatabaseCount('trade_opportunities', 0);
     }
 
     public function test_out_of_order_opportunity_waits_for_authoritative_scan_identity(): void
@@ -384,6 +423,59 @@ class TradingEngineTokenScanTest extends TestCase
         $this->assertSame($request->system_activity_id, $opportunity->systemActivities()->sole()->getKey());
         $this->assertSame($engineOpportunityId, $opportunity->engineOpportunityLink?->engine_opportunity_id);
         $this->assertDatabaseCount('paper_positions', 0);
+    }
+
+    private function scannerTerminalEvent(
+        TradingEngineScanRequest $request,
+        string $scanId,
+        string $eventId,
+        string $outcome,
+        ?string $errorCode,
+    ): TradingEngineEvent {
+        $payload = [
+            'scan_execution_id' => $scanId,
+            'source' => data_get($request->payload, 'source'),
+            'subject' => data_get($request->payload, 'subject'),
+            'scanner' => $request->scanner,
+            'network' => data_get($request->payload, 'network'),
+            'outcome' => $outcome,
+            'counts' => [
+                'discovered' => 0,
+                'examined' => 0,
+                'qualified' => 0,
+                'opportunities_created' => 0,
+                'opportunities_existing' => 0,
+                'skipped' => 0,
+                'failed' => 0,
+            ],
+            'provider_failures' => [],
+            'error_code' => $errorCode,
+            'completed_at' => now()->toIso8601String(),
+        ];
+
+        return TradingEngineEvent::query()->create([
+            'event_id' => $eventId,
+            'event_type' => $errorCode === null
+                ? 'token.scan.completed.v1'
+                : 'token.scan.failed.v1',
+            'schema_version' => 1,
+            'occurred_at' => now(),
+            'producer' => 'trading-engine',
+            'aggregate_type' => 'token_scan_execution',
+            'aggregate_id' => $scanId,
+            'aggregate_version' => 1,
+            'correlation_id' => 'scanner-recovery-test',
+            'causation_id' => $scanId,
+            'idempotency_key' => 'token-scan:'.$scanId.':terminal:v1',
+            'traceparent' => '00-11111111111111111111111111111111-2222222222222222-01',
+            'payload_sha256' => str_repeat('1', 64),
+            'raw_body_sha256' => str_repeat('2', 64),
+            'event_envelope' => ['event_id' => $eventId],
+            'payload' => $payload,
+            'handling_status' => TradingEngineEvent::STATUS_STORED,
+            'handling_attempts' => 0,
+            'received_at' => now()->subMinutes(10),
+        ]);
     }
 
     private function queueEngineScan(

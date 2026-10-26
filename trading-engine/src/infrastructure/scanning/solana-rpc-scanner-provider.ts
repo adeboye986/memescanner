@@ -42,7 +42,7 @@ export class SolanaRpcScannerProvider {
     const totalSupply = finiteNumber(supply?.['uiAmountString'] ?? supply?.['uiAmount']);
 
     if (accounts === undefined || totalSupply === undefined || totalSupply <= 0) {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, null, 'solana_rpc');
     }
 
     const balances = new Map<string, number>();
@@ -106,11 +106,12 @@ export class SolanaRpcScannerProvider {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: this.requestId, method, params }),
       timeoutMs: this.timeoutMs,
+      provider: 'solana_rpc',
       ...(signal === undefined ? {} : { signal }),
     }));
 
     if (payload === undefined || payload['error'] !== undefined) {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, null, 'solana_rpc');
     }
 
     return payload['result'];

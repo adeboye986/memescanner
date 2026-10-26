@@ -1,10 +1,18 @@
 export const SCANNER_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
+export type ScannerProviderName =
+  | 'birdeye'
+  | 'dexscreener'
+  | 'geckoterminal'
+  | 'goplus'
+  | 'solana_rpc';
+
 export class ScannerProviderError extends Error {
   public constructor(
     public readonly code: string,
     public readonly retryable: boolean,
     public readonly statusCode: number | null = null,
+    public readonly provider: ScannerProviderName | null = null,
   ) {
     super('Scanner provider request failed');
     this.name = 'ScannerProviderError';
@@ -17,6 +25,7 @@ export interface ScannerHttpRequest {
   readonly body?: string;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
+  readonly provider?: ScannerProviderName;
 }
 
 export class ScannerHttpClient {
@@ -24,13 +33,13 @@ export class ScannerHttpClient {
 
   public async json(url: URL, request: ScannerHttpRequest): Promise<unknown> {
     if (url.protocol !== 'https:') {
-      throw new ScannerProviderError('PROVIDER_URL_INVALID', false);
+      throw new ScannerProviderError('PROVIDER_URL_INVALID', false, null, request.provider ?? null);
     }
 
     let response: Response;
+    const timeout = AbortSignal.timeout(request.timeoutMs);
 
     try {
-      const timeout = AbortSignal.timeout(request.timeoutMs);
       const signal = request.signal === undefined
         ? timeout
         : AbortSignal.any([timeout, request.signal]);
@@ -44,20 +53,35 @@ export class ScannerHttpClient {
         ...(request.body === undefined ? {} : { body: request.body }),
         signal,
       });
-    } catch {
+    } catch (error) {
       const aborted = request.signal?.aborted === true;
+      const timedOut = !aborted && (timeout.aborted || isTimeoutError(error));
       throw new ScannerProviderError(
-        aborted ? 'PROVIDER_REQUEST_ABORTED' : 'PROVIDER_TRANSPORT_FAILED',
+        aborted
+          ? 'PROVIDER_REQUEST_ABORTED'
+          : timedOut ? 'PROVIDER_TIMEOUT' : 'PROVIDER_TRANSPORT_FAILED',
         true,
+        null,
+        request.provider ?? null,
       );
     }
 
     if (response.status < 200 || response.status >= 300) {
       await response.body?.cancel();
+      const authenticationFailure = response.status === 401 || response.status === 403;
+      const timeoutFailure = response.status === 408;
       throw new ScannerProviderError(
-        response.status === 429 ? 'PROVIDER_RATE_LIMITED' : 'PROVIDER_HTTP_ERROR',
-        response.status === 429 || response.status >= 500,
+        authenticationFailure
+          ? 'PROVIDER_AUTHENTICATION_FAILED'
+          : timeoutFailure
+            ? 'PROVIDER_TIMEOUT'
+            : response.status === 429
+              ? 'PROVIDER_RATE_LIMITED'
+              : response.status >= 500 ? 'PROVIDER_SERVICE_FAILED' : 'PROVIDER_HTTP_ERROR',
+        !authenticationFailure
+          && (timeoutFailure || response.status === 429 || response.status >= 500),
         response.status,
+        request.provider ?? null,
       );
     }
 
@@ -65,21 +89,26 @@ export class ScannerHttpClient {
 
     if (length !== null && /^\d+$/.test(length) && Number(length) > SCANNER_MAX_RESPONSE_BYTES) {
       await response.body?.cancel();
-      throw new ScannerProviderError('PROVIDER_RESPONSE_TOO_LARGE', false, response.status);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_TOO_LARGE', false, response.status, request.provider ?? null);
     }
 
     const bytes = new Uint8Array(await response.arrayBuffer());
 
     if (bytes.byteLength > SCANNER_MAX_RESPONSE_BYTES) {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_TOO_LARGE', false, response.status);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_TOO_LARGE', false, response.status, request.provider ?? null);
     }
 
     try {
       return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
     } catch {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, response.status);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, response.status, request.provider ?? null);
     }
   }
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error
+    && error.name === 'TimeoutError';
 }
 
 export function objectValue(value: unknown): Readonly<Record<string, unknown>> | undefined {

@@ -7,10 +7,14 @@ use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
 use App\Enums\TradeOpportunityStatus;
 use App\Jobs\ProjectTradingEngineEvent;
+use App\Models\SystemActivity;
 use App\Models\TradeOpportunity;
 use App\Models\TradingEngineEvent;
 use App\Models\TradingEngineOpportunityLink;
+use App\Models\TradingEngineScanRequest;
 use App\Models\User;
+use App\Services\SystemActivityService;
+use App\Services\TradingEngine\TradingEngineCanonicalJson;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
 use App\Services\TradingEngine\TradingEngineProjectionEligibility;
 use App\Services\TradingEngine\TradingEngineProjectionRecovery;
@@ -242,6 +246,138 @@ class TradingEngineProjectionRecoveryTest extends TestCase
             ProjectTradingEngineEvent::class,
             fn (ProjectTradingEngineEvent $job): bool => $job->eventId === $evaluation->event_id,
         );
+    }
+
+    public function test_stored_scanner_failure_is_recovered_and_clears_running_dashboard_state(): void
+    {
+        Queue::fake([ProjectTradingEngineEvent::class]);
+        config()->set([
+            'services.trading_engine.opportunity_projection_enabled' => false,
+            'services.trading_engine.scanner_integration_enabled' => true,
+        ]);
+        $user = User::factory()->create();
+        $activity = SystemActivity::factory()->for($user)->create([
+            'action' => 'token-scan',
+            'chain' => Chain::Solana,
+            'command' => 'tokens:scan',
+            'label' => 'Run Token Scan',
+            'status' => 'running',
+            'started_at' => now()->subMinutes(10),
+            'finished_at' => null,
+            'duration_seconds' => null,
+            'exit_code' => null,
+            'output' => null,
+            'error_message' => null,
+        ]);
+        $scanId = '01J0000000000000000000000H';
+        $payload = [
+            'schema_version' => 1,
+            'source' => [
+                'system' => 'meme-scanner-laravel',
+                'activity_id' => (string) $activity->getKey(),
+            ],
+            'subject' => ['control_plane_user_id' => (string) $user->getKey()],
+            'scanner' => 'new-token',
+            'network' => ['id' => 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
+            'policy' => ['max_chase_percent' => '35', 'momentum_birdeye_budget' => 1],
+        ];
+        $request = TradingEngineScanRequest::query()->create([
+            'system_activity_id' => $activity->getKey(),
+            'user_id' => $user->getKey(),
+            'scanner' => 'new-token',
+            'network_id' => 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+            'entry_mode' => 'signal',
+            'idempotency_key' => 'token-scan:laravel:'.$activity->getKey().':v1',
+            'payload_sha256' => app(TradingEngineCanonicalJson::class)->hash($payload),
+            'payload' => $payload,
+            'status' => TradingEngineScanRequest::STATUS_ACCEPTED,
+            'engine_operation_id' => '01J0000000000000000000000J',
+            'engine_scan_execution_id' => $scanId,
+            'accepted_at' => now()->subMinutes(10),
+        ]);
+        $terminalPayload = [
+            'scan_execution_id' => $scanId,
+            'source' => $payload['source'],
+            'subject' => $payload['subject'],
+            'scanner' => 'new-token',
+            'network' => $payload['network'],
+            'outcome' => 'failed',
+            'counts' => [
+                'discovered' => 0,
+                'examined' => 0,
+                'qualified' => 0,
+                'opportunities_created' => 0,
+                'opportunities_existing' => 0,
+                'skipped' => 0,
+                'failed' => 0,
+            ],
+            'provider_failures' => [],
+            'error_code' => 'SCANNER_UNEXPECTED_ERROR',
+            'completed_at' => now()->toIso8601String(),
+        ];
+        $event = TradingEngineEvent::query()->create([
+            'event_id' => '01J0000000000000000000000K',
+            'event_type' => 'token.scan.failed.v1',
+            'schema_version' => 1,
+            'occurred_at' => now(),
+            'producer' => 'trading-engine',
+            'aggregate_type' => 'token_scan_execution',
+            'aggregate_id' => $scanId,
+            'aggregate_version' => 1,
+            'correlation_id' => 'scanner-recovery-test',
+            'causation_id' => $scanId,
+            'idempotency_key' => 'token-scan:'.$scanId.':terminal:v1',
+            'traceparent' => self::TRACEPARENT,
+            'payload_sha256' => str_repeat('1', 64),
+            'raw_body_sha256' => str_repeat('2', 64),
+            'event_envelope' => ['event_id' => '01J0000000000000000000000K'],
+            'payload' => $terminalPayload,
+            'handling_status' => TradingEngineEvent::STATUS_STORED,
+            'handling_attempts' => 0,
+            'received_at' => now()->subMinutes(10),
+        ]);
+
+        $this->assertSame(
+            ['token-scan:solana'],
+            app(SystemActivityService::class)->runningActions($user),
+        );
+
+        $result = app(TradingEngineProjectionRecovery::class)->recover();
+
+        $this->assertSame([
+            'enabled' => true,
+            'selected' => 1,
+            'dispatched' => 1,
+            'failed' => 0,
+        ], $result);
+        $job = Queue::pushed(ProjectTradingEngineEvent::class)->first();
+        $this->assertInstanceOf(ProjectTradingEngineEvent::class, $job);
+        app()->call([$job, 'handle']);
+        app()->call([$job, 'handle']);
+
+        $request->refresh();
+        $activity->refresh();
+        $event->refresh();
+        $this->assertSame(TradingEngineScanRequest::STATUS_PROJECTED, $request->status);
+        $this->assertSame('failed', $activity->status);
+        $this->assertSame(1, $activity->exit_code);
+        $this->assertSame(
+            'The TypeScript scanner did not complete successfully.',
+            $activity->error_message,
+        );
+        $this->assertSame(
+            'SCANNER_UNEXPECTED_ERROR',
+            data_get($activity->result_summary, 'error_code'),
+        );
+        $this->assertSame([], app(SystemActivityService::class)->runningActions($user));
+        $presented = app(SystemActivityService::class)->present($activity);
+        $this->assertSame(
+            'SCANNER_UNEXPECTED_ERROR',
+            data_get($presented, 'result_summary.error_code'),
+        );
+        $this->assertStringContainsString('SCANNER_UNEXPECTED_ERROR', $presented['summary']);
+        $this->assertSame(TradingEngineEvent::STATUS_PROJECTED, $event->handling_status);
+        $this->assertSame(1, $event->handling_attempts);
     }
 
     public function test_terminal_and_nonprojectable_events_are_never_recovered(): void

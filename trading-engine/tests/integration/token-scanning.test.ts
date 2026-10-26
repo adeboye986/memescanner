@@ -1,6 +1,6 @@
 import pino from 'pino';
 import type { Kysely } from 'kysely';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StartTokenScanCommand } from '../../src/application/commands/start-token-scan-command.js';
 import { StartTokenScanCommandHandler } from '../../src/application/handlers/start-token-scan-command-handler.js';
@@ -215,6 +215,243 @@ describe('PostgreSQL token scanner workflow', () => {
     await scans.releaseClaims(database, 'worker-one');
   });
 
+  it('fails an unexpected discovery exception once with a safe diagnostic code', async () => {
+    const accepted = await handler.execute(startCommand());
+    const scannerHttp = new ScannerHttpClient(providerFetch());
+    const birdeye = new BirdeyeScannerProvider(
+      scannerHttp,
+      new URL('https://public-api.birdeye.so'),
+      'test-key',
+      1_000,
+    );
+    vi.spyOn(birdeye, 'newListings').mockRejectedValue(
+      new Error('Bearer private-value https://user:password@example.test/path?api_key=private'),
+    );
+    const dispatcher = scannerDispatcher(database, scans, providerFetch(), birdeye);
+
+    await expect(dispatcher.dispatchBatch()).resolves.toEqual({ didWork: true });
+
+    const execution = await database
+      .selectFrom('token_scan_executions')
+      .selectAll()
+      .where('id', '=', accepted.scanExecutionId)
+      .executeTakeFirstOrThrow();
+    const terminal = await database
+      .selectFrom('event_outbox')
+      .selectAll()
+      .where('event_type', '=', 'token.scan.failed.v1')
+      .executeTakeFirstOrThrow();
+
+    expect(execution).toMatchObject({
+      state: 'failed',
+      attempt_count: 1,
+      last_error_code: 'SCANNER_UNEXPECTED_ERROR',
+    });
+    expect(terminal.envelope.payload).toMatchObject({
+      scan_execution_id: accepted.scanExecutionId,
+      outcome: 'failed',
+      error_code: 'SCANNER_UNEXPECTED_ERROR',
+      provider_failures: [],
+    });
+    expect(JSON.stringify(terminal.envelope)).not.toContain('private-value');
+    expect(JSON.stringify(terminal.envelope)).not.toContain('password');
+  });
+
+  it('does not retry a provider authentication failure', async () => {
+    const accepted = await handler.execute(startCommand());
+    const authenticationFailure: typeof fetch = () => Promise.resolve(new Response('', {
+      status: 401,
+    }));
+    const dispatcher = scannerDispatcher(database, scans, authenticationFailure);
+
+    await expect(dispatcher.dispatchBatch()).resolves.toEqual({ didWork: true });
+    await expect(dispatcher.dispatchBatch()).resolves.toEqual({ didWork: false });
+
+    const execution = await database
+      .selectFrom('token_scan_executions')
+      .selectAll()
+      .where('id', '=', accepted.scanExecutionId)
+      .executeTakeFirstOrThrow();
+    const terminal = await database
+      .selectFrom('event_outbox')
+      .selectAll()
+      .where('event_type', '=', 'token.scan.failed.v1')
+      .executeTakeFirstOrThrow();
+
+    expect(execution).toMatchObject({
+      state: 'failed',
+      attempt_count: 1,
+      last_error_code: 'PROVIDER_AUTHENTICATION_FAILED',
+      provider_failures: ['PROVIDER_AUTHENTICATION_FAILED'],
+    });
+    expect(terminal.envelope.payload).toMatchObject({
+      error_code: 'PROVIDER_AUTHENTICATION_FAILED',
+      provider_failures: ['PROVIDER_AUTHENTICATION_FAILED'],
+    });
+  });
+
+  it('retries rate limits within bounds and becomes terminal on the fifth attempt', async () => {
+    const accepted = await handler.execute(startCommand());
+    const rateLimited: typeof fetch = () => Promise.resolve(new Response('', { status: 429 }));
+    const dispatcher = scannerDispatcher(database, scans, rateLimited);
+
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      await expect(dispatcher.dispatchBatch()).resolves.toEqual({ didWork: true });
+
+      if (attempt < 5) {
+        const retrying = await database
+          .selectFrom('token_scan_executions')
+          .selectAll()
+          .where('id', '=', accepted.scanExecutionId)
+          .executeTakeFirstOrThrow();
+        expect(retrying).toMatchObject({
+          state: 'pending',
+          attempt_count: attempt,
+          last_error_code: 'PROVIDER_RATE_LIMITED',
+        });
+        await database
+          .updateTable('token_scan_executions')
+          .set({ next_attempt_at: new Date(Date.now() - 1_000) })
+          .where('id', '=', accepted.scanExecutionId)
+          .execute();
+      }
+    }
+
+    const failed = await database
+      .selectFrom('token_scan_executions')
+      .selectAll()
+      .where('id', '=', accepted.scanExecutionId)
+      .executeTakeFirstOrThrow();
+    const terminal = await database
+      .selectFrom('event_outbox')
+      .selectAll()
+      .where('event_type', '=', 'token.scan.failed.v1')
+      .executeTakeFirstOrThrow();
+
+    expect(failed).toMatchObject({
+      state: 'failed',
+      attempt_count: 5,
+      last_error_code: 'PROVIDER_RATE_LIMITED',
+      provider_failures: ['PROVIDER_RATE_LIMITED'],
+    });
+    expect(terminal.envelope.payload).toMatchObject({
+      error_code: 'PROVIDER_RATE_LIMITED',
+      provider_failures: ['PROVIDER_RATE_LIMITED'],
+    });
+  });
+
+  it('classifies a retryable database failure without publishing a terminal event', async () => {
+    const accepted = await handler.execute(startCommand());
+
+    class FailingLeaseRepository extends TokenScanRepository {
+      public override renewLease(): Promise<boolean> {
+        return Promise.reject(Object.assign(new Error('database credential detail'), {
+          code: '08006',
+        }));
+      }
+    }
+
+    const dispatcher = scannerDispatcher(
+      database,
+      new FailingLeaseRepository(),
+      providerFetch(),
+    );
+
+    await expect(dispatcher.dispatchBatch()).resolves.toEqual({ didWork: true });
+
+    const execution = await database
+      .selectFrom('token_scan_executions')
+      .selectAll()
+      .where('id', '=', accepted.scanExecutionId)
+      .executeTakeFirstOrThrow();
+    const terminalEvents = await database
+      .selectFrom('event_outbox')
+      .select('id')
+      .where('event_type', '=', 'token.scan.failed.v1')
+      .execute();
+
+    expect(execution).toMatchObject({
+      state: 'pending',
+      attempt_count: 1,
+      last_error_code: 'SCANNER_DATABASE_UNAVAILABLE',
+    });
+    expect(terminalEvents).toEqual([]);
+  });
+
+  it('preserves durable partial progress when an expired fifth attempt is exhausted', async () => {
+    const accepted = await handler.execute(startCommand());
+    const claimed = (await scans.claimBatch(database, 'expired-worker', 1, 60_000))[0];
+
+    expect(claimed).toBeDefined();
+    if (claimed === undefined) {
+      throw new Error('The scanner execution was not claimed');
+    }
+
+    await scans.recordDiscovery(database, claimed, {
+      id: '01J0000000000000000000000P',
+      scanExecutionId: claimed.id,
+      networkId: claimed.network_id,
+      assetAddress: lowLiquidityAddress,
+      symbol: 'LOW',
+      name: 'Low liquidity token',
+      provider: 'birdeye',
+      discoveryIndex: 0,
+      state: 'skipped',
+      reasonCode: 'DISCOVERY_LIQUIDITY_BELOW_MINIMUM',
+      marketSnapshot: null,
+      securitySnapshot: null,
+      qualificationSnapshot: null,
+      opportunityId: null,
+    });
+    await database
+      .updateTable('token_scan_executions')
+      .set({
+        attempt_count: 5,
+        last_error_code: 'PROVIDER_TIMEOUT',
+        lease_expires_at: new Date(Date.now() - 1_000),
+      })
+      .where('id', '=', accepted.scanExecutionId)
+      .execute();
+
+    const dispatcher = scannerDispatcher(database, scans, providerFetch());
+    await expect(dispatcher.dispatchBatch()).resolves.toEqual({ didWork: false });
+
+    const execution = await database
+      .selectFrom('token_scan_executions')
+      .selectAll()
+      .where('id', '=', accepted.scanExecutionId)
+      .executeTakeFirstOrThrow();
+    const terminal = await database
+      .selectFrom('event_outbox')
+      .selectAll()
+      .where('event_type', '=', 'token.scan.failed.v1')
+      .executeTakeFirstOrThrow();
+
+    expect(execution).toMatchObject({
+      state: 'failed',
+      discovered_count: 1,
+      examined_count: 1,
+      qualified_count: 0,
+      skipped_count: 1,
+      failed_count: 0,
+      last_error_code: 'SCANNER_ATTEMPTS_EXHAUSTED',
+      provider_failures: ['PROVIDER_TIMEOUT'],
+    });
+    expect(terminal.envelope.payload).toMatchObject({
+      error_code: 'SCANNER_ATTEMPTS_EXHAUSTED',
+      counts: {
+        discovered: 1,
+        examined: 1,
+        qualified: 0,
+        opportunities_created: 0,
+        opportunities_existing: 0,
+        skipped: 1,
+        failed: 0,
+      },
+      provider_failures: ['PROVIDER_TIMEOUT'],
+    });
+  });
+
   it('rejects a user outside the independent engine canary without durable intake', async () => {
     await expect(handler.execute({
       ...startCommand(),
@@ -233,6 +470,45 @@ describe('PostgreSQL token scanner workflow', () => {
       .execute()).resolves.toEqual([]);
   });
 });
+
+function scannerDispatcher(
+  database: Kysely<Database>,
+  repository: TokenScanRepository,
+  fetchImplementation: typeof fetch,
+  birdeye?: BirdeyeScannerProvider,
+): TokenScanDispatcher {
+  const scannerHttp = new ScannerHttpClient(fetchImplementation);
+  const outbox = new OutboxRepository();
+
+  return new TokenScanDispatcher({
+    database,
+    repository,
+    outbox,
+    opportunities: new RecordOpportunityCommandHandler(
+      database,
+      new CommandInboxRepository(),
+      new OpportunityRepository(),
+      outbox,
+    ),
+    birdeye: birdeye ?? new BirdeyeScannerProvider(
+      scannerHttp,
+      new URL('https://public-api.birdeye.so'),
+      'test-key',
+      1_000,
+    ),
+    dexscreener: new DexScreenerScannerProvider(scannerHttp, 1_000),
+    geckoTerminal: new GeckoTerminalScannerProvider(scannerHttp, 1_000),
+    goplus: new GoPlusScannerProvider(scannerHttp, 1_000),
+    solanaRpc: new SolanaRpcScannerProvider(
+      scannerHttp,
+      new URL('https://rpc.example.test'),
+      1_000,
+    ),
+    logger: pino({ level: 'silent' }),
+    batchSize: 1,
+    leaseDurationMs: 300_000,
+  });
+}
 
 function startCommand(): StartTokenScanCommand {
   return {

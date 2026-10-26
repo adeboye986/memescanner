@@ -80,7 +80,7 @@ export class GoPlusScannerProvider {
     const payload = objectValue(await this.request(url, signal));
 
     if (payload?.['code'] !== 1) {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, null, 'goplus');
     }
 
     const result = objectValue(payload['result']);
@@ -125,6 +125,7 @@ export class GoPlusScannerProvider {
         ? {}
         : { authorization: `Bearer ${this.accessToken}` },
       timeoutMs: this.timeoutMs,
+      provider: 'goplus',
       ...(signal === undefined ? {} : { signal }),
     });
   }

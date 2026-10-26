@@ -79,6 +79,33 @@ Before activation, verify through the approved secret/configuration process with
 - Duplicate API commands, queue delivery, terminal webhooks, and opportunity events are idempotent.
 - Provider bodies and credentials are neither persisted nor returned to the browser; only bounded safe codes are projected.
 
+## Failure diagnostics and terminal-event recovery
+
+This diagnostics correction is schema-compatible with the existing PostgreSQL migration 010 and Laravel scanner-request migration. It adds no database migration. Deploy the TypeScript and Laravel changes with scanner submission paused and all old queue/engine workers stopped, then restart only bounded workers from the same reviewed release.
+
+Scanner logs now correlate scan execution and engine operation IDs with the workflow stage, provider, attempt number, safe error classification/code, retryability, delay, HTTP status, timeout flag, database category, terminal outcome, durable counts, and bounded provider-failure codes. Unexpected messages and stack frames are sanitized before logging. Webhooks and dashboard projections still receive only stable codes and structured counts; they never receive exception text, provider bodies, request payloads, credentials, or database URLs.
+
+Permanent authentication, configuration, malformed-response, invalid-data, and unexpected-application failures are not retried automatically. Rate limits, timeouts, service/transport failures, and retryable PostgreSQL connection/transaction/lock/resource failures remain bounded by the existing five-attempt fence. Expired fifth attempts publish one terminal event using durable discovery rows rather than replacing partial progress with zeroes.
+
+### Existing stored scanner event 5479
+
+Recovery of inbox row 5479 is a targeted Laravel projection operation, not a scanner replay. It requires separate production authorization after both codebases and new-code queue workers are deployed. Do not generate another scan, edit SQLite manually, or invent an event identifier.
+
+First resolve the public engine event identifier with a read-only SQLite query against the approved database path:
+
+```bash
+sqlite3 -readonly /approved/path/database.sqlite \
+  "select id, event_id, event_type, handling_status, handling_attempts, handling_error_code, next_handling_at from trading_engine_event_inbox where id = 5479;"
+```
+
+Stop unless the row is token.scan.failed.v1, remains recoverable (stored or due retryable), and its event_id is the expected 26-character identifier. With TRADING_ENGINE_ENABLED=true and scanner integration still deliberately enabled, dispatch only that public identifier:
+
+```bash
+php artisan trading-engine:retry-projection 01XXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+Replace the placeholder with the read-only query result, not numeric row ID 5479. Let only a bounded new-release queue worker consume the job. If an active lease blocks the command, wait for the configured lease to expire; do not clear it manually. Then verify read-only that the inbox row is projected with one handling attempt, the scanner request is projected, activity 65630 is failed, and the dashboard no longer reports that scan as running. Repeating projection is idempotent, but a second manual dispatch is unnecessary.
+
 ## Stop conditions
 
 Stop with scanner flags off if any of the following occurs:

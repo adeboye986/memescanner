@@ -44,11 +44,12 @@ export class DexScreenerScannerProvider {
     const url = new URL('/token-profiles/latest/v1', this.baseUrl);
     const payload = arrayValue(await this.client.json(url, {
       timeoutMs: this.timeoutMs,
+      provider: 'dexscreener',
       ...(signal === undefined ? {} : { signal }),
     }));
 
     if (payload === undefined) {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, null, 'dexscreener');
     }
 
     const seen = new Set<string>();
@@ -85,11 +86,12 @@ export class DexScreenerScannerProvider {
     const url = new URL(`/token-pairs/v1/${chain}/${address}`, this.baseUrl);
     const payload = arrayValue(await this.client.json(url, {
       timeoutMs: this.timeoutMs,
+      provider: 'dexscreener',
       ...(signal === undefined ? {} : { signal }),
     }));
 
     if (payload === undefined) {
-      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false);
+      throw new ScannerProviderError('PROVIDER_RESPONSE_MALFORMED', false, null, 'dexscreener');
     }
 
     const equals = (left: string): boolean => chain === 'ethereum'
