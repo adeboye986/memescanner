@@ -201,6 +201,18 @@ export function isSolanaAddress(address: string): boolean {
 }
 
 function assertSourceSemantics(command: RecordOpportunityCommand['body']): void {
+  const internalSource = command.source.system === 'meme-scanner-trading-engine';
+  const hasScanExecution = command.source.scan_execution_id !== undefined;
+
+  if (internalSource !== hasScanExecution) {
+    throw new ApplicationError(
+      'VALIDATION_FAILED',
+      'The opportunity source does not match the scanner ownership contract',
+      400,
+      false,
+    );
+  }
+
   const volume = command.market_snapshot.volume_usd;
   const requiresDexscreener = command.network.id === ETHEREUM_MAINNET_ID
     || command.source.scanner === 'momentum';

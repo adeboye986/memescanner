@@ -5,13 +5,11 @@ namespace App\Services\TradingEngine;
 use App\Chain;
 use App\Enums\EntryMode;
 use App\Enums\ExecutionMode;
-use App\Jobs\SubmitTradingEnginePaperEntry;
 use App\Models\PaperPosition;
 use App\Models\TradeOpportunity;
 use App\Models\TradingEngineOpportunityEvaluation;
 use App\Models\TradingEngineOpportunityLink;
 use App\Models\TradingEnginePaperEntryIntent;
-use Illuminate\Support\Facades\DB;
 use LogicException;
 
 class TradingEnginePaperEntryIntegration
@@ -19,6 +17,7 @@ class TradingEnginePaperEntryIntegration
     public function __construct(
         private TradingEnginePaperEntryCommandFactory $commands,
         private TradingEngineCanonicalJson $canonicalJson,
+        private TradingEnginePaperDeliveryTracker $deliveries,
     ) {}
 
     public function routes(TradeOpportunity $opportunity): bool
@@ -41,46 +40,46 @@ class TradingEnginePaperEntryIntegration
             throw new LogicException('The opportunity is outside the engine PAPER entry cutover boundary.');
         }
 
-        $existing = TradingEnginePaperEntryIntent::query()
-            ->where('trade_opportunity_id', $opportunity->getKey())
-            ->first();
+        return $this->deliveries->queueEntry(function () use (
+            $opportunity,
+            $link,
+            $evaluation,
+        ): ?TradingEnginePaperEntryIntent {
+            $existing = TradingEnginePaperEntryIntent::query()
+                ->where('trade_opportunity_id', $opportunity->getKey())
+                ->lockForUpdate()
+                ->first();
 
-        if ($existing instanceof TradingEnginePaperEntryIntent) {
-            if ($existing->opportunity_link_id !== $link->getKey()
-                || $existing->opportunity_evaluation_id !== $evaluation->getKey()
-                || $existing->user_id !== $opportunity->user_id
-                || $existing->idempotency_key !== 'paper:entry:laravel:'.$opportunity->getKey().':v1'
-                || ! is_array($existing->payload)
-                || $this->canonicalJson->hash($existing->payload) !== $existing->payload_sha256) {
-                throw new LogicException('The existing engine PAPER entry intent failed integrity validation.');
+            if ($existing instanceof TradingEnginePaperEntryIntent) {
+                if ($existing->opportunity_link_id !== $link->getKey()
+                    || $existing->opportunity_evaluation_id !== $evaluation->getKey()
+                    || $existing->user_id !== $opportunity->user_id
+                    || $existing->idempotency_key !== 'paper:entry:laravel:'.$opportunity->getKey().':v1'
+                    || ! is_array($existing->payload)
+                    || $this->canonicalJson->hash($existing->payload) !== $existing->payload_sha256) {
+                    throw new LogicException('The existing engine PAPER entry intent failed integrity validation.');
+                }
+
+                return $existing;
             }
 
-            if ($existing->status === 'pending') {
-                DB::afterCommit(fn () => SubmitTradingEnginePaperEntry::dispatch($existing->getKey()));
+            if ($this->hasOpenLegacyPosition($opportunity)) {
+                return null;
             }
 
-            return $existing;
-        }
+            $command = $this->commands->make($opportunity, $link, $evaluation);
 
-        if ($this->hasOpenLegacyPosition($opportunity)) {
-            return null;
-        }
-
-        $command = $this->commands->make($opportunity, $link, $evaluation);
-        $intent = TradingEnginePaperEntryIntent::query()->create([
-            'trade_opportunity_id' => $opportunity->getKey(),
-            'opportunity_link_id' => $link->getKey(),
-            'opportunity_evaluation_id' => $evaluation->getKey(),
-            'user_id' => $opportunity->user_id,
-            'idempotency_key' => $command['idempotency_key'],
-            'payload_sha256' => $this->canonicalJson->hash($command['payload']),
-            'payload' => $command['payload'],
-            'status' => 'pending',
-        ]);
-
-        DB::afterCommit(fn () => SubmitTradingEnginePaperEntry::dispatch($intent->getKey()));
-
-        return $intent;
+            return TradingEnginePaperEntryIntent::query()->create([
+                'trade_opportunity_id' => $opportunity->getKey(),
+                'opportunity_link_id' => $link->getKey(),
+                'opportunity_evaluation_id' => $evaluation->getKey(),
+                'user_id' => $opportunity->user_id,
+                'idempotency_key' => $command['idempotency_key'],
+                'payload_sha256' => $this->canonicalJson->hash($command['payload']),
+                'payload' => $command['payload'],
+                'status' => TradingEnginePaperEntryIntent::STATUS_PENDING,
+            ]);
+        });
     }
 
     private function hasOpenLegacyPosition(TradeOpportunity $opportunity): bool

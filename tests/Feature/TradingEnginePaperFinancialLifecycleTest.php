@@ -20,6 +20,7 @@ use App\Models\TradingEnginePaperWalletProjection;
 use App\Models\User;
 use App\Services\TradingEngine\TradingEngineCanonicalJson;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
+use App\Services\TradingEngine\TradingEnginePaperDeliveryTracker;
 use App\Services\TradingEngine\TradingEnginePaperFinancialLifecycleIntegration;
 use App\Services\TradingEngine\TradingEnginePaperFinancialLifecyclePayloadValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -64,6 +65,12 @@ class TradingEnginePaperFinancialLifecycleTest extends TestCase
         $this->assertSame($observation->getKey(), $duplicate?->getKey());
         $this->assertDatabaseCount('trading_engine_paper_financial_observations', 1);
         Queue::assertPushed(SubmitTradingEnginePaperFinancialObservation::class, 1);
+        $observation->forceFill([
+            'status' => TradingEnginePaperFinancialObservation::STATUS_ACCEPTANCE_UNKNOWN,
+            'attempt_count' => 1,
+            'last_error_code' => 'TRANSPORT_TIMEOUT',
+            'acceptance_unknown_at' => now(),
+        ])->save();
 
         $payload = $this->decisionPayload($fixture, $observation, 'HOLD');
         $this->assertTrue(app(TradingEnginePaperFinancialLifecyclePayloadValidator::class)->isValidHeld($payload));
@@ -77,7 +84,15 @@ class TradingEnginePaperFinancialLifecycleTest extends TestCase
         $this->assertSame(1, $state->lifecycle_version);
         $this->assertSame(1, $state->last_observation_sequence);
         $this->assertSame('13000', $state->last_market_cap_usd);
-        $this->assertSame('projected', $observation->fresh()->status);
+        $this->assertSame(TradingEnginePaperFinancialObservation::STATUS_PROJECTED, $observation->fresh()->status);
+        $this->assertNull($observation->fresh()->acceptance_unknown_at);
+        app(TradingEnginePaperDeliveryTracker::class)->observationRetrying(
+            $observation,
+            'TRANSPORT_TIMEOUT',
+            1,
+        );
+        $this->assertSame(TradingEnginePaperFinancialObservation::STATUS_PROJECTED, $observation->fresh()->status);
+        $this->assertNull($observation->fresh()->last_error_code);
         $this->assertSame('HOLD', $observation->fresh()->engine_decision);
         $this->assertDatabaseCount('trading_engine_paper_exit_settlement_projections', 0);
         $this->assertSame('4.9', $fixture['wallet']->fresh()->available_balance_native);
@@ -120,6 +135,43 @@ class TradingEnginePaperFinancialLifecycleTest extends TestCase
         $this->assertSame('open', $fixture['position']->fresh()->state);
     }
 
+    public function test_typescript_authority_projects_without_a_laravel_observation_job(): void
+    {
+        Queue::fake();
+        $fixture = $this->enginePosition();
+        $fixture['state']->forceFill(['market_observation_authority' => 'typescript'])->save();
+        $observation = $this->internalObservation($fixture, '13000', '0.0000011');
+        $payload = $this->decisionPayload($fixture, $observation, 'HOLD');
+        $event = $this->event('paper.position.held.v1', $fixture, $observation, $payload);
+
+        $this->assertTrue(app(TradingEnginePaperFinancialLifecyclePayloadValidator::class)->isValidHeld($payload));
+        app(TradingEngineOpportunityProjector::class)->project($event->event_id);
+        app(TradingEngineOpportunityProjector::class)->project($event->event_id);
+
+        $created = TradingEnginePaperFinancialObservation::query()->sole();
+        $this->assertSame('meme-scanner-trading-engine-monitor', $created->payload['source']['system']);
+        $this->assertSame($observation->idempotency_key, $created->idempotency_key);
+        $this->assertSame(
+            app(TradingEngineCanonicalJson::class)->hash($created->payload),
+            $created->payload_sha256,
+        );
+        $this->assertSame(TradingEnginePaperFinancialObservation::STATUS_PROJECTED, $created->status);
+        $this->assertSame(1, $created->sequence);
+        $this->assertSame(2, $fixture['state']->fresh()->next_observation_sequence);
+        $this->assertSame(1, $fixture['state']->fresh()->lifecycle_version);
+        Queue::assertNotPushed(SubmitTradingEnginePaperFinancialObservation::class);
+
+        try {
+            app(TradingEnginePaperFinancialLifecycleIntegration::class)->submitValidated(
+                $fixture['position'],
+                $this->marketObservation('14000', '0.0000012'),
+            );
+            $this->fail('Laravel must not submit observations for a TypeScript-authoritative position.');
+        } catch (\LogicException) {
+            $this->assertDatabaseCount('trading_engine_paper_financial_observations', 1);
+        }
+    }
+
     public function test_changed_observation_evidence_fails_closed_without_settlement(): void
     {
         Queue::fake();
@@ -141,7 +193,7 @@ class TradingEnginePaperFinancialLifecycleTest extends TestCase
             $event->fresh()->handling_error_code,
         );
         $this->assertSame('open', $fixture['state']->fresh()->state);
-        $this->assertSame('pending', $observation->fresh()->status);
+        $this->assertSame(TradingEnginePaperFinancialObservation::STATUS_QUEUED, $observation->fresh()->status);
         $this->assertDatabaseCount('trading_engine_paper_exit_settlement_projections', 0);
         $this->assertSame('4.9', $fixture['wallet']->fresh()->available_balance_native);
         $this->assertSame('0.1', $fixture['wallet']->fresh()->invested_balance_native);
@@ -271,6 +323,46 @@ class TradingEnginePaperFinancialLifecycleTest extends TestCase
         ]);
 
         return compact('position', 'state', 'wallet');
+    }
+
+    /**
+     * @param  array{position: TradingEnginePaperPositionProjection, state: TradingEnginePaperPositionState, wallet: TradingEnginePaperWalletProjection}  $fixture
+     */
+    private function internalObservation(
+        array $fixture,
+        string $marketCap,
+        string $price,
+    ): TradingEnginePaperFinancialObservation {
+        $position = $fixture['position'];
+
+        return new TradingEnginePaperFinancialObservation([
+            'idempotency_key' => 'paper:financial-monitor:'.$position->engine_position_id.':1:v1',
+            'payload' => [
+                'schema_version' => 1,
+                'position_id' => $position->engine_position_id,
+                'source' => [
+                    'system' => 'meme-scanner-trading-engine-monitor',
+                    'observation_id' => 'paper-monitor:'.$position->engine_position_id.':1',
+                    'sequence' => 1,
+                ],
+                'subject' => ['control_plane_user_id' => (string) $position->user_id],
+                'network' => ['id' => 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
+                'asset' => ['address' => $position->asset_address],
+                'market' => [
+                    'market_cap_usd' => $marketCap,
+                    'price_usd' => $price,
+                    'liquidity_usd' => '2800',
+                    'observed_at' => '2026-10-07T12:00:00.000Z',
+                    'fetched_at' => '2026-10-07T12:00:00.000Z',
+                    'provider' => 'dexscreener',
+                ],
+                'validation' => [
+                    'status' => 'eligible',
+                    'identity_verified' => true,
+                    'simulation_allowed' => true,
+                ],
+            ],
+        ]);
     }
 
     /** @return array<string, mixed> */

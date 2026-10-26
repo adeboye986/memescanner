@@ -16,15 +16,23 @@ import {
 describe('foundation migration and infrastructure connectivity', () => {
   let environment: TestEnvironment;
   let database: Kysely<Database>;
+  let cleanupEnvironment: TestEnvironment | undefined;
+  let cleanupDatabase: Kysely<Database> | undefined;
 
   beforeAll(async () => {
     environment = await startTestEnvironment();
+    cleanupEnvironment = environment;
     database = createDatabase(createTestIdentity(environment).config);
+    cleanupDatabase = database;
   });
 
   afterAll(async () => {
-    await database.destroy();
-    await stopTestEnvironment(environment);
+    if (cleanupDatabase !== undefined) {
+      await cleanupDatabase.destroy();
+    }
+    if (cleanupEnvironment !== undefined) {
+      await stopTestEnvironment(cleanupEnvironment);
+    }
   });
 
   it('applies all migrations to an empty PostgreSQL database and reruns safely', async () => {
@@ -37,7 +45,7 @@ describe('foundation migration and infrastructure connectivity', () => {
     });
     const first = await migrateConfiguredDatabase(migrationConfig);
     const second = await migrateConfiguredDatabase(migrationConfig);
-    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities', 'evaluation_policies', 'opportunity_evaluation_tasks', 'opportunity_evaluations', 'paper_position_lifecycles', 'paper_position_lifecycle_decisions', 'paper_wallets', 'paper_ledger_transactions', 'paper_ledger_entries', 'paper_entry_intents', 'paper_orders', 'paper_fills', 'paper_positions', 'paper_position_monitoring_tasks', 'paper_market_shadow_observations', 'paper_exit_orders', 'paper_exit_fills', 'paper_exit_settlements') order by table_name").execute(database);
+    const tables = await sql.raw<{ readonly table_name: string }>("select table_name from information_schema.tables where table_schema = 'public' and table_name in ('command_inbox', 'event_outbox', 'event_delivery_attempts', 'opportunities', 'evaluation_policies', 'opportunity_evaluation_tasks', 'opportunity_evaluations', 'paper_position_lifecycles', 'paper_position_lifecycle_decisions', 'paper_wallets', 'paper_ledger_transactions', 'paper_ledger_entries', 'paper_entry_intents', 'paper_orders', 'paper_fills', 'paper_positions', 'paper_position_monitoring_tasks', 'paper_market_shadow_observations', 'paper_exit_orders', 'paper_exit_fills', 'paper_exit_settlements', 'token_scan_executions', 'token_discoveries') order by table_name").execute(database);
 
     expect(first.error).toBeUndefined();
     expect(first.results).toEqual([
@@ -73,6 +81,14 @@ describe('foundation migration and infrastructure connectivity', () => {
         migrationName: '008_paper_market_shadow_observations',
         status: 'Success',
       }),
+      expect.objectContaining({
+        migrationName: '009_paper_market_observation_authority',
+        status: 'Success',
+      }),
+      expect.objectContaining({
+        migrationName: '010_token_discovery_scanning',
+        status: 'Success',
+      }),
     ]);
     expect(second.error).toBeUndefined();
     expect(second.results).toEqual([]);
@@ -98,6 +114,8 @@ describe('foundation migration and infrastructure connectivity', () => {
       'paper_position_monitoring_tasks',
       'paper_positions',
       'paper_wallets',
+      'token_discoveries',
+      'token_scan_executions',
     ]);
   });
 

@@ -36,6 +36,7 @@ export interface CreatePaperPositionMonitoringTask {
   readonly networkId: string;
   readonly assetAddress: string;
   readonly dueAt: Date;
+  readonly observationAuthority?: 'shadow' | 'financial';
 }
 
 export interface PaperMarketRequestDetails {
@@ -69,6 +70,7 @@ export interface PaperPositionMonitoringStore {
     batchSize: number,
     leaseDurationMs: number,
     now: Date,
+    includeFinancialAuthority?: boolean,
   ) => Promise<readonly PaperPositionMonitoringTaskRecord[]>;
   readonly recordSuccess: (
     database: Kysely<Database>,
@@ -77,6 +79,7 @@ export interface PaperPositionMonitoringStore {
     observation: PaperMarketObservationSnapshot,
     request: PaperMarketRequestDetails,
     intervalMs: number,
+    financialObservationSequence?: number,
   ) => Promise<'rescheduled' | 'completed'>;
   readonly recordFailure: (
     database: Kysely<Database>,
@@ -122,6 +125,8 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
       last_liquidity_usd: null,
       last_fetched_at: null,
       last_provider_observed_at: null,
+      observation_authority: input.observationAuthority ?? 'shadow',
+      next_financial_observation_sequence: 1,
     };
     const inserted = await connection
       .insertInto('paper_position_monitoring_tasks')
@@ -136,7 +141,8 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
       .executeTakeFirstOrThrow();
 
     if (task.network_id !== input.networkId
-      || task.asset_address !== input.assetAddress) {
+      || task.asset_address !== input.assetAddress
+      || task.observation_authority !== (input.observationAuthority ?? 'shadow')) {
       throw new Error('Existing PAPER monitoring task conflicts with position identity');
     }
 
@@ -184,6 +190,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
     batchSize: number,
     leaseDurationMs: number,
     now: Date,
+    includeFinancialAuthority = false,
   ): Promise<readonly PaperPositionMonitoringTaskRecord[]> {
     if (eligibleControlPlaneUserIds.length === 0) {
       return [];
@@ -198,6 +205,11 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         .select('task.position_id')
         .where('position.state', '=', 'open')
         .where('position.control_plane_user_id', 'in', eligibleControlPlaneUserIds)
+        .where(
+          'task.observation_authority',
+          'in',
+          includeFinancialAuthority ? ['shadow', 'financial'] : ['shadow'],
+        )
         .where((expression) => expression.or([
           expression.and([
             expression('task.monitoring_state', '=', 'pending'),
@@ -241,11 +253,13 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
     observation: PaperMarketObservationSnapshot,
     request: PaperMarketRequestDetails,
     intervalMs: number,
+    financialObservationSequence?: number,
   ): Promise<'rescheduled' | 'completed'> {
     this.assertRequestDetails(request);
 
     return database.transaction().execute(async (transaction) => {
       const current = await this.lockOwnedTask(transaction, task, leaseOwner);
+      this.assertFinancialObservationFence(current, financialObservationSequence);
       const position = await this.lockPositionState(transaction, task.position_id);
 
       if (position !== 'open') {
@@ -259,7 +273,13 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
           current.consecutive_failure_count,
           null,
         );
-        await this.complete(transaction, current, leaseOwner, request.receivedAt);
+        await this.complete(
+          transaction,
+          current,
+          leaseOwner,
+          request.receivedAt,
+          financialObservationSequence,
+        );
 
         return 'completed';
       }
@@ -286,6 +306,12 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
           last_fetch_attempted_at: request.receivedAt,
           consecutive_failure_count: 0,
           next_attempt_sequence: current.next_attempt_sequence + 1,
+          ...(financialObservationSequence === undefined
+            ? {}
+            : {
+                next_financial_observation_sequence:
+                  current.next_financial_observation_sequence + 1,
+              }),
           provider_backoff_until: null,
           last_error_code: null,
           last_http_status: null,
@@ -494,6 +520,7 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
     task: PaperPositionMonitoringTaskRecord,
     leaseOwner: string,
     now: Date,
+    financialObservationSequence?: number,
   ): Promise<void> {
     const updated = await transaction
       .updateTable('paper_position_monitoring_tasks')
@@ -502,6 +529,12 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
         lease_owner: null,
         lease_expires_at: null,
         next_attempt_sequence: task.next_attempt_sequence + 1,
+        ...(financialObservationSequence === undefined
+          ? {}
+          : {
+              next_financial_observation_sequence:
+                task.next_financial_observation_sequence + 1,
+            }),
         updated_at: now,
       })
       .where('position_id', '=', task.position_id)
@@ -520,6 +553,20 @@ export class PaperPositionMonitoringRepository implements PaperPositionMonitorin
   ): void {
     if (updated === undefined) {
       throw new Error('PAPER monitoring task lease or attempt fence rejected persistence');
+    }
+  }
+
+  private assertFinancialObservationFence(
+    task: PaperPositionMonitoringTaskRecord,
+    sequence: number | undefined,
+  ): void {
+    if (sequence === undefined) {
+      return;
+    }
+
+    if (task.observation_authority !== 'financial'
+      || task.next_financial_observation_sequence !== sequence) {
+      throw new Error('PAPER financial observation authority or sequence fence rejected persistence');
     }
   }
 

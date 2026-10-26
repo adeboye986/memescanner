@@ -28,7 +28,7 @@ export interface PaperExitPersistence {
   readonly wallet: Selectable<PaperWalletTable>;
   readonly decisionId: string;
   readonly eventId: string;
-  readonly command: PaperFinancialObservation;
+  readonly command: { readonly market: PaperFinancialObservation['market'] };
   readonly idempotencyKey: string;
   readonly correlationId: string;
   readonly traceparent: string;

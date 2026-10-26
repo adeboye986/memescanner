@@ -8,6 +8,7 @@ import { ObservePaperFinancialPositionCommandHandler } from '../../src/applicati
 import { ObservePaperPositionCommandHandler } from '../../src/application/handlers/observe-paper-position-command-handler.js';
 import { RecordOpportunityCommandHandler } from '../../src/application/handlers/record-opportunity-command-handler.js';
 import { RecordPaperPositionCommandHandler } from '../../src/application/handlers/record-paper-position-command-handler.js';
+import { StartTokenScanCommandHandler } from '../../src/application/handlers/start-token-scan-command-handler.js';
 import type { Database } from '../../src/infrastructure/database/client.js';
 import { CommandInboxRepository } from '../../src/infrastructure/database/repositories/command-inbox-repository.js';
 import { OpportunityRepository } from '../../src/infrastructure/database/repositories/opportunity-repository.js';
@@ -16,6 +17,7 @@ import { PaperFinancialLifecycleRepository } from '../../src/infrastructure/data
 import { PaperPositionLifecycleRepository } from '../../src/infrastructure/database/repositories/paper-position-lifecycle-repository.js';
 import { PaperEntryRepository } from '../../src/infrastructure/database/repositories/paper-entry-repository.js';
 import { PaperPositionMonitoringRepository } from '../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
+import { TokenScanRepository } from '../../src/infrastructure/database/repositories/token-scan-repository.js';
 import {
   createServiceToken,
   createTestIdentity,
@@ -120,6 +122,95 @@ describe('command authentication before request validation', () => {
     await app.close();
   });
 
+  it('rejects the internal monitor source at the public financial observation boundary', async () => {
+    const { app, identity } = createApp();
+    const token = await createServiceToken(identity, {
+      scopes: ['commands:paper-financial-positions:observe'],
+    });
+    const observedAt = new Date().toISOString();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/commands/paper-financial-positions/observations',
+      headers: {
+        authorization: 'Bearer ' + token,
+        'idempotency-key': 'internal-source-spoof',
+      },
+      payload: {
+        schema_version: 1,
+        position_id: '01M50000000000000000000001',
+        source: {
+          system: 'meme-scanner-trading-engine-monitor',
+          observation_id: 'spoofed-internal-observation',
+          sequence: 1,
+        },
+        subject: { control_plane_user_id: '7' },
+        network: { id: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp' },
+        asset: { address: 'So11111111111111111111111111111111111111112' },
+        market: {
+          market_cap_usd: '1000',
+          price_usd: '0.1',
+          liquidity_usd: '500',
+          observed_at: observedAt,
+          fetched_at: observedAt,
+          provider: 'dexscreener',
+        },
+        validation: {
+          status: 'eligible',
+          identity_verified: true,
+          simulation_allowed: true,
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: 'VALIDATION_FAILED', retryable: false },
+    });
+    await app.close();
+  });
+
+  it('protects the token-scan command with its dedicated scope before validation', async () => {
+    const { app, identity } = createApp();
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/v1/commands/token-scans',
+      headers: { 'idempotency-key': 'scan-missing-auth' },
+      payload: { malformed: true },
+    });
+    expect(missing.statusCode).toBe(401);
+
+    const wrongToken = await createServiceToken(identity, { scopes: ['commands:noop'] });
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/v1/commands/token-scans',
+      headers: {
+        authorization: `Bearer ${wrongToken}`,
+        'idempotency-key': 'scan-wrong-scope',
+      },
+      payload: { malformed: true },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    const validToken = await createServiceToken(identity, {
+      scopes: ['commands:token-scans:create'],
+    });
+    const malformed = await app.inject({
+      method: 'POST',
+      url: '/v1/commands/token-scans',
+      headers: {
+        authorization: `Bearer ${validToken}`,
+        'idempotency-key': 'scan-malformed',
+      },
+      payload: { malformed: true },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toMatchObject({
+      error: { code: 'VALIDATION_FAILED', retryable: false },
+    });
+
+    await app.close();
+  });
+
   it.each([
     '/v1/commands/paper-entries',
     '/v1/commands/paper-financial-positions/observations',
@@ -215,6 +306,13 @@ function createApp(): {
         commandInbox,
         new OpportunityRepository(),
         outbox,
+      ),
+      tokenScanHandler: new StartTokenScanCommandHandler(
+        database,
+        commandInbox,
+        new TokenScanRepository(),
+        true,
+        ['7'],
       ),
       paperEntryHandler: new ExecutePaperEntryCommandHandler(
         database,

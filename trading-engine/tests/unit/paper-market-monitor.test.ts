@@ -33,6 +33,8 @@ function task(): PaperPositionMonitoringTaskRecord {
     last_fetch_attempted_at: null,
     consecutive_failure_count: 0,
     next_attempt_sequence: 1,
+    observation_authority: 'shadow',
+    next_financial_observation_sequence: 1,
     provider_backoff_until: null,
     last_error_code: null,
     last_http_status: null,
@@ -161,6 +163,7 @@ describe('PAPER market monitoring cycle', () => {
       30,
       30_000,
       now,
+      false,
     );
     expect(provider.fetchSolana).toHaveBeenCalledWith(
       [assetAddress],
@@ -178,6 +181,7 @@ describe('PAPER market monitoring cycle', () => {
         latencyMs: 250,
       },
       5_000,
+      undefined,
     );
     expect(repository.recordFailure).not.toHaveBeenCalled();
   });

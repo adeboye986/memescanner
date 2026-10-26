@@ -48,6 +48,8 @@ describe('source migration module loading', () => {
       '006_paper_financial_lifecycle',
       '007_paper_market_monitoring',
       '008_paper_market_shadow_observations',
+      '009_paper_market_observation_authority',
+      '010_token_discovery_scanning',
     ]);
     const migration = migrations['003_opportunity_evaluations'];
     const paperLifecycleMigration = migrations['004_paper_position_lifecycle'];
@@ -55,6 +57,8 @@ describe('source migration module loading', () => {
     const paperFinancialLifecycleMigration = migrations['006_paper_financial_lifecycle'];
     const paperMarketMonitoringMigration = migrations['007_paper_market_monitoring'];
     const paperMarketShadowMigration = migrations['008_paper_market_shadow_observations'];
+    const paperMarketAuthorityMigration = migrations['009_paper_market_observation_authority'];
+    const tokenScanningMigration = migrations['010_token_discovery_scanning'];
 
     expect(typeof migration?.up).toBe('function');
     expect(typeof migration?.down).toBe('function');
@@ -68,5 +72,9 @@ describe('source migration module loading', () => {
     expect(typeof paperMarketMonitoringMigration?.down).toBe('function');
     expect(typeof paperMarketShadowMigration?.up).toBe('function');
     expect(typeof paperMarketShadowMigration?.down).toBe('function');
+    expect(typeof paperMarketAuthorityMigration?.up).toBe('function');
+    expect(typeof paperMarketAuthorityMigration?.down).toBe('function');
+    expect(typeof tokenScanningMigration?.up).toBe('function');
+    expect(typeof tokenScanningMigration?.down).toBe('function');
   });
 });

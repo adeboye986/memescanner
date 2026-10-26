@@ -382,6 +382,8 @@ export interface PaperPositionMonitoringTaskTable {
   last_fetch_attempted_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   consecutive_failure_count: Generated<number>;
   next_attempt_sequence: Generated<number>;
+  observation_authority: Generated<'shadow' | 'financial'>;
+  next_financial_observation_sequence: Generated<number>;
   provider_backoff_until: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   last_error_code: string | null;
   last_http_status: number | null;
@@ -423,6 +425,57 @@ export interface PaperMarketShadowObservationTable {
   created_at: ColumnType<Date, Date | string | undefined, never>;
 }
 
+export interface TokenScanExecutionTable {
+  id: string;
+  source_system: 'meme-scanner-laravel';
+  source_activity_id: string;
+  control_plane_user_id: string;
+  scanner: 'new-token' | 'momentum';
+  network_id: string;
+  state: 'pending' | 'processing' | 'succeeded' | 'succeeded_with_warnings' | 'failed';
+  attempt_count: Generated<number>;
+  next_attempt_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  lease_owner: string | null;
+  lease_expires_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  request: JsonValue;
+  request_sha256: string;
+  idempotency_key: string;
+  correlation_id: string;
+  traceparent: string;
+  discovered_count: Generated<number>;
+  examined_count: Generated<number>;
+  qualified_count: Generated<number>;
+  opportunities_created_count: Generated<number>;
+  opportunities_existing_count: Generated<number>;
+  skipped_count: Generated<number>;
+  failed_count: Generated<number>;
+  provider_failures: JsonValue;
+  last_error_code: string | null;
+  started_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  completed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+export interface TokenDiscoveryTable {
+  id: string;
+  scan_execution_id: string;
+  network_id: string;
+  asset_address: string;
+  symbol: string | null;
+  name: string | null;
+  provider: 'birdeye' | 'dexscreener' | 'geckoterminal';
+  discovery_index: number;
+  state: 'discovered' | 'skipped' | 'qualified' | 'qualified_downstream_failed' | 'opportunity_created' | 'opportunity_existing' | 'failed';
+  reason_code: string | null;
+  market_snapshot: JsonValue | null;
+  security_snapshot: JsonValue | null;
+  qualification_snapshot: JsonValue | null;
+  opportunity_id: string | null;
+  created_at: ColumnType<Date, Date | string | undefined, never>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 export interface Database {
   command_inbox: CommandInboxTable;
   event_outbox: EventOutboxTable;
@@ -445,6 +498,8 @@ export interface Database {
   paper_exit_settlements: PaperExitSettlementTable;
   paper_position_monitoring_tasks: PaperPositionMonitoringTaskTable;
   paper_market_shadow_observations: PaperMarketShadowObservationTable;
+  token_scan_executions: TokenScanExecutionTable;
+  token_discoveries: TokenDiscoveryTable;
 }
 
 export interface DatabaseConnectionLossSignal {

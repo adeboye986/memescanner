@@ -71,7 +71,10 @@ class TradingEnginePaperFinancialLifecyclePayloadValidator
             || ! $this->engineId($payload['decision_id'])
             || ! is_int($payload['lifecycle_version']) || $payload['lifecycle_version'] < 1
             || ! $this->objectHasExactKeys($payload['source'], ['system', 'observation_id', 'sequence'])
-            || $payload['source']['system'] !== 'meme-scanner-laravel'
+            || ! in_array($payload['source']['system'], [
+                'meme-scanner-laravel',
+                'meme-scanner-trading-engine-monitor',
+            ], true)
             || ! is_string($payload['source']['observation_id'])
             || ! is_int($payload['source']['sequence']) || $payload['source']['sequence'] < 1
             || ! $this->objectHasExactKeys($payload['subject'], ['control_plane_user_id'])

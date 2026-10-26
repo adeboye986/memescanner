@@ -11,10 +11,13 @@ import {
 const disabled: DatabaseSchemaFeatureConfig = {
   paperEntryEnabled: false,
   paperMarketMonitoringEnabled: false,
+  paperMarketMonitoringAuthorityEnabled: false,
   paperMarketMonitorCanaryUserIds: [],
+  tokenScanningEnabled: false,
+  tokenScannerCanaryUserIds: [],
 };
 
-function snapshot(version: 6 | 7 | 8): DatabaseSchemaSnapshot {
+function snapshot(version: 6 | 7 | 8 | 9 | 10): DatabaseSchemaSnapshot {
   return {
     appliedMigrations: [
       '001_foundation',
@@ -25,10 +28,14 @@ function snapshot(version: 6 | 7 | 8): DatabaseSchemaSnapshot {
       '006_paper_financial_lifecycle',
       ...(version >= 7 ? ['007_paper_market_monitoring'] : []),
       ...(version >= 8 ? ['008_paper_market_shadow_observations'] : []),
+      ...(version >= 9 ? ['009_paper_market_observation_authority'] : []),
+      ...(version >= 10 ? ['010_token_discovery_scanning'] : []),
     ],
     paperFinancialSchemaAvailable: true,
     paperEntrySchemaAvailable: version >= 7,
     paperShadowMonitoringSchemaAvailable: version >= 8,
+    paperMarketAuthoritySchemaAvailable: version >= 9,
+    tokenScanningSchemaAvailable: version >= 10,
   };
 }
 
@@ -39,6 +46,7 @@ describe('database schema compatibility', () => {
       paperFinancialSchemaAvailable: false,
       paperEntrySchemaAvailable: false,
       paperShadowMonitoringSchemaAvailable: false,
+      paperMarketAuthoritySchemaAvailable: false,
     });
 
     expect(result).toEqual({
@@ -53,9 +61,7 @@ describe('database schema compatibility', () => {
   });
 
   it('accepts schema 006 while PAPER entry and monitoring remain disabled', () => {
-    const result = evaluateDatabaseSchemaCompatibility(disabled, snapshot(6));
-
-    expect(result).toEqual({
+    expect(evaluateDatabaseSchemaCompatibility(disabled, snapshot(6))).toEqual({
       compatible: true,
       detectedVersion: 6,
       requiredVersion: 6,
@@ -63,74 +69,80 @@ describe('database schema compatibility', () => {
     });
   });
 
-  it('requires schema 007 before PAPER financial entry can be enabled', () => {
+  it('requires schema 009 before PAPER entry can create authority-fenced tasks', () => {
     const result = evaluateDatabaseSchemaCompatibility(
       { ...disabled, paperEntryEnabled: true },
-      snapshot(6),
+      snapshot(8),
     );
 
     expect(result).toEqual({
       compatible: false,
-      detectedVersion: 6,
-      requiredVersion: 7,
+      detectedVersion: 8,
+      requiredVersion: 9,
       missingCapabilities: [
-        'MIGRATION_007_NOT_APPLIED',
-        'PAPER_ENTRY_MONITORING_TASK_SCHEMA_UNAVAILABLE',
+        'MIGRATION_009_NOT_APPLIED',
+        'PAPER_MARKET_AUTHORITY_SCHEMA_UNAVAILABLE',
       ],
     });
   });
 
-  it('accepts schema 007 for PAPER entry while monitoring remains disabled', () => {
+  it('accepts schema 009 for PAPER entry', () => {
     const result = evaluateDatabaseSchemaCompatibility(
       { ...disabled, paperEntryEnabled: true },
-      snapshot(7),
+      snapshot(9),
     );
 
     expect(result.compatible).toBe(true);
-    expect(result.detectedVersion).toBe(7);
-    expect(result.requiredVersion).toBe(7);
+    expect(result.detectedVersion).toBe(9);
+    expect(result.requiredVersion).toBe(9);
   });
 
-  it('requires schema 008 before shadow monitoring can be enabled', () => {
-    const result = evaluateDatabaseSchemaCompatibility(
-      {
-        ...disabled,
-        paperEntryEnabled: true,
-        paperMarketMonitoringEnabled: true,
-        paperMarketMonitorCanaryUserIds: ['1'],
-      },
-      snapshot(7),
-    );
-
-    expect(result.compatible).toBe(false);
-    expect(result.detectedVersion).toBe(7);
-    expect(result.requiredVersion).toBe(8);
-    expect(result.missingCapabilities).toEqual([
-      'MIGRATION_008_NOT_APPLIED',
-      'PAPER_SHADOW_OBSERVATION_SCHEMA_UNAVAILABLE',
-    ]);
-  });
-
-  it('accepts schema 008 for a valid monitoring canary', () => {
-    const result = evaluateDatabaseSchemaCompatibility(
-      {
-        ...disabled,
-        paperEntryEnabled: true,
-        paperMarketMonitoringEnabled: true,
-        paperMarketMonitorCanaryUserIds: ['1'],
-      },
+  it('requires schema 009 before either shadow or authoritative monitoring', () => {
+    const config = {
+      ...disabled,
+      paperEntryEnabled: true,
+      paperMarketMonitoringEnabled: true,
+      paperMarketMonitorCanaryUserIds: ['1'],
+    };
+    const shadow = evaluateDatabaseSchemaCompatibility(config, snapshot(8));
+    const authoritative = evaluateDatabaseSchemaCompatibility(
+      { ...config, paperMarketMonitoringAuthorityEnabled: true },
       snapshot(8),
     );
 
-    expect(result.compatible).toBe(true);
-    expect(result.detectedVersion).toBe(8);
-    expect(result.requiredVersion).toBe(8);
+    expect(shadow.requiredVersion).toBe(9);
+    expect(authoritative.requiredVersion).toBe(9);
+    expect(shadow.missingCapabilities).toEqual([
+      'MIGRATION_009_NOT_APPLIED',
+      'PAPER_MARKET_AUTHORITY_SCHEMA_UNAVAILABLE',
+    ]);
+    expect(authoritative.missingCapabilities).toEqual(shadow.missingCapabilities);
+  });
+
+  it('accepts schema 009 for an authoritative monitoring canary', () => {
+    const result = evaluateDatabaseSchemaCompatibility(
+      {
+        ...disabled,
+        paperEntryEnabled: true,
+        paperMarketMonitoringEnabled: true,
+        paperMarketMonitoringAuthorityEnabled: true,
+        paperMarketMonitorCanaryUserIds: ['1'],
+      },
+      snapshot(9),
+    );
+
+    expect(result).toEqual({
+      compatible: true,
+      detectedVersion: 9,
+      requiredVersion: 9,
+      missingCapabilities: [],
+    });
   });
 
   it('fails closed when monitoring has no eligible canary', () => {
     const result = evaluateDatabaseSchemaCompatibility(
       { ...disabled, paperMarketMonitoringEnabled: true },
-      snapshot(8),
+      snapshot(9),
     );
 
     expect(result.compatible).toBe(false);
@@ -139,17 +151,59 @@ describe('database schema compatibility', () => {
     ]);
   });
 
+  it('requires schema 010 and a canary before token scanning can start', () => {
+    const missingSchema = evaluateDatabaseSchemaCompatibility(
+      {
+        ...disabled,
+        tokenScanningEnabled: true,
+        tokenScannerCanaryUserIds: ['1'],
+      },
+      snapshot(9),
+    );
+    const missingCanary = evaluateDatabaseSchemaCompatibility(
+      { ...disabled, tokenScanningEnabled: true },
+      snapshot(10),
+    );
+
+    expect(missingSchema.requiredVersion).toBe(10);
+    expect(missingSchema.missingCapabilities).toEqual([
+      'MIGRATION_010_NOT_APPLIED',
+      'TOKEN_SCANNING_SCHEMA_UNAVAILABLE',
+    ]);
+    expect(missingCanary.missingCapabilities).toEqual([
+      'TOKEN_SCANNER_CANARY_UNAVAILABLE',
+    ]);
+  });
+
+  it('accepts schema 010 for an explicitly allowlisted scanner canary', () => {
+    const result = evaluateDatabaseSchemaCompatibility(
+      {
+        ...disabled,
+        tokenScanningEnabled: true,
+        tokenScannerCanaryUserIds: ['1'],
+      },
+      snapshot(10),
+    );
+
+    expect(result).toEqual({
+      compatible: true,
+      detectedVersion: 10,
+      requiredVersion: 10,
+      missingCapabilities: [],
+    });
+  });
+
   it('reports detected and required versions without database details', () => {
     const compatibility = evaluateDatabaseSchemaCompatibility(
       { ...disabled, paperEntryEnabled: true },
-      snapshot(6),
+      snapshot(8),
     );
     const error = new DatabaseSchemaCompatibilityError(compatibility);
 
     expect(error.message).toBe(
-      'Database schema version 006 is incompatible with required version 007 '
-      + '(MIGRATION_007_NOT_APPLIED, PAPER_ENTRY_MONITORING_TASK_SCHEMA_UNAVAILABLE)',
+      'Database schema version 008 is incompatible with required version 009 '
+      + '(MIGRATION_009_NOT_APPLIED, PAPER_MARKET_AUTHORITY_SCHEMA_UNAVAILABLE)',
     );
-    expect(formatDatabaseSchemaVersion(8)).toBe('008');
+    expect(formatDatabaseSchemaVersion(9)).toBe('009');
   });
 });

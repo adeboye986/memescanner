@@ -3,7 +3,10 @@ import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ExecutePaperEntryCommand } from '../../src/application/commands/execute-paper-entry-command.js';
-import { ExecutePaperEntryCommandHandler } from '../../src/application/handlers/execute-paper-entry-command-handler.js';
+import {
+  ExecutePaperEntryCommandHandler,
+  type PaperEntryPolicy,
+} from '../../src/application/handlers/execute-paper-entry-command-handler.js';
 import { RecordOpportunityCommandHandler } from '../../src/application/handlers/record-opportunity-command-handler.js';
 import { SOLANA_MAINNET_ID, type OpportunityCommand } from '../../src/contracts/http/opportunity-command.schema.js';
 import { newEngineId } from '../../src/shared/ids/id.js';
@@ -146,10 +149,14 @@ describe('engine-owned PAPER financial entry', () => {
     expect(compatibility).toMatchObject({
       compatible: false,
       detectedVersion: 6,
-      requiredVersion: 7,
+      requiredVersion: 9,
       missingCapabilities: [
         'MIGRATION_007_NOT_APPLIED',
         'PAPER_ENTRY_MONITORING_TASK_SCHEMA_UNAVAILABLE',
+        'MIGRATION_008_NOT_APPLIED',
+        'PAPER_SHADOW_OBSERVATION_SCHEMA_UNAVAILABLE',
+        'MIGRATION_009_NOT_APPLIED',
+        'PAPER_MARKET_AUTHORITY_SCHEMA_UNAVAILABLE',
       ],
     });
     await expect(handler().execute(entryCommand(source, 'paper-entry-schema-006')))
@@ -162,38 +169,25 @@ describe('engine-owned PAPER financial entry', () => {
     expect(await countEvents('paper.entry.executed.v1')).toBe(0);
   });
 
-  it('executes PAPER entry on schema 007 and creates exactly one monitoring task', async () => {
+  it('rejects PAPER entry on schema 007 before authority fencing exists', async () => {
     await resetDatabaseSchema(database);
     await migrateTestDatabaseTo(database, '007_paper_market_monitoring');
     const compatibility = await inspectDatabaseSchemaCompatibility(database, config);
-    const source = await evaluatedOpportunity('schema-007');
-    const response = await handler().execute(
-      entryCommand(source, 'paper-entry-schema-007'),
-    );
-    const task = await database.selectFrom('paper_position_monitoring_tasks')
-      .select(['position_id', 'monitoring_state'])
-      .executeTakeFirstOrThrow();
-    const shadowTable = await sql.raw<{ readonly table_name: string | null }>(
-      "select to_regclass('public.paper_market_shadow_observations')::text as table_name",
-    ).execute(database);
 
     expect(compatibility).toMatchObject({
-      compatible: true,
+      compatible: false,
       detectedVersion: 7,
-      requiredVersion: 7,
-      missingCapabilities: [],
+      requiredVersion: 9,
+      missingCapabilities: [
+        'MIGRATION_008_NOT_APPLIED',
+        'PAPER_SHADOW_OBSERVATION_SCHEMA_UNAVAILABLE',
+        'MIGRATION_009_NOT_APPLIED',
+        'PAPER_MARKET_AUTHORITY_SCHEMA_UNAVAILABLE',
+      ],
     });
-    expect(response.status).toBe('accepted');
-    expect(await count('paper_positions')).toBe(1);
-    expect(task).toEqual({
-      position_id: response.positionId,
-      monitoring_state: 'pending',
-    });
-    expect(shadowTable.rows[0]?.table_name).toBeNull();
-    expect(await countEvents('paper.entry.executed.v1')).toBe(1);
   });
 
-  it('executes PAPER entry atomically on schema 008 with shadow persistence available', async () => {
+  it('executes PAPER entry atomically on schema 009 with fenced monitoring authority', async () => {
     const source = await evaluatedOpportunity('101');
     const response = await handler().execute(entryCommand(source));
     const wallet = await database.selectFrom('paper_wallets').selectAll().executeTakeFirstOrThrow();
@@ -241,6 +235,8 @@ describe('engine-owned PAPER financial entry', () => {
       monitoring_state: 'pending',
       consecutive_failure_count: 0,
       next_attempt_sequence: 1,
+      observation_authority: 'shadow',
+      next_financial_observation_sequence: 1,
     });
     expect(monitoringTask.next_observation_due_at).toEqual(now);
     expect(await entries.accountBalance(database, wallet.id, 'invested')).toBe('0.1');
@@ -272,6 +268,30 @@ describe('engine-owned PAPER financial entry', () => {
       amount_native: '0.01',
       currency: 'SOL',
     }).execute()).rejects.toThrow(/balanced/);
+  });
+
+  it('keeps non-allowlisted entries on Laravel observation authority', async () => {
+    const source = await evaluatedOpportunity('authority-not-allowlisted');
+    const response = await handler({
+      financialMarketObservationControlPlaneUserIds: ['8'],
+    }).execute(entryCommand(source, 'paper-entry-authority-not-allowlisted'));
+    const task = await database.selectFrom('paper_position_monitoring_tasks')
+      .select('observation_authority')
+      .where('position_id', '=', response.positionId)
+      .executeTakeFirstOrThrow();
+    const event = await database.selectFrom('event_outbox')
+      .select('envelope')
+      .where('event_type', '=', 'paper.entry.executed.v1')
+      .executeTakeFirstOrThrow();
+
+    expect(task.observation_authority).toBe('shadow');
+    expect(event.envelope).toMatchObject({
+      payload: {
+        position: {
+          lifecycle: { market_observation_authority: 'laravel' },
+        },
+      },
+    });
   });
 
   it('reuses the original wallet and result on exact replay without duplicating financial evidence', async () => {
@@ -1315,7 +1335,7 @@ describe('engine-owned PAPER financial entry', () => {
   });
 
   function handler(
-    overrides: Partial<ReturnType<typeof policy>> = {},
+    overrides: Partial<PaperEntryPolicy> = {},
     clock: () => Date = () => now,
   ): ExecutePaperEntryCommandHandler {
     return new ExecutePaperEntryCommandHandler(
@@ -1419,12 +1439,7 @@ describe('engine-owned PAPER financial entry', () => {
   }
 });
 
-function policy(): {
-  readonly enabled: boolean;
-  readonly openingBalanceNative: string;
-  readonly entryNotionalNative: string;
-  readonly intentMaxAgeSeconds: number;
-} {
+function policy(): PaperEntryPolicy {
   return {
     enabled: true,
     openingBalanceNative: '5',

@@ -2,6 +2,7 @@ import type { Kysely } from 'kysely';
 import type { Logger } from 'pino';
 
 import type { Database } from '../infrastructure/database/client.js';
+import { ApplicationError } from '../shared/errors/application-error.js';
 import type {
   PaperMarketRequestDetails,
   PaperMonitoringFailure,
@@ -15,9 +16,11 @@ import {
   type PaperMarketFetchResult,
 } from '../infrastructure/market-data/dexscreener-paper-market-provider.js';
 import { newEngineId } from '../shared/ids/id.js';
+import type { PaperFinancialMarketObserver } from './paper-financial-market-observer.js';
 
 export interface PaperMarketMonitoringPolicy {
   readonly enabled: boolean;
+  readonly authoritativeEnabled?: boolean;
   readonly eligibleControlPlaneUserIds: readonly string[];
   readonly intervalMs: number;
   readonly batchSize: number;
@@ -49,6 +52,7 @@ export class PaperMarketMonitoringCycle {
     private readonly logger: Logger,
     private readonly now: () => Date = () => new Date(),
     private readonly beforePersist: () => Promise<boolean> = () => Promise.resolve(true),
+    private readonly financialObserver?: PaperFinancialMarketObserver,
   ) {}
 
   public async runCycle(): Promise<PaperMarketMonitoringSummary> {
@@ -73,6 +77,7 @@ export class PaperMarketMonitoringCycle {
       claimLimit,
       this.policy.leaseDurationMs,
       startedAt,
+      this.policy.authoritativeEnabled === true,
     );
     let providerRequests = 0;
     let succeeded = 0;
@@ -160,22 +165,59 @@ export class PaperMarketMonitoringCycle {
         const result = byAddress.get(task.asset_address);
 
         if (result?.available === true) {
+          const observation = {
+            provider: result.observation.provider,
+            pairAddress: result.observation.pairAddress,
+            dex: result.observation.dex,
+            marketCapUsd: result.observation.marketCapUsd,
+            priceUsd: result.observation.priceUsd,
+            liquidityUsd: result.observation.liquidityUsd,
+            fetchedAt: result.observation.fetchedAt,
+            providerObservedAt: result.observation.providerObservedAt,
+          } as const;
+          let financialObservationSequence: number | undefined;
+
+          if (task.observation_authority === 'financial') {
+            if (!this.policy.authoritativeEnabled || this.financialObserver === undefined) {
+              throw new Error('A financial PAPER monitoring task was claimed without authority');
+            }
+
+            try {
+              await this.financialObserver.observe(task, observation);
+              financialObservationSequence = task.next_financial_observation_sequence;
+            } catch (error) {
+              const outcome = await this.failTask(
+                task,
+                financialObservationFailure(error),
+                request,
+              );
+              failed += outcome === 'rescheduled' ? 1 : 0;
+              completed += outcome === 'completed' ? 1 : 0;
+
+              continue;
+            }
+
+            if (!await this.persistenceIsAllowed()) {
+              return {
+                enabled: true,
+                retired,
+                claimed: tasks.length,
+                providerRequests,
+                succeeded,
+                failed,
+                completed,
+              };
+            }
+          }
+
           const outcome = await this.repository.recordSuccess(
             this.database,
             task,
             this.leaseOwner,
-            {
-              provider: result.observation.provider,
-              pairAddress: result.observation.pairAddress,
-              dex: result.observation.dex,
-              marketCapUsd: result.observation.marketCapUsd,
-              priceUsd: result.observation.priceUsd,
-              liquidityUsd: result.observation.liquidityUsd,
-              fetchedAt: result.observation.fetchedAt,
-              providerObservedAt: result.observation.providerObservedAt,
-            },
+            observation,
             request,
             this.policy.intervalMs,
+            financialObservationSequence,
           );
           succeeded += outcome === 'rescheduled' ? 1 : 0;
           completed += outcome === 'completed' ? 1 : 0;
@@ -290,6 +332,14 @@ export class PaperMarketMonitoringCycle {
       completed: 0,
     };
   }
+}
+
+function financialObservationFailure(error: unknown): PaperMonitoringFailure {
+  if (error instanceof ApplicationError) {
+    return failure(error.code, 'failed');
+  }
+
+  return failure('PAPER_FINANCIAL_OBSERVATION_FAILED', 'failed');
 }
 
 function providerError(error: unknown): PaperMonitoringFailure {

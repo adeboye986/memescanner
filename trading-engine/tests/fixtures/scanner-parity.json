@@ -1,0 +1,107 @@
+{
+  "newToken": [
+    {
+      "name": "strong",
+      "market": {
+        "address": "11111111111111111111111111111111",
+        "symbol": "STRONG",
+        "name": "Strong",
+        "price": 0.001,
+        "marketCap": 10000,
+        "liquidity": 5000,
+        "holders": 50,
+        "volume1m": 1000,
+        "buys1m": 7,
+        "sells1m": 3,
+        "uniqueWallets5m": 30,
+        "priceChange5mPercent": 10
+      },
+      "securityAvailable": true,
+      "securityPassed": true,
+      "expected": {
+        "score": 100,
+        "qualified": true,
+        "reasonCode": "QUALIFIED"
+      }
+    },
+    {
+      "name": "unverified",
+      "market": {
+        "address": "11111111111111111111111111111111",
+        "symbol": null,
+        "name": null,
+        "price": null,
+        "marketCap": 10000,
+        "liquidity": 1000,
+        "holders": 10,
+        "volume1m": 100,
+        "buys1m": 5,
+        "sells1m": 5,
+        "uniqueWallets5m": 10,
+        "priceChange5mPercent": 1
+      },
+      "securityAvailable": false,
+      "securityPassed": null,
+      "expected": {
+        "score": 30,
+        "qualified": false,
+        "reasonCode": "SECURITY_UNAVAILABLE"
+      }
+    }
+  ],
+  "momentum": {
+    "market": {
+      "address": "11111111111111111111111111111111",
+      "available": true,
+      "requestedTokenIsBase": true,
+      "symbol": "MOM",
+      "name": "Momentum",
+      "priceUsd": 0.01,
+      "marketCap": 20000,
+      "liquidityUsd": 5000,
+      "volume5m": 10000,
+      "buys5m": 70,
+      "sells5m": 30,
+      "priceChange5m": 10,
+      "pairAddress": "pair",
+      "dex": "raydium"
+    },
+    "holderRisk": {
+      "available": true,
+      "passed": true,
+      "score": 80,
+      "level": "low",
+      "reasons": [],
+      "largestHolderPercentage": 2,
+      "top5Percentage": 8,
+      "top10Percentage": 15
+    },
+    "expected": {
+      "qualified": true,
+      "dexRank": 96,
+      "preBirdeyeScore": 91
+    }
+  },
+  "ethereum": {
+    "market": {
+      "address": "0x1111111111111111111111111111111111111111",
+      "available": true,
+      "requestedTokenIsBase": true,
+      "symbol": "ETH",
+      "name": "Ethereum",
+      "priceUsd": 0.01,
+      "marketCap": 20000,
+      "liquidityUsd": 1000,
+      "volume5m": 500,
+      "buys5m": 5,
+      "sells5m": 5,
+      "priceChange5m": 0,
+      "pairAddress": "0x2222222222222222222222222222222222222222",
+      "dex": "uniswap"
+    },
+    "expected": {
+      "newToken": true,
+      "momentum": true
+    }
+  }
+}

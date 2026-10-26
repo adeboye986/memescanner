@@ -34,16 +34,23 @@ class TradingEnginePaperFinancialLifecycleProjector
             ->where('position_projection_id', $position->getKey())
             ->lockForUpdate()
             ->first();
-        $observation = TradingEnginePaperFinancialObservation::query()
-            ->where('position_state_id', $state?->getKey())
-            ->where('observation_id', $source['observation_id'] ?? null)
-            ->where('sequence', $source['sequence'] ?? null)
-            ->lockForUpdate()
-            ->first();
 
-        if (! $state instanceof TradingEnginePaperPositionState
-            || ! $observation instanceof TradingEnginePaperFinancialObservation
-            || ! is_array($observation->payload)
+        if (! $state instanceof TradingEnginePaperPositionState) {
+            $this->reject('PAPER_FINANCIAL_POSITION_STATE_NOT_FOUND', true);
+        }
+
+        $observation = $this->observationForEvent(
+            $state,
+            $position,
+            $event,
+            $source,
+            $subject,
+            $network,
+            $asset,
+            $market,
+        );
+
+        if (! is_array($observation->payload)
             || $observation->user_id !== $position->user_id
             || (string) $position->user_id !== ($subject['control_plane_user_id'] ?? null)
             || $position->network_id !== ($network['id'] ?? null)
@@ -157,6 +164,81 @@ class TradingEnginePaperFinancialLifecycleProjector
         $this->projectState($state, $observation, $event, $payload, $market, 'closed');
     }
 
+    /**
+     * @param  array<string, mixed>  $source
+     * @param  array<string, mixed>  $subject
+     * @param  array<string, mixed>  $network
+     * @param  array<string, mixed>  $asset
+     * @param  array<string, mixed>  $market
+     */
+    private function observationForEvent(
+        TradingEnginePaperPositionState $state,
+        TradingEnginePaperPositionProjection $position,
+        TradingEngineEvent $event,
+        array $source,
+        array $subject,
+        array $network,
+        array $asset,
+        array $market,
+    ): TradingEnginePaperFinancialObservation {
+        $isInternal = ($source['system'] ?? null) === 'meme-scanner-trading-engine-monitor';
+        $requiredAuthority = $isInternal ? 'typescript' : 'laravel';
+
+        if ($state->market_observation_authority !== $requiredAuthority) {
+            $this->reject('PAPER_FINANCIAL_OBSERVATION_AUTHORITY_CONFLICT');
+        }
+
+        $observation = TradingEnginePaperFinancialObservation::query()
+            ->where('position_state_id', $state->getKey())
+            ->where('observation_id', $source['observation_id'] ?? null)
+            ->where('sequence', $source['sequence'] ?? null)
+            ->lockForUpdate()
+            ->first();
+
+        if ($observation instanceof TradingEnginePaperFinancialObservation) {
+            return $observation;
+        }
+
+        if (! $isInternal) {
+            $this->reject('PAPER_FINANCIAL_OBSERVATION_NOT_FOUND');
+        }
+
+        $sequence = $source['sequence'] ?? null;
+        if (! is_int($sequence) || $sequence < 1 || $state->next_observation_sequence !== $sequence) {
+            $this->reject('PAPER_FINANCIAL_LIFECYCLE_VERSION_CONFLICT');
+        }
+
+        $commandPayload = [
+            'schema_version' => 1,
+            'position_id' => $position->engine_position_id,
+            'source' => $source,
+            'subject' => $subject,
+            'network' => $network,
+            'asset' => $asset,
+            'market' => $market,
+            'validation' => [
+                'status' => 'eligible',
+                'identity_verified' => true,
+                'simulation_allowed' => true,
+            ],
+        ];
+        $observation = TradingEnginePaperFinancialObservation::query()->create([
+            'position_state_id' => $state->getKey(),
+            'user_id' => $position->user_id,
+            'observation_id' => $source['observation_id'],
+            'sequence' => $sequence,
+            'idempotency_key' => $event->idempotency_key,
+            'payload_sha256' => $this->canonicalJson->hash($commandPayload),
+            'payload' => $commandPayload,
+            'status' => TradingEnginePaperFinancialObservation::STATUS_SUBMITTED,
+            'submitted_at' => $event->occurred_at,
+        ]);
+
+        $state->forceFill(['next_observation_sequence' => $sequence + 1])->save();
+
+        return $observation;
+    }
+
     /** @param array<string, mixed> $payload @param array<string, mixed> $market */
     private function projectState(
         TradingEnginePaperPositionState $state,
@@ -185,13 +267,15 @@ class TradingEnginePaperFinancialLifecycleProjector
             'closed_at' => $stateValue === 'closed' ? $event->occurred_at : null,
         ])->save();
         $observation->forceFill([
-            'status' => 'projected',
+            'status' => TradingEnginePaperFinancialObservation::STATUS_PROJECTED,
             'engine_operation_id' => $payload['operation_id'],
             'engine_decision_id' => $payload['decision_id'],
             'engine_event_id' => $event->event_id,
             'engine_settlement_id' => $payload['settlement']['settlement_id'] ?? null,
             'engine_decision' => $payload['decision'],
             'last_error_code' => null,
+            'acceptance_unknown_at' => null,
+            'definitively_rejected_at' => null,
             'projected_at' => now(),
         ])->save();
     }

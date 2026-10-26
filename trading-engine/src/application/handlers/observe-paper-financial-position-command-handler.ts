@@ -21,6 +21,8 @@ import { ApplicationError } from '../../shared/errors/application-error.js';
 import { newEngineId, type EngineId } from '../../shared/ids/id.js';
 import { hashCanonicalJson } from '../../shared/json/canonical-json.js';
 
+const INTERNAL_MONITOR_SUBJECT = 'meme-scanner-trading-engine-monitor';
+
 export interface PaperFinancialLifecyclePolicy {
   readonly enabled: boolean;
   readonly observationMaxAgeSeconds: number;
@@ -287,6 +289,16 @@ export class ObservePaperFinancialPositionCommandHandler {
   }
 
   private assertCommand(command: ObservePaperFinancialPositionCommand): void {
+    if (command.body.source.system === INTERNAL_MONITOR_SUBJECT
+      && command.subject !== INTERNAL_MONITOR_SUBJECT) {
+      throw new ApplicationError(
+        'PAPER_FINANCIAL_OBSERVATION_AUTHORITY_INVALID',
+        'Only the internal market monitor may use the internal observation source',
+        403,
+        false,
+      );
+    }
+
     if (!this.policy.enabled) {
       throw new ApplicationError('CAPABILITY_UNAVAILABLE', 'Engine PAPER financial lifecycle is disabled', 409, false);
     }

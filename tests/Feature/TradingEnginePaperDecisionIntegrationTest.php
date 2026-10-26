@@ -118,7 +118,7 @@ class TradingEnginePaperDecisionIntegrationTest extends TestCase
         $this->assertNull($second);
         $this->assertSame(TradeOpportunityStatus::Qualified, $chain['opportunity']->fresh()->status);
         $this->assertNull($chain['opportunity']->fresh()->paper_position_id);
-        $this->assertSame('pending', $intent->status);
+        $this->assertSame(TradingEnginePaperEntryIntent::STATUS_QUEUED, $intent->status);
         $this->assertSame('paper:entry:laravel:'.$chain['opportunity']->getKey().':v1', $intent->idempotency_key);
         $this->assertDatabaseCount('trading_engine_paper_entry_intents', 1);
         $this->assertDatabaseCount('paper_positions', 0);

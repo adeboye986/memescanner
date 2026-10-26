@@ -21,6 +21,7 @@ export interface WorkflowPollerOptions {
   readonly logger: Logger;
   readonly outboxDispatcher: WorkflowDispatcher;
   readonly evaluationDispatcher: WorkflowDispatcher;
+  readonly tokenScanDispatcher?: WorkflowDispatcher;
   readonly beforeCycle?: () => Promise<boolean>;
 }
 
@@ -77,12 +78,15 @@ export function startWorkflowPoller(
       'opportunity-evaluation',
       options.evaluationDispatcher,
     );
+    const tokenScan = options.tokenScanDispatcher === undefined
+      ? 'idle'
+      : await dispatch('token-scan', options.tokenScanDispatcher);
 
-    if (outbox === 'active' || evaluation === 'active') {
+    if (outbox === 'active' || evaluation === 'active' || tokenScan === 'active') {
       return 'active';
     }
 
-    if (outbox === 'unknown' || evaluation === 'unknown') {
+    if (outbox === 'unknown' || evaluation === 'unknown' || tokenScan === 'unknown') {
       return 'unknown';
     }
 
@@ -145,6 +149,12 @@ export function startWorkflowPoller(
         name: 'evaluation dispatcher',
         close: (): Promise<void> => options.evaluationDispatcher.shutdown(),
       },
+      ...(options.tokenScanDispatcher === undefined
+        ? []
+        : [{
+            name: 'token scan dispatcher',
+            close: (): Promise<void> => options.tokenScanDispatcher?.shutdown() ?? Promise.resolve(),
+          }]),
     ]);
   });
 

@@ -13,6 +13,7 @@ class TradingEnginePaperPositionState extends Model
         'position_projection_id',
         'lifecycle_version',
         'next_observation_sequence',
+        'market_observation_authority',
         'state',
         'protection_state',
         'last_observation_id',

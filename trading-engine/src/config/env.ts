@@ -41,6 +41,7 @@ export interface EngineConfig extends DatabaseConfig {
   readonly paperFinancialLifecycleEnabled: boolean;
   readonly paperObservationMaxAgeSeconds: number;
   readonly paperMarketMonitoringEnabled: boolean;
+  readonly paperMarketMonitoringAuthorityEnabled: boolean;
   readonly paperMarketMonitorCanaryUserIds: readonly string[];
   readonly paperMarketMonitorIntervalMs: number;
   readonly paperMarketMonitorBatchSize: number;
@@ -50,6 +51,15 @@ export interface EngineConfig extends DatabaseConfig {
   readonly paperMarketMonitorMaximumBackoffMs: number;
   readonly paperMarketMonitorLeaseDurationMs: number;
   readonly shutdownTimeoutMs: number;
+  readonly tokenScanningEnabled?: boolean;
+  readonly tokenScannerCanaryUserIds?: readonly string[];
+  readonly tokenScanBatchSize?: number;
+  readonly tokenScanLeaseDurationMs?: number;
+  readonly tokenScanProviderTimeoutMs?: number;
+  readonly birdeyeScannerBaseUrl?: URL;
+  readonly birdeyeScannerApiKey?: string | undefined;
+  readonly goPlusScannerAccessToken?: string | undefined;
+  readonly solanaScannerRpcUrl?: URL | undefined;
 }
 
 export class EnvironmentConfigurationError extends Error {
@@ -215,6 +225,32 @@ function publicKey(env: NodeJS.ProcessEnv): ReturnType<typeof createPublicKey> {
   }
 }
 
+function optionalUrl(env: NodeJS.ProcessEnv, key: string): URL | undefined {
+  const value = env[key]?.trim();
+
+  if (value === undefined || value === '') {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(value);
+
+    if (parsed.protocol !== 'https:') {
+      throw new Error('HTTPS required');
+    }
+
+    return parsed;
+  } catch {
+    throw new EnvironmentConfigurationError(`${key} must be an absolute HTTPS URL`);
+  }
+}
+
+function optionalSecret(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const value = env[key]?.trim();
+
+  return value === undefined || value === '' ? undefined : value;
+}
+
 function url(env: NodeJS.ProcessEnv, key: string): URL {
   const value = required(env, key);
 
@@ -289,9 +325,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     paperMarketProviderTimeoutMs,
     600_000,
   );
+  const paperFinancialLifecycleEnabled = boolean(
+    env,
+    'PAPER_FINANCIAL_LIFECYCLE_ENABLED',
+    false,
+  );
   const paperMarketMonitoringEnabled = boolean(
     env,
     'PAPER_MARKET_MONITORING_ENABLED',
+    false,
+  );
+  const paperMarketMonitoringAuthorityEnabled = boolean(
+    env,
+    'PAPER_MARKET_MONITORING_AUTHORITY_ENABLED',
     false,
   );
   const paperMarketMonitorCanaryUserIds = positiveIdList(
@@ -304,6 +350,53 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       'PAPER_MARKET_MONITOR_CANARY_USER_IDS must contain at least one positive integer ID when PAPER_MARKET_MONITORING_ENABLED is true',
     );
   }
+  if (paperMarketMonitoringAuthorityEnabled
+    && (!paperMarketMonitoringEnabled || !paperFinancialLifecycleEnabled)) {
+    throw new EnvironmentConfigurationError(
+      'PAPER_MARKET_MONITORING_AUTHORITY_ENABLED requires PAPER_MARKET_MONITORING_ENABLED and PAPER_FINANCIAL_LIFECYCLE_ENABLED',
+    );
+  }
+
+  const tokenScanningEnabled = boolean(env, 'TOKEN_SCANNING_ENABLED', false);
+  const tokenScannerCanaryUserIds = positiveIdList(env, 'TOKEN_SCANNER_CANARY_USER_IDS');
+  const tokenScanBatchSize = integer(env, 'TOKEN_SCAN_BATCH_SIZE', 1, 1, 1);
+  const tokenScanLeaseDurationMs = integer(
+    env,
+    'TOKEN_SCAN_LEASE_DURATION_MS',
+    300_000,
+    30_000,
+    900_000,
+  );
+  const tokenScanProviderTimeoutMs = integer(
+    env,
+    'TOKEN_SCAN_PROVIDER_TIMEOUT_MS',
+    30_000,
+    1_000,
+    60_000,
+  );
+  const birdeyeScannerApiKey = optionalSecret(env, 'BIRDEYE_API_KEY');
+  const solanaScannerRpcUrl = optionalUrl(env, 'SOLANA_RPC_URL');
+
+  if (tokenScanningEnabled && tokenScannerCanaryUserIds.length === 0) {
+    throw new EnvironmentConfigurationError(
+      'TOKEN_SCANNER_CANARY_USER_IDS must contain at least one positive integer ID when TOKEN_SCANNING_ENABLED is true',
+    );
+  }
+
+  if (tokenScanningEnabled && birdeyeScannerApiKey === undefined) {
+    throw new EnvironmentConfigurationError('BIRDEYE_API_KEY is required when TOKEN_SCANNING_ENABLED is true');
+  }
+
+  if (tokenScanningEnabled && solanaScannerRpcUrl === undefined) {
+    throw new EnvironmentConfigurationError('SOLANA_RPC_URL is required when TOKEN_SCANNING_ENABLED is true');
+  }
+
+  if (tokenScanningEnabled && tokenScanProviderTimeoutMs >= tokenScanLeaseDurationMs) {
+    throw new EnvironmentConfigurationError(
+      'TOKEN_SCAN_PROVIDER_TIMEOUT_MS must be less than TOKEN_SCAN_LEASE_DURATION_MS when TOKEN_SCANNING_ENABLED is true',
+    );
+  }
+
   const database = loadDatabaseConfig(env);
 
   return {
@@ -365,7 +458,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       30,
       3_600,
     ),
-    paperFinancialLifecycleEnabled: boolean(env, 'PAPER_FINANCIAL_LIFECYCLE_ENABLED', false),
+    paperFinancialLifecycleEnabled,
     paperObservationMaxAgeSeconds: integer(
       env,
       'PAPER_OBSERVATION_MAX_AGE_SECONDS',
@@ -375,6 +468,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     ),
     shutdownTimeoutMs: integer(env, 'SHUTDOWN_TIMEOUT_MS', 15_000, 1_000, 60_000),
     paperMarketMonitoringEnabled,
+    paperMarketMonitoringAuthorityEnabled,
     paperMarketMonitorCanaryUserIds,
     paperMarketMonitorIntervalMs,
     paperMarketMonitorBatchSize: integer(env, 'PAPER_MARKET_MONITOR_BATCH_SIZE', 30, 1, 300),
@@ -383,6 +477,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     paperMarketMonitorRequestBudget: integer(env, 'PAPER_MARKET_MONITOR_REQUEST_BUDGET', 1, 1, 20),
     paperMarketMonitorMaximumBackoffMs,
     paperMarketMonitorLeaseDurationMs,
+    tokenScanningEnabled,
+    tokenScannerCanaryUserIds,
+    tokenScanBatchSize,
+    tokenScanLeaseDurationMs,
+    tokenScanProviderTimeoutMs,
+    birdeyeScannerBaseUrl: new URL('https://public-api.birdeye.so'),
+    birdeyeScannerApiKey,
+    goPlusScannerAccessToken: optionalSecret(env, 'GOPLUS_ACCESS_TOKEN'),
+    solanaScannerRpcUrl,
   };
 }
 

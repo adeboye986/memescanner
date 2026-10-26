@@ -22,6 +22,7 @@ export interface PaperEntryPolicy {
   readonly openingBalanceNative: string;
   readonly entryNotionalNative: string;
   readonly intentMaxAgeSeconds: number;
+  readonly financialMarketObservationControlPlaneUserIds?: readonly string[];
 }
 
 export class ExecutePaperEntryCommandHandler {
@@ -178,11 +179,16 @@ export class ExecutePaperEntryCommandHandler {
           strategySha256,
           acceptedAt,
         }, wallet);
+        const financialMarketObservation =
+          this.policy.financialMarketObservationControlPlaneUserIds?.includes(
+            command.body.subject.control_plane_user_id,
+          ) === true;
         await this.monitoring.createForPosition(transaction, {
           positionId: ids.positionId,
           networkId: command.body.network.id,
           assetAddress: command.body.asset.address,
           dueAt: acceptedAt,
+          observationAuthority: financialMarketObservation ? 'financial' : 'shadow',
         });
         const availableAfter = subtractCanonicalDecimals(
           availableBefore,
@@ -235,6 +241,9 @@ export class ExecutePaperEntryCommandHandler {
               policy_version: PAPER_LIFECYCLE_POLICY_VERSION,
               lifecycle_version: 0,
               state: 'open',
+              market_observation_authority: financialMarketObservation
+                ? 'typescript'
+                : 'laravel',
             },
           },
           source: command.body.source,

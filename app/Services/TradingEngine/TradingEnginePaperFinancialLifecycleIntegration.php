@@ -2,12 +2,10 @@
 
 namespace App\Services\TradingEngine;
 
-use App\Jobs\SubmitTradingEnginePaperFinancialObservation;
 use App\Models\TradingEnginePaperFinancialObservation;
 use App\Models\TradingEnginePaperPositionProjection;
 use App\Models\TradingEnginePaperPositionState;
 use Carbon\CarbonImmutable;
-use Illuminate\Support\Facades\DB;
 use LogicException;
 use Throwable;
 
@@ -18,6 +16,7 @@ class TradingEnginePaperFinancialLifecycleIntegration
     public function __construct(
         private TradingEngineCanonicalJson $canonicalJson,
         private CanonicalDecimal $decimals,
+        private TradingEnginePaperDeliveryTracker $deliveries,
     ) {}
 
     public function enabled(): bool
@@ -42,7 +41,7 @@ class TradingEnginePaperFinancialLifecycleIntegration
             throw new LogicException('The engine PAPER position is not eligible for financial observation.');
         }
 
-        return DB::transaction(function () use ($position, $observation): TradingEnginePaperFinancialObservation {
+        return $this->deliveries->queueObservation(function () use ($position, $observation): TradingEnginePaperFinancialObservation {
             $state = TradingEnginePaperPositionState::query()
                 ->where('position_projection_id', $position->getKey())
                 ->lockForUpdate()
@@ -50,21 +49,25 @@ class TradingEnginePaperFinancialLifecycleIntegration
 
             if (! $state instanceof TradingEnginePaperPositionState
                 || $state->state !== 'open'
+                || $state->market_observation_authority !== 'laravel'
                 || $state->position_projection_id !== $position->getKey()) {
                 throw new LogicException('The engine PAPER lifecycle state is not open.');
             }
 
             $outstanding = TradingEnginePaperFinancialObservation::query()
                 ->where('position_state_id', $state->getKey())
-                ->whereIn('status', ['pending', 'submitted'])
+                ->whereIn('status', [
+                    TradingEnginePaperFinancialObservation::STATUS_PENDING,
+                    TradingEnginePaperFinancialObservation::STATUS_QUEUED,
+                    TradingEnginePaperFinancialObservation::STATUS_SUBMITTING,
+                    TradingEnginePaperFinancialObservation::STATUS_RETRYING,
+                    TradingEnginePaperFinancialObservation::STATUS_ACCEPTANCE_UNKNOWN,
+                    TradingEnginePaperFinancialObservation::STATUS_SUBMITTED,
+                ])
                 ->orderByDesc('sequence')
                 ->first();
 
             if ($outstanding instanceof TradingEnginePaperFinancialObservation) {
-                if ($outstanding->status === 'pending') {
-                    DB::afterCommit(fn () => SubmitTradingEnginePaperFinancialObservation::dispatch($outstanding->getKey()));
-                }
-
                 return $outstanding;
             }
 
@@ -106,14 +109,13 @@ class TradingEnginePaperFinancialLifecycleIntegration
                 'idempotency_key' => $idempotencyKey,
                 'payload_sha256' => $this->canonicalJson->hash($payload),
                 'payload' => $payload,
-                'status' => 'pending',
+                'status' => TradingEnginePaperFinancialObservation::STATUS_PENDING,
             ]);
 
             $state->forceFill(['next_observation_sequence' => $sequence + 1])->save();
-            DB::afterCommit(fn () => SubmitTradingEnginePaperFinancialObservation::dispatch($created->getKey()));
 
             return $created;
-        }, 3);
+        });
     }
 
     private function requiredDecimal(mixed $value): string

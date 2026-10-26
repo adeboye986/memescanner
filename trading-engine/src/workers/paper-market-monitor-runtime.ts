@@ -1,9 +1,14 @@
 import type { Kysely } from 'kysely';
 import type { Logger } from 'pino';
 
+import { ObservePaperFinancialPositionCommandHandler } from '../application/handlers/observe-paper-financial-position-command-handler.js';
 import type { EngineConfig } from '../config/env.js';
 import type { Database } from '../infrastructure/database/client.js';
 import { inspectDatabaseSchemaCompatibility } from '../infrastructure/database/schema-compatibility.js';
+import { CommandInboxRepository } from '../infrastructure/database/repositories/command-inbox-repository.js';
+import { OutboxRepository } from '../infrastructure/database/repositories/outbox-repository.js';
+import { PaperFinancialLifecycleRepository } from '../infrastructure/database/repositories/paper-financial-lifecycle-repository.js';
+import { PaperPositionLifecycleRepository } from '../infrastructure/database/repositories/paper-position-lifecycle-repository.js';
 import { PaperPositionMonitoringRepository } from '../infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import {
   DEXSCREENER_MAX_TOKEN_ADDRESSES,
@@ -14,6 +19,7 @@ import {
   idempotentClose,
   type RuntimeHandle,
 } from '../infrastructure/runtime/process-lifecycle.js';
+import { EnginePaperFinancialMarketObserver } from './paper-financial-market-observer.js';
 import {
   PaperMarketMonitoringCycle,
   type PaperMarketMonitoringPolicy,
@@ -59,7 +65,10 @@ export function startPaperMarketMonitorRuntime(
   dependencies: PaperMarketMonitorRuntimeDependencies = {},
 ): PaperMarketMonitorRuntimeHandle {
   const capabilityChecker = dependencies.capabilityChecker
-    ?? paperMarketMonitoringCapabilitiesAvailable;
+    ?? ((database): Promise<boolean> => paperMarketMonitoringCapabilitiesAvailable(
+      database,
+      options.config.paperMarketMonitoringAuthorityEnabled,
+    ));
   const cycleFactory = dependencies.cycleFactory ?? createMonitoringCycle;
   const pollerFactory = dependencies.pollerFactory
     ?? ((pollerOptions): PaperMarketMonitorPollerHandle =>
@@ -115,6 +124,7 @@ export function startPaperMarketMonitorRuntime(
           config: options.config,
           policy: {
             enabled: true,
+            authoritativeEnabled: options.config.paperMarketMonitoringAuthorityEnabled,
             eligibleControlPlaneUserIds: options.config.paperMarketMonitorCanaryUserIds,
             intervalMs: options.config.paperMarketMonitorIntervalMs,
             batchSize: options.config.paperMarketMonitorBatchSize,
@@ -134,8 +144,13 @@ export function startPaperMarketMonitorRuntime(
 
       created.start();
       options.logger.info(
-        { intervalMs: options.config.paperMarketMonitorIntervalMs },
-        'Leader-controlled PAPER shadow monitoring started',
+        {
+          intervalMs: options.config.paperMarketMonitorIntervalMs,
+          authority: options.config.paperMarketMonitoringAuthorityEnabled
+            ? 'financial'
+            : 'shadow',
+        },
+        'Leader-controlled PAPER market monitoring started',
       );
     } catch {
       options.logger.error(
@@ -167,10 +182,12 @@ export function startPaperMarketMonitorRuntime(
 
 export async function paperMarketMonitoringCapabilitiesAvailable(
   database: Kysely<Database>,
+  authoritativeEnabled = false,
 ): Promise<boolean> {
   const compatibility = await inspectDatabaseSchemaCompatibility(database, {
     paperEntryEnabled: false,
     paperMarketMonitoringEnabled: true,
+    paperMarketMonitoringAuthorityEnabled: authoritativeEnabled,
     paperMarketMonitorCanaryUserIds: ['capability-check'],
   });
 
@@ -180,6 +197,23 @@ export async function paperMarketMonitoringCapabilitiesAvailable(
 function createMonitoringCycle(
   options: PaperMarketMonitoringCycleFactoryOptions,
 ): PaperMarketMonitoringCycleRunner {
+  const financialObserver = options.policy.authoritativeEnabled
+    ? new EnginePaperFinancialMarketObserver(
+        options.database,
+        new ObservePaperFinancialPositionCommandHandler(
+          options.database,
+          new CommandInboxRepository(),
+          new PaperPositionLifecycleRepository(),
+          new PaperFinancialLifecycleRepository(),
+          new OutboxRepository(),
+          {
+            enabled: true,
+            observationMaxAgeSeconds: options.config.paperObservationMaxAgeSeconds,
+          },
+        ),
+      )
+    : undefined;
+
   return new PaperMarketMonitoringCycle(
     options.database,
     new PaperPositionMonitoringRepository(),
@@ -194,6 +228,7 @@ function createMonitoringCycle(
     options.logger,
     undefined,
     options.beforePersist,
+    financialObserver,
   );
 }
 

@@ -116,6 +116,7 @@ describe('leader-controlled PAPER market monitor runtime', () => {
       logger,
       policy: {
         enabled: true,
+        authoritativeEnabled: false,
         eligibleControlPlaneUserIds: config.paperMarketMonitorCanaryUserIds,
         intervalMs: config.paperMarketMonitorIntervalMs,
         batchSize: config.paperMarketMonitorBatchSize,

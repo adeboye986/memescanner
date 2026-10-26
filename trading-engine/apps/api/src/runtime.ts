@@ -6,6 +6,7 @@ import { ObservePaperFinancialPositionCommandHandler } from '../../../src/applic
 import { ObservePaperPositionCommandHandler } from '../../../src/application/handlers/observe-paper-position-command-handler.js';
 import { RecordOpportunityCommandHandler } from '../../../src/application/handlers/record-opportunity-command-handler.js';
 import { RecordPaperPositionCommandHandler } from '../../../src/application/handlers/record-paper-position-command-handler.js';
+import { StartTokenScanCommandHandler } from '../../../src/application/handlers/start-token-scan-command-handler.js';
 import type { EngineConfig } from '../../../src/config/env.js';
 import { createDatabase } from '../../../src/infrastructure/database/client.js';
 import { migrateDatabase } from '../../../src/infrastructure/database/migrate.js';
@@ -17,6 +18,7 @@ import { PaperFinancialLifecycleRepository } from '../../../src/infrastructure/d
 import { PaperPositionLifecycleRepository } from '../../../src/infrastructure/database/repositories/paper-position-lifecycle-repository.js';
 import { PaperPositionMonitoringRepository } from '../../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
 import { OutboxRepository } from '../../../src/infrastructure/database/repositories/outbox-repository.js';
+import { TokenScanRepository } from '../../../src/infrastructure/database/repositories/token-scan-repository.js';
 import {
   closeInOrder,
   idempotentClose,
@@ -54,6 +56,7 @@ export async function startApi(
   const paperMonitoring = new PaperPositionMonitoringRepository();
   const paperFinancials = new PaperFinancialLifecycleRepository();
   const paperPositions = new PaperPositionLifecycleRepository();
+  const tokenScans = new TokenScanRepository();
   const noopHandler = new AcceptNoopCommandHandler(
     database,
     commandInbox,
@@ -64,6 +67,13 @@ export async function startApi(
     commandInbox,
     opportunities,
     outbox,
+  );
+  const tokenScanHandler = new StartTokenScanCommandHandler(
+    database,
+    commandInbox,
+    tokenScans,
+    options.config.tokenScanningEnabled === true,
+    options.config.tokenScannerCanaryUserIds ?? [],
   );
   const paperEntryHandler = new ExecutePaperEntryCommandHandler(
     database,
@@ -76,6 +86,10 @@ export async function startApi(
       openingBalanceNative: options.config.paperOpeningBalanceNative,
       entryNotionalNative: options.config.paperEntryNotionalNative,
       intentMaxAgeSeconds: options.config.paperEntryIntentMaxAgeSeconds,
+      financialMarketObservationControlPlaneUserIds:
+        options.config.paperMarketMonitoringAuthorityEnabled
+          ? options.config.paperMarketMonitorCanaryUserIds
+          : [],
     },
   );
   const paperPositionRegistrationHandler = new RecordPaperPositionCommandHandler(
@@ -106,6 +120,7 @@ export async function startApi(
     database,
     noopHandler,
     opportunityHandler,
+    tokenScanHandler,
     paperEntryHandler,
     paperFinancialObservationHandler,
     paperPositionRegistrationHandler,

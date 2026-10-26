@@ -12,6 +12,7 @@ import type { ObservePaperFinancialPositionCommandHandler } from '../../../src/a
 import type { ObservePaperPositionCommandHandler } from '../../../src/application/handlers/observe-paper-position-command-handler.js';
 import type { RecordOpportunityCommandHandler } from '../../../src/application/handlers/record-opportunity-command-handler.js';
 import type { RecordPaperPositionCommandHandler } from '../../../src/application/handlers/record-paper-position-command-handler.js';
+import type { StartTokenScanCommandHandler } from '../../../src/application/handlers/start-token-scan-command-handler.js';
 import type { EngineConfig } from '../../../src/config/env.js';
 import type { Database } from '../../../src/infrastructure/database/client.js';
 import { ApplicationError } from '../../../src/shared/errors/application-error.js';
@@ -28,6 +29,7 @@ import { registerOpportunityCommandRoutes } from '../../../src/interfaces/http/o
 import { registerPaperEntryCommandRoutes } from '../../../src/interfaces/http/paper-entry-command-routes.js';
 import { registerPaperFinancialObservationCommandRoutes } from '../../../src/interfaces/http/paper-financial-observation-command-routes.js';
 import { registerPaperPositionCommandRoutes } from '../../../src/interfaces/http/paper-position-command-routes.js';
+import { registerTokenScanCommandRoutes } from '../../../src/interfaces/http/token-scan-command-routes.js';
 import type { Kysely } from 'kysely';
 
 const correlationIdPattern = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -40,6 +42,7 @@ export interface AppDependencies {
   readonly databaseSchemaCompatibilityCheck?: DatabaseSchemaCompatibilityCheck;
   readonly noopHandler: AcceptNoopCommandHandler;
   readonly opportunityHandler: RecordOpportunityCommandHandler;
+  readonly tokenScanHandler?: StartTokenScanCommandHandler;
   readonly paperEntryHandler?: ExecutePaperEntryCommandHandler;
   readonly paperFinancialObservationHandler?: ObservePaperFinancialPositionCommandHandler;
   readonly paperPositionRegistrationHandler?: RecordPaperPositionCommandHandler;
@@ -189,6 +192,12 @@ export function buildApp(
     handler: dependencies.opportunityHandler,
     requireServiceAuth,
   });
+  if (dependencies.tokenScanHandler !== undefined) {
+    registerTokenScanCommandRoutes(app, {
+      handler: dependencies.tokenScanHandler,
+      requireServiceAuth,
+    });
+  }
   if (dependencies.paperEntryHandler !== undefined) {
     registerPaperEntryCommandRoutes(app, {
       handler: dependencies.paperEntryHandler,

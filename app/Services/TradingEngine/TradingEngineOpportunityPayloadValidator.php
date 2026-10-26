@@ -36,12 +36,26 @@ class TradingEngineOpportunityPayloadValidator
 
     private function source(mixed $value): bool
     {
-        return is_array($value)
-            && $this->hasOnlyKeys($value, ['system', 'opportunity_id', 'discovery_key', 'scanner'])
-            && $value['system'] === 'meme-scanner-laravel'
-            && $this->stringLength($value['opportunity_id'], 1, 64)
-            && $this->matches($value['discovery_key'], '/^[0-9a-f]{64}$/D')
-            && in_array($value['scanner'], ['new-token', 'momentum'], true);
+        if (! is_array($value)
+            || ! in_array($value['system'] ?? null, [
+                'meme-scanner-laravel',
+                'meme-scanner-trading-engine',
+            ], true)
+            || ! $this->stringLength($value['opportunity_id'] ?? null, 1, 64)
+            || ! $this->matches($value['discovery_key'] ?? null, '/^[0-9a-f]{64}$/D')
+            || ! in_array($value['scanner'] ?? null, ['new-token', 'momentum'], true)) {
+            return false;
+        }
+
+        if ($value['system'] === 'meme-scanner-laravel') {
+            return $this->hasOnlyKeys($value, ['system', 'opportunity_id', 'discovery_key', 'scanner']);
+        }
+
+        return $this->hasOnlyKeys(
+            $value,
+            ['system', 'opportunity_id', 'discovery_key', 'scanner', 'scan_execution_id'],
+        ) && $this->engineId($value['opportunity_id'])
+            && $this->engineId($value['scan_execution_id'] ?? null);
     }
 
     private function subject(mixed $value): bool

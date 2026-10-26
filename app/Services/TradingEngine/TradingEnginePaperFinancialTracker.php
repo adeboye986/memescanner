@@ -37,6 +37,7 @@ class TradingEnginePaperFinancialTracker
         $states = TradingEnginePaperPositionState::query()
             ->with('position')
             ->where('state', 'open')
+            ->where('market_observation_authority', 'laravel')
             ->orderBy('updated_at')
             ->limit(max(1, min($limit, 200)))
             ->get()

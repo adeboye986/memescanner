@@ -6,18 +6,25 @@ import type { Database } from './client.js';
 export const PAPER_FINANCIAL_SCHEMA_VERSION = 6;
 export const PAPER_ENTRY_SCHEMA_VERSION = 7;
 export const PAPER_SHADOW_MONITORING_SCHEMA_VERSION = 8;
+export const PAPER_MARKET_AUTHORITY_SCHEMA_VERSION = 9;
+export const TOKEN_SCANNING_SCHEMA_VERSION = 10;
 
 const migrationNames = new Map<number, string>([
   [PAPER_FINANCIAL_SCHEMA_VERSION, '006_paper_financial_lifecycle'],
   [PAPER_ENTRY_SCHEMA_VERSION, '007_paper_market_monitoring'],
   [PAPER_SHADOW_MONITORING_SCHEMA_VERSION, '008_paper_market_shadow_observations'],
+  [PAPER_MARKET_AUTHORITY_SCHEMA_VERSION, '009_paper_market_observation_authority'],
+  [TOKEN_SCANNING_SCHEMA_VERSION, '010_token_discovery_scanning'],
 ]);
 
 export type DatabaseSchemaFeatureConfig = Pick<
   EngineConfig,
   | 'paperEntryEnabled'
   | 'paperMarketMonitoringEnabled'
+  | 'paperMarketMonitoringAuthorityEnabled'
   | 'paperMarketMonitorCanaryUserIds'
+  | 'tokenScanningEnabled'
+  | 'tokenScannerCanaryUserIds'
 >;
 
 export interface DatabaseSchemaSnapshot {
@@ -25,6 +32,8 @@ export interface DatabaseSchemaSnapshot {
   readonly paperFinancialSchemaAvailable: boolean;
   readonly paperEntrySchemaAvailable: boolean;
   readonly paperShadowMonitoringSchemaAvailable: boolean;
+  readonly paperMarketAuthoritySchemaAvailable: boolean;
+  readonly tokenScanningSchemaAvailable?: boolean;
 }
 
 export interface DatabaseSchemaCompatibility {
@@ -39,6 +48,8 @@ interface DatabaseSchemaCatalogRow {
   readonly paper_financial_schema_available: boolean;
   readonly paper_entry_schema_available: boolean;
   readonly paper_shadow_monitoring_schema_available: boolean;
+  readonly paper_market_authority_schema_available: boolean;
+  readonly token_scanning_schema_available: boolean;
 }
 
 export class DatabaseSchemaCompatibilityError extends Error {
@@ -55,12 +66,14 @@ export class DatabaseSchemaCompatibilityError extends Error {
 export function requiredDatabaseSchemaVersion(
   config: DatabaseSchemaFeatureConfig,
 ): number {
-  if (config.paperMarketMonitoringEnabled) {
-    return PAPER_SHADOW_MONITORING_SCHEMA_VERSION;
+  if (config.tokenScanningEnabled === true) {
+    return TOKEN_SCANNING_SCHEMA_VERSION;
   }
 
-  if (config.paperEntryEnabled) {
-    return PAPER_ENTRY_SCHEMA_VERSION;
+  if (config.paperMarketMonitoringAuthorityEnabled
+    || config.paperMarketMonitoringEnabled
+    || config.paperEntryEnabled) {
+    return PAPER_MARKET_AUTHORITY_SCHEMA_VERSION;
   }
 
   return PAPER_FINANCIAL_SCHEMA_VERSION;
@@ -104,8 +117,34 @@ export function evaluateDatabaseSchemaCompatibility(
       missingCapabilities.push('PAPER_SHADOW_OBSERVATION_SCHEMA_UNAVAILABLE');
     }
 
-    if (config.paperMarketMonitorCanaryUserIds.length === 0) {
-      missingCapabilities.push('PAPER_MARKET_MONITOR_CANARY_UNAVAILABLE');
+  }
+
+  if (config.paperMarketMonitoringEnabled
+    && config.paperMarketMonitorCanaryUserIds.length === 0) {
+    missingCapabilities.push('PAPER_MARKET_MONITOR_CANARY_UNAVAILABLE');
+  }
+
+  if (requiredVersion >= PAPER_MARKET_AUTHORITY_SCHEMA_VERSION) {
+    if (!migrationApplied(snapshot, PAPER_MARKET_AUTHORITY_SCHEMA_VERSION)) {
+      missingCapabilities.push('MIGRATION_009_NOT_APPLIED');
+    }
+
+    if (!snapshot.paperMarketAuthoritySchemaAvailable) {
+      missingCapabilities.push('PAPER_MARKET_AUTHORITY_SCHEMA_UNAVAILABLE');
+    }
+  }
+
+  if (requiredVersion >= TOKEN_SCANNING_SCHEMA_VERSION) {
+    if (!migrationApplied(snapshot, TOKEN_SCANNING_SCHEMA_VERSION)) {
+      missingCapabilities.push('MIGRATION_010_NOT_APPLIED');
+    }
+
+    if (!snapshot.tokenScanningSchemaAvailable) {
+      missingCapabilities.push('TOKEN_SCANNING_SCHEMA_UNAVAILABLE');
+    }
+
+    if ((config.tokenScannerCanaryUserIds ?? []).length === 0) {
+      missingCapabilities.push('TOKEN_SCANNER_CANARY_UNAVAILABLE');
     }
   }
 
@@ -135,6 +174,9 @@ export async function inspectDatabaseSchemaCompatibility(
     paperEntrySchemaAvailable: catalog.paper_entry_schema_available,
     paperShadowMonitoringSchemaAvailable:
       catalog.paper_shadow_monitoring_schema_available,
+    paperMarketAuthoritySchemaAvailable:
+      catalog.paper_market_authority_schema_available,
+    tokenScanningSchemaAvailable: catalog.token_scanning_schema_available,
   });
 }
 
@@ -320,7 +362,158 @@ async function databaseSchemaCatalog(
         and to_regprocedure(
           'public.reject_paper_market_shadow_observation_mutation()'
         ) is not null
-      ) as paper_shadow_monitoring_schema_available
+      ) as paper_shadow_monitoring_schema_available,
+      (
+        (
+          select count(*)::int = 2
+          from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'paper_position_monitoring_tasks'
+            and column_name in (
+              'observation_authority',
+              'next_financial_observation_sequence'
+            )
+        )
+        and exists (
+          select 1 from pg_constraint
+          where conname = 'paper_position_monitoring_tasks_authority_check'
+            and conrelid = to_regclass('public.paper_position_monitoring_tasks')
+        )
+        and exists (
+          select 1 from pg_constraint
+          where conname = 'paper_position_monitoring_tasks_financial_sequence_check'
+            and conrelid = to_regclass('public.paper_position_monitoring_tasks')
+        )
+        and exists (
+          select 1 from pg_indexes
+          where schemaname = 'public'
+            and indexname = 'paper_position_monitoring_tasks_financial_due_index'
+        )
+      ) as paper_market_authority_schema_available,
+      (
+        to_regclass('public.token_scan_executions') is not null
+        and to_regclass('public.token_discoveries') is not null
+        and (
+          select count(*)::int = 29
+          from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'token_scan_executions'
+            and column_name in (
+              'id',
+              'source_system',
+              'source_activity_id',
+              'control_plane_user_id',
+              'scanner',
+              'network_id',
+              'state',
+              'attempt_count',
+              'next_attempt_at',
+              'lease_owner',
+              'lease_expires_at',
+              'request',
+              'request_sha256',
+              'idempotency_key',
+              'correlation_id',
+              'traceparent',
+              'discovered_count',
+              'examined_count',
+              'qualified_count',
+              'opportunities_created_count',
+              'opportunities_existing_count',
+              'skipped_count',
+              'failed_count',
+              'provider_failures',
+              'last_error_code',
+              'started_at',
+              'completed_at',
+              'created_at',
+              'updated_at'
+            )
+        )
+        and exists (
+          select 1 from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'token_scan_executions'
+            and column_name = 'next_attempt_at'
+            and is_nullable = 'NO'
+        )
+        and (
+          select count(*)::int = 16
+          from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'token_discoveries'
+            and column_name in (
+              'id',
+              'scan_execution_id',
+              'network_id',
+              'asset_address',
+              'symbol',
+              'name',
+              'provider',
+              'discovery_index',
+              'state',
+              'reason_code',
+              'market_snapshot',
+              'security_snapshot',
+              'qualification_snapshot',
+              'opportunity_id',
+              'created_at',
+              'updated_at'
+            )
+        )
+        and exists (
+          select 1 from pg_constraint
+          where conname = 'token_scan_executions_source_unique'
+            and conrelid = to_regclass('public.token_scan_executions')
+        )
+        and (
+          select count(*)::int = 5
+          from pg_constraint
+          where conname in (
+            'token_scan_executions_scanner_check',
+            'token_scan_executions_network_check',
+            'token_scan_executions_state_check',
+            'token_scan_executions_lease_check',
+            'token_scan_executions_count_check'
+          )
+            and conrelid = to_regclass('public.token_scan_executions')
+        )
+        and exists (
+          select 1 from pg_constraint
+          where conname = 'token_discoveries_scan_asset_unique'
+            and conrelid = to_regclass('public.token_discoveries')
+        )
+        and (
+          select count(*)::int = 3
+          from pg_constraint
+          where conname in (
+            'token_discoveries_provider_check',
+            'token_discoveries_state_check',
+            'token_discoveries_index_check'
+          )
+            and conrelid = to_regclass('public.token_discoveries')
+        )
+        and exists (
+          select 1 from pg_indexes
+          where schemaname = 'public'
+            and indexname = 'token_scan_executions_claim_index'
+        )
+        and exists (
+          select 1 from pg_indexes
+          where schemaname = 'public'
+            and indexname = 'token_scan_executions_expired_lease_index'
+        )
+        and exists (
+          select 1 from pg_indexes
+          where schemaname = 'public'
+            and indexname = 'token_discoveries_scan_state_index'
+        )
+        and exists (
+          select 1 from pg_indexes
+          where schemaname = 'public'
+            and indexname = 'token_discoveries_asset_index'
+        )
+      ) as token_scanning_schema_available
   `.execute(database);
   const catalog = result.rows[0];
 

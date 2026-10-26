@@ -119,6 +119,15 @@ class TradingEnginePaperEntryProjector
                 $this->reject('PAPER_ENTRY_PROJECTION_CONFLICT');
             }
 
+            $intent->forceFill([
+                ...$identifiers,
+                'status' => TradingEnginePaperEntryIntent::STATUS_PROJECTED,
+                'last_error_code' => null,
+                'acceptance_unknown_at' => null,
+                'definitively_rejected_at' => null,
+                'projected_at' => $intent->projected_at ?? now(),
+            ])->save();
+
             return;
         }
 
@@ -191,6 +200,11 @@ class TradingEnginePaperEntryProjector
             'position_projection_id' => $position->getKey(),
             'lifecycle_version' => 0,
             'next_observation_sequence' => 1,
+            'market_observation_authority' => data_get(
+                $positionPayload,
+                'lifecycle.market_observation_authority',
+                'laravel',
+            ),
             'state' => 'open',
             'protection_state' => 'none',
             'peak_market_cap_usd' => $positionPayload['entry_market_cap_usd'],
@@ -200,8 +214,10 @@ class TradingEnginePaperEntryProjector
 
         $intent->forceFill([
             ...$identifiers,
-            'status' => 'projected',
+            'status' => TradingEnginePaperEntryIntent::STATUS_PROJECTED,
             'last_error_code' => null,
+            'acceptance_unknown_at' => null,
+            'definitively_rejected_at' => null,
             'projected_at' => now(),
         ])->save();
         $opportunity->forceFill([

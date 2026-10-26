@@ -1,11 +1,21 @@
 import type { Logger } from 'pino';
 
+import { RecordOpportunityCommandHandler } from '../../../src/application/handlers/record-opportunity-command-handler.js';
 import type { EngineConfig } from '../../../src/config/env.js';
 import { createDatabase } from '../../../src/infrastructure/database/client.js';
 import { migrateDatabase } from '../../../src/infrastructure/database/migrate.js';
 import { assertDatabaseSchemaCompatible } from '../../../src/infrastructure/database/schema-compatibility.js';
+import { CommandInboxRepository } from '../../../src/infrastructure/database/repositories/command-inbox-repository.js';
 import { OpportunityEvaluationRepository } from '../../../src/infrastructure/database/repositories/opportunity-evaluation-repository.js';
+import { OpportunityRepository } from '../../../src/infrastructure/database/repositories/opportunity-repository.js';
 import { OutboxRepository } from '../../../src/infrastructure/database/repositories/outbox-repository.js';
+import { TokenScanRepository } from '../../../src/infrastructure/database/repositories/token-scan-repository.js';
+import { BirdeyeScannerProvider } from '../../../src/infrastructure/scanning/birdeye-scanner-provider.js';
+import { DexScreenerScannerProvider } from '../../../src/infrastructure/scanning/dexscreener-scanner-provider.js';
+import { GeckoTerminalScannerProvider } from '../../../src/infrastructure/scanning/geckoterminal-scanner-provider.js';
+import { GoPlusScannerProvider } from '../../../src/infrastructure/scanning/goplus-scanner-provider.js';
+import { ScannerHttpClient } from '../../../src/infrastructure/scanning/scanner-http-client.js';
+import { SolanaRpcScannerProvider } from '../../../src/infrastructure/scanning/solana-rpc-scanner-provider.js';
 import { LaravelWebhookClient } from '../../../src/infrastructure/http/laravel-webhook-client.js';
 import {
   closeInOrder,
@@ -19,6 +29,7 @@ import {
 } from '../../../src/workers/paper-market-monitor-runtime.js';
 import { OpportunityEvaluationDispatcher } from '../../../src/workers/opportunity-evaluation-dispatcher.js';
 import { OutboxDispatcher } from '../../../src/workers/outbox-dispatcher.js';
+import { TokenScanDispatcher } from '../../../src/workers/token-scan-dispatcher.js';
 import {
   PostgresWorkflowLeadershipBackend,
   startPostgresWorkflowLeader,
@@ -90,6 +101,48 @@ export async function startWorker(
       logger: options.logger,
       startPoller: ({ database: leadershipDatabase, beforeCycle }) => {
         const outbox = new OutboxRepository();
+        const scannerHttp = new ScannerHttpClient();
+        const tokenScanDispatcher = options.config.tokenScanningEnabled === true
+          ? new TokenScanDispatcher({
+              database: leadershipDatabase,
+              repository: new TokenScanRepository(),
+              outbox,
+              opportunities: new RecordOpportunityCommandHandler(
+                leadershipDatabase,
+                new CommandInboxRepository(),
+                new OpportunityRepository(),
+                outbox,
+              ),
+              birdeye: new BirdeyeScannerProvider(
+                scannerHttp,
+                options.config.birdeyeScannerBaseUrl ?? new URL('https://public-api.birdeye.so'),
+                options.config.birdeyeScannerApiKey ?? '',
+                options.config.tokenScanProviderTimeoutMs ?? 30_000,
+              ),
+              dexscreener: new DexScreenerScannerProvider(
+                scannerHttp,
+                options.config.tokenScanProviderTimeoutMs ?? 30_000,
+              ),
+              geckoTerminal: new GeckoTerminalScannerProvider(
+                scannerHttp,
+                options.config.tokenScanProviderTimeoutMs ?? 30_000,
+              ),
+              goplus: new GoPlusScannerProvider(
+                scannerHttp,
+                options.config.tokenScanProviderTimeoutMs ?? 30_000,
+                options.config.goPlusScannerAccessToken,
+              ),
+              solanaRpc: new SolanaRpcScannerProvider(
+                scannerHttp,
+                options.config.solanaScannerRpcUrl
+                  ?? new URL('https://invalid.invalid'),
+                options.config.tokenScanProviderTimeoutMs ?? 30_000,
+              ),
+              logger: options.logger,
+              batchSize: options.config.tokenScanBatchSize ?? 1,
+              leaseDurationMs: options.config.tokenScanLeaseDurationMs ?? 300_000,
+            })
+          : undefined;
         const workflowPoller = pollerStarter({
           intervalMs: options.config.outboxPollIntervalMs,
           idleMaxIntervalMs: options.config.workflowIdleMaxIntervalMs,
@@ -109,6 +162,7 @@ export async function startWorker(
             outbox,
             options.logger,
           ),
+          ...(tokenScanDispatcher === undefined ? {} : { tokenScanDispatcher }),
         });
 
         if (!options.config.paperMarketMonitoringEnabled) {

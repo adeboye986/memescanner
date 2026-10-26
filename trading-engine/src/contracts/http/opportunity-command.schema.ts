@@ -87,10 +87,14 @@ export const OpportunityCommandSchema = Type.Object(
     schema_version: Type.Literal(1),
     source: Type.Object(
       {
-        system: Type.Literal('meme-scanner-laravel'),
+        system: Type.Union([
+          Type.Literal('meme-scanner-laravel'),
+          Type.Literal('meme-scanner-trading-engine'),
+        ]),
         opportunity_id: Type.String({ minLength: 1, maxLength: 64 }),
         discovery_key: Type.String({ pattern: '^[0-9a-f]{64}$' }),
         scanner: Type.Union([Type.Literal('new-token'), Type.Literal('momentum')]),
+        scan_execution_id: Type.Optional(Type.String({ minLength: 26, maxLength: 26 })),
       },
       { additionalProperties: false },
     ),

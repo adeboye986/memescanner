@@ -18,6 +18,7 @@ class TradingEngineEventEnvelopeValidator
         private TradingEnginePaperLifecyclePayloadValidator $paperLifecycle,
         private TradingEnginePaperEntryPayloadValidator $paperEntries,
         private TradingEnginePaperFinancialLifecyclePayloadValidator $paperFinancialLifecycle,
+        private TradingEngineScanEventPayloadValidator $tokenScans,
     ) {}
 
     private const REQUIRED_KEYS = [
@@ -115,6 +116,14 @@ class TradingEngineEventEnvelopeValidator
         }
 
         if (in_array($envelope['event_type'], [
+            'token.scan.completed.v1',
+            'token.scan.failed.v1',
+        ], true)) {
+            $this->validateTokenScanEvent($envelope);
+            $handlingStatus = TradingEngineEvent::STATUS_STORED;
+        }
+
+        if (in_array($envelope['event_type'], [
             'paper.position.recorded.v1',
             'paper.position.evaluated.v1',
             'paper.exit.requested.v1',
@@ -176,6 +185,24 @@ class TradingEngineEventEnvelopeValidator
             || $envelope['aggregate_type'] !== 'opportunity_evaluation'
             || $envelope['aggregate_version'] !== 1
             || $payload['evaluation_id'] !== $envelope['aggregate_id']) {
+            $this->rejectEnvelope();
+        }
+    }
+
+    /** @param array<string, mixed> $envelope */
+    private function validateTokenScanEvent(array $envelope): void
+    {
+        $payload = $envelope['payload'];
+
+        if (! is_array($payload)
+            || ! $this->tokenScans->isValid($payload)
+            || $envelope['schema_version'] !== 1
+            || $envelope['aggregate_type'] !== 'token_scan_execution'
+            || $envelope['aggregate_id'] !== $payload['scan_execution_id']
+            || $envelope['occurred_at'] !== $payload['completed_at']
+            || $envelope['causation_id'] !== $payload['scan_execution_id']
+            || $envelope['idempotency_key'] !== 'token-scan:'.$payload['scan_execution_id'].':terminal:v1'
+            || (($envelope['event_type'] === 'token.scan.failed.v1') !== ($payload['outcome'] === 'failed'))) {
             $this->rejectEnvelope();
         }
     }

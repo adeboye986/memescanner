@@ -6,9 +6,13 @@ use App\Chain;
 use App\Jobs\RunDashboardCommand;
 use App\Services\DashboardCommandRegistry;
 use App\Services\SystemActivityService;
+use App\Services\TradingEngine\TradingEngineScanCommandFactory;
+use App\Services\TradingEngine\TradingEngineScanDeliveryTracker;
+use App\Services\TradingEngine\TradingEngineScannerOwnership;
 use DomainException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 class DashboardActionController extends Controller
@@ -26,14 +30,34 @@ class DashboardActionController extends Controller
             $chain = in_array($action, ['token-scan', 'momentum-scan'], true)
                 ? Chain::fromInput($request->input('chain', Chain::Solana->value))
                 : null;
-            $activity = $activities->createManual($action, $chain, $request->user());
+            $engineOwned = config('services.trading_engine.scanner_integration_enabled', false) === true
+                && app(TradingEngineScannerOwnership::class)->routes($request->user(), $action);
+
+            if ($engineOwned) {
+                $activity = DB::transaction(function () use (
+                    $action,
+                    $chain,
+                    $request,
+                    $activities,
+                ) {
+                    $activity = $activities->createManual($action, $chain, $request->user());
+                    $commands = app(TradingEngineScanCommandFactory::class);
+                    app(TradingEngineScanDeliveryTracker::class)->queue(
+                        $activity,
+                        $commands->make($activity, $request->user()),
+                    );
+
+                    return $activity;
+                }, 3);
+            } else {
+                $activity = $activities->createManual($action, $chain, $request->user());
+                RunDashboardCommand::dispatch($activity->id);
+            }
         } catch (InvalidArgumentException $exception) {
             return back()->withErrors(['chain' => $exception->getMessage()]);
         } catch (DomainException $exception) {
             return back()->with('warning', $exception->getMessage());
         }
-
-        RunDashboardCommand::dispatch($activity->id);
 
         return back()->with('success', "{$activity->label} was queued.");
     }

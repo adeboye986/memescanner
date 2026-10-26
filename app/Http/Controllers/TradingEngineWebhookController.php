@@ -53,6 +53,8 @@ class TradingEngineWebhookController extends Controller
                 'opportunity.recorded.v1',
                 'opportunity.evaluated.v1',
             ], true);
+        $tokenScanProjection = config('services.trading_engine.scanner_integration_enabled', false) === true
+            && in_array($eventType, ['token.scan.completed.v1', 'token.scan.failed.v1'], true);
         $paperEntryProjection = config('services.trading_engine.paper_entry_integration_enabled', false) === true
             && $eventType === 'paper.entry.executed.v1';
         $paperFinancialLifecycleProjection = config('services.trading_engine.paper_financial_lifecycle_enabled', false) === true
@@ -67,7 +69,7 @@ class TradingEngineWebhookController extends Controller
                 'paper.exit.requested.v1',
             ], true);
 
-        if ($opportunityProjection || $paperEntryProjection || $paperFinancialLifecycleProjection || $paperLifecycleProjection) {
+        if ($opportunityProjection || $tokenScanProjection || $paperEntryProjection || $paperFinancialLifecycleProjection || $paperLifecycleProjection) {
             try {
                 ProjectTradingEngineEvent::dispatch($validated['envelope']['event_id']);
             } catch (Throwable) {

@@ -19,6 +19,16 @@ Schedule::call(fn () => app(OperationalHealthService::class)->recordSchedulerRun
     ->name('operations.scheduler-heartbeat')
     ->everyMinute();
 
+Schedule::command('trading-engine:recover-paper-deliveries')
+    ->name('trading-engine.paper-delivery-recovery')
+    ->everyMinute()
+    ->withoutOverlapping(5);
+
+Schedule::command('trading-engine:recover-token-scans')
+    ->name('trading-engine.token-scan-recovery')
+    ->everyMinute()
+    ->withoutOverlapping(5);
+
 Schedule::command('trading-engine:recover-projections')
     ->name('trading-engine.projection-recovery')
     ->everyMinute()

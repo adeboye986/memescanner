@@ -180,6 +180,39 @@ class TradingEngineClient
 
     /**
      * @param  array<string, mixed>  $payload
+     * @return array{operationId: string, scanExecutionId: string, status: string, duplicate: bool}
+     */
+    public function startTokenScan(string $idempotencyKey, array $payload): array
+    {
+        if (config('services.trading_engine.scanner_integration_enabled', false) !== true) {
+            throw new TradingEngineException('INTEGRATION_DISABLED', 'Trading engine scanner integration is disabled.');
+        }
+
+        [$response, $correlationId, $traceparent] = $this->request(
+            'POST',
+            '/v1/commands/token-scans',
+            'commands:token-scans:create',
+            $payload,
+            ['Idempotency-Key' => $idempotencyKey],
+        );
+        $this->requireStatus($response, [202]);
+        $this->requireResponseContext($response, $correlationId, $traceparent, true);
+        $result = $response->json();
+
+        if (! is_array($result)
+            || ! $this->hasExactKeys($result, ['operationId', 'scanExecutionId', 'status', 'duplicate'])
+            || ! $this->validEngineId($result['operationId'] ?? null)
+            || ! $this->validEngineId($result['scanExecutionId'] ?? null)
+            || $result['status'] !== 'accepted'
+            || ! is_bool($result['duplicate'])) {
+            throw $this->invalidResponse($response->status(), true);
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
      * @return array{operationId: string, walletId: string, intentId: string, orderId: string, fillId: string, positionId: string, eventId: string, status: string, duplicate: bool}
      */
     public function executePaperEntry(string $idempotencyKey, array $payload): array

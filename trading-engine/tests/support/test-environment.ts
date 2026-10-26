@@ -261,6 +261,8 @@ export async function resetDatabaseSchema(database: Kysely<Database>): Promise<v
     drop table if exists opportunity_evaluation_tasks cascade;
     drop table if exists evaluation_policies cascade;
     drop function if exists reject_opportunity_evaluation_mutation();
+    drop table if exists token_discoveries cascade;
+    drop table if exists token_scan_executions cascade;
     drop table if exists opportunities cascade;
     drop table if exists event_delivery_attempts cascade;
     drop table if exists event_outbox cascade;

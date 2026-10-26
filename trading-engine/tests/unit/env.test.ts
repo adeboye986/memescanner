@@ -286,6 +286,7 @@ describe('environment configuration', () => {
     const config = loadConfig(validEnvironment());
 
     expect(config.paperMarketMonitoringEnabled).toBe(false);
+    expect(config.paperMarketMonitoringAuthorityEnabled).toBe(false);
     expect(config.paperMarketMonitorCanaryUserIds).toEqual([]);
     expect(config.paperMarketMonitorIntervalMs).toBe(5_000);
     expect(config.paperMarketMonitorBatchSize).toBe(30);
@@ -321,6 +322,28 @@ describe('environment configuration', () => {
     expect(config.paperMarketMonitorLeaseDurationMs).toBe(45_000);
   });
 
+  it('accepts authoritative monitoring only with monitoring and financial lifecycle enabled', () => {
+    const config = loadConfig({
+      ...validEnvironment(),
+      PAPER_FINANCIAL_LIFECYCLE_ENABLED: 'true',
+      PAPER_MARKET_MONITORING_ENABLED: 'true',
+      PAPER_MARKET_MONITORING_AUTHORITY_ENABLED: 'true',
+      PAPER_MARKET_MONITOR_CANARY_USER_IDS: '1',
+    });
+
+    expect(config.paperMarketMonitoringAuthorityEnabled).toBe(true);
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      PAPER_MARKET_MONITORING_AUTHORITY_ENABLED: 'true',
+    })).toThrow(/requires PAPER_MARKET_MONITORING_ENABLED and PAPER_FINANCIAL_LIFECYCLE_ENABLED/);
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      PAPER_MARKET_MONITORING_ENABLED: 'true',
+      PAPER_MARKET_MONITORING_AUTHORITY_ENABLED: 'true',
+      PAPER_MARKET_MONITOR_CANARY_USER_IDS: '1',
+    })).toThrow(/requires PAPER_MARKET_MONITORING_ENABLED and PAPER_FINANCIAL_LIFECYCLE_ENABLED/);
+  });
+
   it('fails closed when PAPER market monitoring is enabled without canary users', () => {
     expect(() => loadConfig({
       ...validEnvironment(),
@@ -352,4 +375,52 @@ describe('environment configuration', () => {
       [name]: value,
     })).toThrow();
   });
+  it('keeps token scanning disabled by default and validates activation prerequisites', () => {
+    const disabled = loadConfig(validEnvironment());
+
+    expect(disabled.tokenScanningEnabled).toBe(false);
+    expect(disabled.tokenScannerCanaryUserIds).toEqual([]);
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      TOKEN_SCANNING_ENABLED: 'true',
+    })).toThrow(/TOKEN_SCANNER_CANARY_USER_IDS/);
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      TOKEN_SCANNING_ENABLED: 'true',
+      TOKEN_SCANNER_CANARY_USER_IDS: '7',
+    })).toThrow(/BIRDEYE_API_KEY/);
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      TOKEN_SCANNING_ENABLED: 'true',
+      TOKEN_SCANNER_CANARY_USER_IDS: '7',
+      BIRDEYE_API_KEY: 'test-key',
+    })).toThrow(/SOLANA_RPC_URL/);
+
+    const enabled = loadConfig({
+      ...validEnvironment(),
+      TOKEN_SCANNING_ENABLED: 'true',
+      TOKEN_SCANNER_CANARY_USER_IDS: '7',
+      BIRDEYE_API_KEY: 'test-key',
+      SOLANA_RPC_URL: 'https://rpc.example.test',
+    });
+
+    expect(enabled.tokenScanningEnabled).toBe(true);
+    expect(enabled.tokenScannerCanaryUserIds).toEqual(['7']);
+    expect(enabled.tokenScanBatchSize).toBe(1);
+    expect(enabled.tokenScanLeaseDurationMs).toBe(300_000);
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      TOKEN_SCAN_BATCH_SIZE: '2',
+    })).toThrow(/TOKEN_SCAN_BATCH_SIZE must be between 1 and 1/);
+    expect(() => loadConfig({
+      ...validEnvironment(),
+      TOKEN_SCANNING_ENABLED: 'true',
+      TOKEN_SCANNER_CANARY_USER_IDS: '7',
+      TOKEN_SCAN_LEASE_DURATION_MS: '30000',
+      TOKEN_SCAN_PROVIDER_TIMEOUT_MS: '30000',
+      BIRDEYE_API_KEY: 'test-key',
+      SOLANA_RPC_URL: 'https://rpc.example.test',
+    })).toThrow(/TOKEN_SCAN_PROVIDER_TIMEOUT_MS must be less than TOKEN_SCAN_LEASE_DURATION_MS/);
+  });
+
 });

@@ -17,10 +17,12 @@ import {
 const migration006 = '006_paper_financial_lifecycle';
 const migration007 = '007_paper_market_monitoring';
 const migration008 = '008_paper_market_shadow_observations';
+const migration009 = '009_paper_market_observation_authority';
 
 const disabledFeatures = {
   paperEntryEnabled: false,
   paperMarketMonitoringEnabled: false,
+  paperMarketMonitoringAuthorityEnabled: false,
   paperMarketMonitorCanaryUserIds: [],
 } as const;
 
@@ -33,6 +35,11 @@ const monitoringEnabled = {
   ...entryEnabled,
   paperMarketMonitoringEnabled: true,
   paperMarketMonitorCanaryUserIds: ['1'],
+} as const;
+
+const authoritativeMonitoringEnabled = {
+  ...monitoringEnabled,
+  paperMarketMonitoringAuthorityEnabled: true,
 } as const;
 
 describe('database schema compatibility and monitoring migration upgrades', () => {
@@ -53,7 +60,7 @@ describe('database schema compatibility and monitoring migration upgrades', () =
     await stopTestEnvironment(environment);
   });
 
-  it('detects the supported 006, 007, and 008 capability boundaries', async () => {
+  it('keeps disabled schema 006 compatible and requires 009 for entry or monitoring', async () => {
     await migrateTestDatabaseTo(database, migration006);
 
     await expect(inspectDatabaseSchemaCompatibility(database, disabledFeatures))
@@ -66,36 +73,48 @@ describe('database schema compatibility and monitoring migration upgrades', () =
       .resolves.toMatchObject({
         compatible: false,
         detectedVersion: 6,
-        requiredVersion: 7,
+        requiredVersion: 9,
       });
 
     await migrateTestDatabaseTo(database, migration007);
-
     await expect(inspectDatabaseSchemaCompatibility(database, entryEnabled))
-      .resolves.toMatchObject({
-        compatible: true,
-        detectedVersion: 7,
-        requiredVersion: 7,
-      });
-    await expect(inspectDatabaseSchemaCompatibility(database, monitoringEnabled))
       .resolves.toMatchObject({
         compatible: false,
         detectedVersion: 7,
-        requiredVersion: 8,
+        requiredVersion: 9,
       });
 
     await migrateTestDatabaseTo(database, migration008);
+    await expect(inspectDatabaseSchemaCompatibility(database, monitoringEnabled))
+      .resolves.toMatchObject({
+        compatible: false,
+        detectedVersion: 8,
+        requiredVersion: 9,
+        missingCapabilities: [
+          'MIGRATION_009_NOT_APPLIED',
+          'PAPER_MARKET_AUTHORITY_SCHEMA_UNAVAILABLE',
+        ],
+      });
+
+    await migrateTestDatabaseTo(database, migration009);
 
     await expect(inspectDatabaseSchemaCompatibility(database, monitoringEnabled))
       .resolves.toEqual({
         compatible: true,
-        detectedVersion: 8,
-        requiredVersion: 8,
+        detectedVersion: 9,
+        requiredVersion: 9,
+        missingCapabilities: [],
+      });
+    await expect(inspectDatabaseSchemaCompatibility(database, authoritativeMonitoringEnabled))
+      .resolves.toEqual({
+        compatible: true,
+        detectedVersion: 9,
+        requiredVersion: 9,
         missingCapabilities: [],
       });
   });
 
-  it('upgrades 006 through 008 without mutating financial evidence or backfilling monitoring', async () => {
+  it('upgrades 006 through 009 without mutating financial evidence or backfilling monitoring', async () => {
     await migrateTestDatabaseTo(database, migration006);
     const walletId = newEngineId();
     const transactionId = newEngineId();
@@ -146,12 +165,8 @@ describe('database schema compatibility and monitoring migration upgrades', () =
     const beforeUpgrade = await financialEvidence(database, walletId, transactionId);
 
     await migrateTestDatabaseTo(database, migration007);
-
-    expect(await financialEvidence(database, walletId, transactionId))
-      .toEqual(beforeUpgrade);
-    expect(await tableCount(database, 'paper_position_monitoring_tasks')).toBe(0);
-
     await migrateTestDatabaseTo(database, migration008);
+    await migrateTestDatabaseTo(database, migration009);
 
     expect(await financialEvidence(database, walletId, transactionId))
       .toEqual(beforeUpgrade);
@@ -159,17 +174,45 @@ describe('database schema compatibility and monitoring migration upgrades', () =
     expect(await tableCount(database, 'paper_market_shadow_observations')).toBe(0);
 
     const schemaObjects = await sql<{
-      readonly constraints: number;
-      readonly indexes: number;
-      readonly triggers: number;
+      readonly authority_columns: number;
+      readonly authority_constraints: number;
+      readonly authority_indexes: number;
+      readonly shadow_constraints: number;
+      readonly shadow_indexes: number;
+      readonly shadow_triggers: number;
     }>`
       select
+        (
+          select count(*)::int
+          from information_schema.columns
+          where table_schema = 'public'
+            and table_name = 'paper_position_monitoring_tasks'
+            and column_name in (
+              'observation_authority',
+              'next_financial_observation_sequence'
+            )
+        ) as authority_columns,
+        (
+          select count(*)::int
+          from pg_constraint
+          where conname in (
+              'paper_position_monitoring_tasks_authority_check',
+              'paper_position_monitoring_tasks_financial_sequence_check'
+            )
+            and conrelid = to_regclass('public.paper_position_monitoring_tasks')
+        ) as authority_constraints,
+        (
+          select count(*)::int
+          from pg_indexes
+          where schemaname = 'public'
+            and indexname = 'paper_position_monitoring_tasks_financial_due_index'
+        ) as authority_indexes,
         (
           select count(*)::int
           from pg_constraint
           where conname = 'paper_market_shadow_observations_position_attempt_unique'
             and conrelid = to_regclass('public.paper_market_shadow_observations')
-        ) as constraints,
+        ) as shadow_constraints,
         (
           select count(*)::int
           from pg_indexes
@@ -179,27 +222,30 @@ describe('database schema compatibility and monitoring migration upgrades', () =
               'paper_market_shadow_observations_request_index',
               'paper_market_shadow_observations_outcome_created_index'
             )
-        ) as indexes,
+        ) as shadow_indexes,
         (
           select count(*)::int
           from pg_trigger
           where tgname = 'paper_market_shadow_observations_append_only'
             and tgrelid = to_regclass('public.paper_market_shadow_observations')
             and not tgisinternal
-        ) as triggers
+        ) as shadow_triggers
     `.execute(database);
 
     expect(schemaObjects.rows[0]).toEqual({
-      constraints: 1,
-      indexes: 3,
-      triggers: 1,
+      authority_columns: 2,
+      authority_constraints: 2,
+      authority_indexes: 1,
+      shadow_constraints: 1,
+      shadow_indexes: 3,
+      shadow_triggers: 1,
     });
   });
 
   it('fails compatibility when migration history exists but a required schema object is absent', async () => {
-    await migrateTestDatabaseTo(database, migration008);
+    await migrateTestDatabaseTo(database, migration009);
     await sql`
-      drop index paper_market_shadow_observations_request_index
+      drop index paper_position_monitoring_tasks_financial_due_index
     `.execute(database);
 
     const compatibility = await inspectDatabaseSchemaCompatibility(
@@ -209,9 +255,9 @@ describe('database schema compatibility and monitoring migration upgrades', () =
 
     expect(compatibility).toMatchObject({
       compatible: false,
-      detectedVersion: 8,
-      requiredVersion: 8,
-      missingCapabilities: ['PAPER_SHADOW_OBSERVATION_SCHEMA_UNAVAILABLE'],
+      detectedVersion: 9,
+      requiredVersion: 9,
+      missingCapabilities: ['PAPER_MARKET_AUTHORITY_SCHEMA_UNAVAILABLE'],
     });
   });
 });

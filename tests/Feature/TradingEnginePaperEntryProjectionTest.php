@@ -16,6 +16,7 @@ use App\Models\TradingEnginePaperWalletProjection;
 use App\Models\User;
 use App\Services\TradingEngine\TradingEngineCanonicalJson;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
+use App\Services\TradingEngine\TradingEnginePaperDeliveryTracker;
 use App\Services\TradingEngine\TradingEnginePaperEntryNotifier;
 use App\Services\TradingEngine\TradingEnginePaperEntryPayloadValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -103,10 +104,16 @@ class TradingEnginePaperEntryProjectionTest extends TestCase
             'idempotency_key' => 'paper:entry:laravel:'.$opportunity->getKey().':v1',
             'payload_sha256' => app(TradingEngineCanonicalJson::class)->hash($command),
             'payload' => $command,
-            'status' => 'submitted',
+            'status' => TradingEnginePaperEntryIntent::STATUS_ACCEPTANCE_UNKNOWN,
+            'attempt_count' => 1,
+            'last_error_code' => 'TRANSPORT_TIMEOUT',
+            'acceptance_unknown_at' => now(),
         ]);
         $payload = $this->entryEventPayload($command);
         $this->assertTrue(app(TradingEnginePaperEntryPayloadValidator::class)->isValid($payload));
+        $legacyPayload = $payload;
+        unset($legacyPayload['position']['lifecycle']['market_observation_authority']);
+        $this->assertTrue(app(TradingEnginePaperEntryPayloadValidator::class)->isValid($legacyPayload));
         $event = $this->event(
             $this->id(5),
             'paper.entry.executed.v1',
@@ -128,6 +135,9 @@ class TradingEnginePaperEntryProjectionTest extends TestCase
         $this->assertDatabaseCount('trading_engine_paper_position_projections', 1);
         $this->assertDatabaseCount('trading_engine_paper_position_states', 1);
         $this->assertDatabaseCount('trading_engine_paper_entry_intents', 1);
+        $this->assertDatabaseHas('trading_engine_paper_position_states', [
+            'market_observation_authority' => 'typescript',
+        ]);
         $this->assertSame(
             '0.000001234567890123456789012345',
             TradingEnginePaperPositionProjection::query()->sole()->entry_price_usd,
@@ -138,7 +148,15 @@ class TradingEnginePaperEntryProjectionTest extends TestCase
         );
         $this->assertDatabaseCount('paper_positions', 0);
         $this->assertSame($legacyWalletsBefore, DB::table('paper_wallets')->count());
-        $this->assertSame('projected', $intent->fresh()->status);
+        $this->assertSame(TradingEnginePaperEntryIntent::STATUS_PROJECTED, $intent->fresh()->status);
+        $this->assertNull($intent->fresh()->acceptance_unknown_at);
+        app(TradingEnginePaperDeliveryTracker::class)->entryRetrying(
+            $intent,
+            'TRANSPORT_TIMEOUT',
+            1,
+        );
+        $this->assertSame(TradingEnginePaperEntryIntent::STATUS_PROJECTED, $intent->fresh()->status);
+        $this->assertNull($intent->fresh()->last_error_code);
         $this->assertSame(TradeOpportunityStatus::Executed, $opportunity->fresh()->status);
         $this->assertNull($opportunity->fresh()->paper_position_id);
         $this->assertSame($this->id(9), data_get($opportunity->fresh()->execution_data, 'engine_position_id'));
@@ -277,6 +295,7 @@ class TradingEnginePaperEntryProjectionTest extends TestCase
                     'policy_version' => 1,
                     'lifecycle_version' => 0,
                     'state' => 'open',
+                    'market_observation_authority' => 'typescript',
                 ],
             ],
             'source' => $command['source'],

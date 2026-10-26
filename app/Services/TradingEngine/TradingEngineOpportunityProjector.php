@@ -3,11 +3,15 @@
 namespace App\Services\TradingEngine;
 
 use App\Chain;
+use App\Enums\EntryMode;
+use App\Enums\ExecutionMode;
+use App\Enums\TradeOpportunityStatus;
 use App\Exceptions\TradingEngineProjectionException;
 use App\Models\TradeOpportunity;
 use App\Models\TradingEngineEvent;
 use App\Models\TradingEngineOpportunityEvaluation;
 use App\Models\TradingEngineOpportunityLink;
+use App\Models\TradingEngineScanRequest;
 use Illuminate\Support\Facades\DB;
 use LogicException;
 use Throwable;
@@ -19,6 +23,7 @@ class TradingEngineOpportunityProjector
         private TradingEnginePaperEntryProjector $paperEntries,
         private TradingEnginePaperFinancialLifecycleProjector $paperFinancialLifecycle,
         private TradingEngineOpportunityExportTracker $opportunityExports,
+        private TradingEngineCanonicalJson $canonicalJson,
     ) {}
 
     private const ETHEREUM_MAINNET_ID = 'eip155:1';
@@ -159,6 +164,12 @@ class TradingEngineOpportunityProjector
         $localOpportunityId = $this->stringValue($source['opportunity_id'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
         $operationId = $this->stringValue($payload['operation_id'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
 
+        if (($source['system'] ?? null) === 'meme-scanner-trading-engine') {
+            $this->projectScannerRecordedEvent($event, $payload, $source, $subject, $network, $asset, $operationId);
+
+            return;
+        }
+
         if (preg_match('/^[1-9][0-9]*$/D', $localOpportunityId) !== 1) {
             $this->reject('RECORDED_EVENT_PAYLOAD_INVALID');
         }
@@ -231,6 +242,172 @@ class TradingEngineOpportunityProjector
         ]);
 
         $this->reconcileRecordedExport($opportunity, $event, $operationId, $engineOpportunityId);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $source
+     * @param  array<string, mixed>  $subject
+     * @param  array<string, mixed>  $network
+     * @param  array<string, mixed>  $asset
+     */
+    private function projectScannerRecordedEvent(
+        TradingEngineEvent $event,
+        array $payload,
+        array $source,
+        array $subject,
+        array $network,
+        array $asset,
+        string $operationId,
+    ): void {
+        $discoveryId = $this->stringValue($source['opportunity_id'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $scanExecutionId = $this->stringValue($source['scan_execution_id'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $engineOpportunityId = $this->stringValue($payload['opportunity_id'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $userId = (int) $this->stringValue($subject['control_plane_user_id'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $scanner = $this->stringValue($source['scanner'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $networkId = $this->stringValue($network['id'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $assetAddress = $this->stringValue($asset['address'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $discoveryKey = $this->stringValue($source['discovery_key'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $chain = match ($networkId) {
+            self::SOLANA_MAINNET_ID => Chain::Solana,
+            self::ETHEREUM_MAINNET_ID => Chain::Ethereum,
+            default => $this->reject('RECORDED_EVENT_PAYLOAD_INVALID'),
+        };
+        $expectedAction = $scanner === 'new-token' ? 'token-scan' : 'momentum-scan';
+
+        if ($event->aggregate_id !== $engineOpportunityId
+            || $event->causation_id !== $operationId
+            || $event->idempotency_key !== 'opportunity:record:scanner:'.$discoveryId.':v1') {
+            $this->reject('RECORDED_EVENT_IDEMPOTENCY_MISMATCH');
+        }
+
+        $request = TradingEngineScanRequest::query()
+            ->where('engine_scan_execution_id', $scanExecutionId)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $request instanceof TradingEngineScanRequest) {
+            $candidates = TradingEngineScanRequest::query()
+                ->where('user_id', $userId)
+                ->where('scanner', $scanner)
+                ->where('network_id', $networkId)
+                ->whereNull('engine_scan_execution_id')
+                ->whereNull('definitively_rejected_at')
+                ->whereNotIn('status', [
+                    TradingEngineScanRequest::STATUS_FAILED,
+                    TradingEngineScanRequest::STATUS_PROJECTED,
+                ])
+                ->lockForUpdate()
+                ->get();
+
+            if ($candidates->count() !== 1) {
+                $this->retryable('SCAN_REQUEST_IDENTITY_PENDING');
+            }
+
+            $request = $candidates->first();
+        }
+
+        if (! $request instanceof TradingEngineScanRequest
+            || ! is_array($request->payload)
+            || data_get($request->payload, 'subject.control_plane_user_id') !== (string) $userId
+            || data_get($request->payload, 'scanner') !== $scanner
+            || data_get($request->payload, 'network.id') !== $networkId
+            || $this->canonicalJson->hash($request->payload) !== $request->payload_sha256
+            || $request->status === TradingEngineScanRequest::STATUS_FAILED
+            || ($request->engine_scan_execution_id !== null
+                && $request->engine_scan_execution_id !== $scanExecutionId)
+            || $request->definitively_rejected_at !== null) {
+            $this->reject('SCAN_REQUEST_IDENTITY_MISMATCH');
+        }
+
+        $activity = $request->activity()->lockForUpdate()->first();
+
+        if (! $activity
+            || $activity->user_id !== $userId
+            || $activity->action !== $expectedAction
+            || $activity->chain !== $chain
+            || ! in_array($activity->status, ['pending', 'running', 'completed'], true)
+            || data_get($request->payload, 'source.activity_id') !== (string) $activity->getKey()) {
+            $this->reject('SCAN_ACTIVITY_IDENTITY_MISMATCH');
+        }
+
+        $market = $this->arrayValue($payload['market_snapshot'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $qualification = $this->arrayValue($payload['qualification'] ?? null, 'RECORDED_EVENT_PAYLOAD_INVALID');
+        $opportunity = TradeOpportunity::query()->firstOrCreate([
+            'user_id' => $userId,
+            'discovery_key' => $discoveryKey,
+        ], [
+            'chain' => $chain,
+            'address' => $assetAddress,
+            'symbol' => $asset['symbol'] ?? null,
+            'name' => $asset['name'] ?? null,
+            'scanner' => $scanner,
+            'status' => TradeOpportunityStatus::Qualified,
+            'execution_mode' => ExecutionMode::Paper,
+            'entry_mode' => EntryMode::from($request->entry_mode),
+            'pair_address' => data_get($market, 'pair.address'),
+            'price' => data_get($market, 'price_usd.value'),
+            'market_cap' => data_get($market, 'market_cap_usd.value'),
+            'liquidity' => data_get($market, 'liquidity_usd.value'),
+            'volume' => data_get($market, 'volume_usd.value'),
+            'qualification_data' => [
+                ...$qualification,
+                'owner' => 'trading-engine',
+                'scan_execution_id' => $scanExecutionId,
+            ],
+            'security_data' => $payload['security'] ?? null,
+            'qualified_at' => $qualification['qualified_at'],
+        ]);
+
+        if ($opportunity->user_id !== $userId
+            || $opportunity->chain !== $chain
+            || $opportunity->address !== $assetAddress
+            || $opportunity->scanner !== $scanner
+            || $opportunity->execution_mode !== ExecutionMode::Paper
+            || $opportunity->entry_mode !== EntryMode::from($request->entry_mode)) {
+            $this->reject('LOCAL_OPPORTUNITY_CONFLICT');
+        }
+
+        $activity->tradeOpportunities()->syncWithoutDetaching([$opportunity->getKey()]);
+        $existing = TradingEngineOpportunityLink::query()
+            ->where('trade_opportunity_id', $opportunity->getKey())
+            ->orWhere('engine_opportunity_id', $engineOpportunityId)
+            ->orWhere('recorded_event_id', $event->event_id)
+            ->first();
+
+        if (! $existing) {
+            TradingEngineOpportunityLink::query()->create([
+                'trade_opportunity_id' => $opportunity->getKey(),
+                'engine_opportunity_id' => $engineOpportunityId,
+                'recorded_event_id' => $event->event_id,
+                'user_id' => $userId,
+                'discovery_key' => $discoveryKey,
+                'scanner' => $scanner,
+                'network_id' => $networkId,
+                'asset_address' => $assetAddress,
+                'recorded_at' => $event->occurred_at,
+                'linked_at' => now(),
+            ]);
+        } elseif ($existing->trade_opportunity_id !== $opportunity->getKey()
+            || $existing->engine_opportunity_id !== $engineOpportunityId
+            || $existing->recorded_event_id !== $event->event_id
+            || $existing->user_id !== $userId
+            || $existing->discovery_key !== $discoveryKey
+            || $existing->scanner !== $scanner
+            || $existing->network_id !== $networkId
+            || $existing->asset_address !== $assetAddress) {
+            $this->reject('OPPORTUNITY_LINK_CONFLICT');
+        }
+
+        $request->forceFill([
+            'engine_scan_execution_id' => $scanExecutionId,
+            'status' => $request->status === TradingEngineScanRequest::STATUS_PROJECTED
+                ? TradingEngineScanRequest::STATUS_PROJECTED
+                : TradingEngineScanRequest::STATUS_ACCEPTED,
+            'acceptance_unknown_at' => null,
+            'last_error_code' => null,
+            'accepted_at' => $request->accepted_at ?? now(),
+        ])->save();
     }
 
     private function reconcileRecordedExport(
@@ -580,6 +757,15 @@ class TradingEngineOpportunityProjector
         }
 
         return $value;
+    }
+
+    private function retryable(string $errorCode): never
+    {
+        throw new TradingEngineProjectionException(
+            $errorCode,
+            'The trading engine event is waiting for authoritative scan identity.',
+            true,
+        );
     }
 
     private function reject(string $errorCode): never

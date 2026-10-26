@@ -18,7 +18,10 @@ import { PaperEntryRepository } from '../../src/infrastructure/database/reposito
 import { PaperFinancialLifecycleRepository } from '../../src/infrastructure/database/repositories/paper-financial-lifecycle-repository.js';
 import { PaperPositionLifecycleRepository } from '../../src/infrastructure/database/repositories/paper-position-lifecycle-repository.js';
 import { PaperPositionMonitoringRepository } from '../../src/infrastructure/database/repositories/paper-position-monitoring-repository.js';
+import type { PaperMarketFetchResult } from '../../src/infrastructure/market-data/dexscreener-paper-market-provider.js';
 import { OpportunityEvaluationDispatcher } from '../../src/workers/opportunity-evaluation-dispatcher.js';
+import { EnginePaperFinancialMarketObserver } from '../../src/workers/paper-financial-market-observer.js';
+import { PaperMarketMonitoringCycle } from '../../src/workers/paper-market-monitor.js';
 import {
   createTestIdentity,
   resetDatabase,
@@ -194,6 +197,134 @@ describe('engine-owned PAPER financial lifecycle', () => {
     expect(await financials.realizedPnlBalance(database, wallet.id)).toBe('-0.015');
   });
 
+  it('replays an authoritative monitored HOLD after leadership loss without duplicating decisions', async () => {
+    const positionId = await openPosition('207', 'financial');
+    const ledgerEntriesBefore = await count('paper_ledger_entries');
+    const provider = marketProvider('13000');
+    const observer = new EnginePaperFinancialMarketObserver(database, lifecycleHandler());
+    let persistenceChecks = 0;
+    const interrupted = new PaperMarketMonitoringCycle(
+      database,
+      new PaperPositionMonitoringRepository(),
+      provider,
+      monitoringPolicy(),
+      pino({ level: 'silent' }),
+      () => testClock,
+      (): Promise<boolean> => Promise.resolve(++persistenceChecks === 1),
+      observer,
+    );
+
+    await interrupted.runCycle();
+
+    expect(await count('paper_position_lifecycle_decisions')).toBe(1);
+    expect(await database.selectFrom('paper_position_monitoring_tasks')
+      .select([
+        'monitoring_state',
+        'observation_authority',
+        'next_attempt_sequence',
+        'next_financial_observation_sequence',
+      ])
+      .where('position_id', '=', positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      monitoring_state: 'processing',
+      observation_authority: 'financial',
+      next_attempt_sequence: 1,
+      next_financial_observation_sequence: 1,
+    });
+
+    await database.updateTable('paper_position_monitoring_tasks')
+      .set({ lease_expires_at: new Date(testClock.getTime() - 1) })
+      .where('position_id', '=', positionId)
+      .executeTakeFirstOrThrow();
+
+    const recovered = new PaperMarketMonitoringCycle(
+      database,
+      new PaperPositionMonitoringRepository(),
+      provider,
+      monitoringPolicy(),
+      pino({ level: 'silent' }),
+      () => testClock,
+      undefined,
+      observer,
+    );
+
+    await recovered.runCycle();
+
+    expect(await count('paper_position_lifecycle_decisions')).toBe(1);
+    expect(await count('paper_exit_settlements')).toBe(0);
+    expect(await count('paper_ledger_entries')).toBe(ledgerEntriesBefore);
+    expect(await database.selectFrom('paper_position_monitoring_tasks')
+      .select([
+        'monitoring_state',
+        'next_attempt_sequence',
+        'next_financial_observation_sequence',
+      ])
+      .where('position_id', '=', positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      monitoring_state: 'pending',
+      next_attempt_sequence: 2,
+      next_financial_observation_sequence: 2,
+    });
+    expect(await database.selectFrom('paper_position_lifecycle_decisions')
+      .select(['decision', 'observation_sequence', 'evidence'])
+      .where('position_id', '=', positionId)
+      .executeTakeFirstOrThrow()).toMatchObject({
+      decision: 'HOLD',
+      observation_sequence: 1,
+      evidence: {
+        source: {
+          system: 'meme-scanner-trading-engine-monitor',
+          sequence: 1,
+        },
+      },
+    });
+    expect(await database.selectFrom('paper_market_shadow_observations')
+      .select(['attempt_sequence', 'outcome'])
+      .where('position_id', '=', positionId)
+      .execute()).toEqual([{ attempt_sequence: 1, outcome: 'observed' }]);
+  });
+
+  it('settles an authoritative monitored EXIT and completes its task exactly once', async () => {
+    const positionId = await openPosition('208', 'financial');
+    const observer = new EnginePaperFinancialMarketObserver(database, lifecycleHandler());
+    const cycle = new PaperMarketMonitoringCycle(
+      database,
+      new PaperPositionMonitoringRepository(),
+      marketProvider('10200'),
+      monitoringPolicy(),
+      pino({ level: 'silent' }),
+      () => testClock,
+      undefined,
+      observer,
+    );
+
+    await cycle.runCycle();
+
+    expect(await count('paper_position_lifecycle_decisions')).toBe(1);
+    expect(await count('paper_exit_settlements')).toBe(1);
+    expect(await database.selectFrom('paper_positions')
+      .select('state')
+      .where('id', '=', positionId)
+      .executeTakeFirstOrThrow()).toEqual({ state: 'closed' });
+    expect(await database.selectFrom('paper_position_monitoring_tasks')
+      .select([
+        'monitoring_state',
+        'next_attempt_sequence',
+        'next_financial_observation_sequence',
+      ])
+      .where('position_id', '=', positionId)
+      .executeTakeFirstOrThrow()).toEqual({
+      monitoring_state: 'completed',
+      next_attempt_sequence: 2,
+      next_financial_observation_sequence: 2,
+    });
+    expect(await database.selectFrom('paper_market_shadow_observations')
+      .select(['attempt_sequence', 'outcome'])
+      .where('position_id', '=', positionId)
+      .execute()).toEqual([{ attempt_sequence: 1, outcome: 'discarded_closed' }]);
+    expect(await unbalancedLedgerTransactions()).toBe(0);
+  });
+
   it('rejects stale observations and rolls back settlement when outbox creation fails', async () => {
     const positionId = await openPosition('205');
     const stale = observation(positionId, 1, '10200');
@@ -230,7 +361,10 @@ describe('engine-owned PAPER financial lifecycle', () => {
     );
   }
 
-  async function openPosition(sourceId: string): Promise<string> {
+  async function openPosition(
+    sourceId: string,
+    marketObservationAuthority: 'shadow' | 'financial' = 'shadow',
+  ): Promise<string> {
     const recorded = await recordHandler.execute({
       idempotencyKey: `opportunity-${sourceId}`,
       authJti: `opportunity-jti-${sourceId}`,
@@ -263,6 +397,8 @@ describe('engine-owned PAPER financial lifecycle', () => {
         openingBalanceNative: '5',
         entryNotionalNative: '0.1',
         intentMaxAgeSeconds: 300,
+        financialMarketObservationControlPlaneUserIds:
+          marketObservationAuthority === 'financial' ? ['7'] : [],
       },
       undefined,
       () => testClock,
@@ -275,6 +411,50 @@ describe('engine-owned PAPER financial lifecycle', () => {
     }));
 
     return result.positionId;
+  }
+
+  function monitoringPolicy(): {
+    readonly enabled: true;
+    readonly authoritativeEnabled: true;
+    readonly eligibleControlPlaneUserIds: readonly ['7'];
+    readonly intervalMs: 5_000;
+    readonly batchSize: 1;
+    readonly requestBudget: 1;
+    readonly maximumBackoffMs: 60_000;
+    readonly leaseDurationMs: 30_000;
+  } {
+    return {
+      enabled: true,
+      authoritativeEnabled: true,
+      eligibleControlPlaneUserIds: ['7'],
+      intervalMs: 5_000,
+      batchSize: 1,
+      requestBudget: 1,
+      maximumBackoffMs: 60_000,
+      leaseDurationMs: 30_000,
+    };
+  }
+
+  function marketProvider(marketCapUsd: string): {
+    readonly fetchSolana: () => Promise<readonly PaperMarketFetchResult[]>;
+  } {
+    return {
+      fetchSolana: (): Promise<readonly PaperMarketFetchResult[]> => Promise.resolve([{
+        available: true,
+        observation: {
+          networkId: SOLANA_MAINNET_ID,
+          assetAddress,
+          provider: 'dexscreener',
+          pairAddress: 'authoritative-pair',
+          dex: 'raydium',
+          marketCapUsd,
+          priceUsd: '0.00000085',
+          liquidityUsd: '2800',
+          fetchedAt: testClock,
+          providerObservedAt: null,
+        },
+      }]),
+    };
   }
 
   async function count(table: keyof Database): Promise<number> {

@@ -6,6 +6,7 @@ use App\Services\TradingEngine\TradingEngineLiveDecisionIntegration;
 use App\Services\TradingEngine\TradingEngineLivePreparationIntegration;
 use App\Services\TradingEngine\TradingEngineOpportunityProjector;
 use App\Services\TradingEngine\TradingEnginePaperDecisionIntegration;
+use App\Services\TradingEngine\TradingEngineScanProjector;
 use App\Services\TradingEngine\TradingEngineSolanaLivePreparationIntegration;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -34,9 +35,11 @@ class ProjectTradingEngineEvent implements ShouldQueue
         ?TradingEngineLiveDecisionIntegration $liveDecisionIntegration = null,
         ?TradingEngineLivePreparationIntegration $livePreparationIntegration = null,
         ?TradingEngineSolanaLivePreparationIntegration $solanaLivePreparationIntegration = null,
+        ?TradingEngineScanProjector $scanProjector = null,
     ): void {
         if (config('services.trading_engine.enabled', false) !== true
             || (config('services.trading_engine.opportunity_projection_enabled', false) !== true
+                && config('services.trading_engine.scanner_integration_enabled', false) !== true
                 && config('services.trading_engine.paper_entry_integration_enabled', false) !== true
                 && config('services.trading_engine.paper_financial_lifecycle_enabled', false) !== true
                 && ! (config('services.trading_engine.paper_lifecycle_integration_enabled', false) === true
@@ -48,6 +51,14 @@ class ProjectTradingEngineEvent implements ShouldQueue
         $liveDecisionIntegration ??= app(TradingEngineLiveDecisionIntegration::class);
         $livePreparationIntegration ??= app(TradingEngineLivePreparationIntegration::class);
         $solanaLivePreparationIntegration ??= app(TradingEngineSolanaLivePreparationIntegration::class);
+        if (config('services.trading_engine.scanner_integration_enabled', false) === true) {
+            $scanProjector ??= app(TradingEngineScanProjector::class);
+
+            if ($scanProjector->project($this->eventId)) {
+                return;
+            }
+        }
+
         $result = $projector->project($this->eventId);
         $paperDecisionIntegration->attemptForProjectedEvaluation($this->eventId);
         $liveDecisionIntegration->assessForProjectedEvaluation($this->eventId);

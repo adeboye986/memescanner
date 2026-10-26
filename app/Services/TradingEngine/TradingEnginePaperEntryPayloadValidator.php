@@ -126,8 +126,13 @@ class TradingEnginePaperEntryPayloadValidator
     {
         $lifecycle = $this->object($value);
 
+        $keys = array_key_exists('market_observation_authority', $lifecycle ?? [])
+            ? ['policy_key', 'policy_version', 'lifecycle_version', 'state', 'market_observation_authority']
+            : ['policy_key', 'policy_version', 'lifecycle_version', 'state'];
+
         return $lifecycle !== null
-            && $this->exactKeys($lifecycle, ['policy_key', 'policy_version', 'lifecycle_version', 'state'])
+            && $this->exactKeys($lifecycle, $keys)
+            && in_array($lifecycle['market_observation_authority'] ?? 'laravel', ['laravel', 'typescript'], true)
             && ($lifecycle['policy_key'] ?? null) === 'laravel-paper-protection'
             && ($lifecycle['policy_version'] ?? null) === 1
             && ($lifecycle['lifecycle_version'] ?? null) === 0

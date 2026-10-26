@@ -6,13 +6,12 @@ use App\Exceptions\TradingEngineException;
 use App\Models\TradingEnginePaperEntryIntent;
 use App\Services\TradingEngine\TradingEngineCanonicalJson;
 use App\Services\TradingEngine\TradingEngineClient;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
+use App\Services\TradingEngine\TradingEnginePaperDeliveryTracker;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Facades\DB;
-use LogicException;
+use Throwable;
 
-class SubmitTradingEnginePaperEntry implements ShouldBeUnique, ShouldQueue
+class SubmitTradingEnginePaperEntry implements ShouldQueue
 {
     use Queueable;
 
@@ -20,16 +19,11 @@ class SubmitTradingEnginePaperEntry implements ShouldBeUnique, ShouldQueue
 
     public int $timeout = 30;
 
-    public bool $failOnTimeout = true;
+    public bool $failOnTimeout = false;
 
-    public int $uniqueFor = 3600;
+    private ?int $claimedAttempt = null;
 
     public function __construct(public readonly int $entryIntentId) {}
-
-    public function uniqueId(): string
-    {
-        return 'trading-engine-paper-entry:'.$this->entryIntentId;
-    }
 
     /** @return array<int, int> */
     public function backoff(): array
@@ -40,6 +34,7 @@ class SubmitTradingEnginePaperEntry implements ShouldBeUnique, ShouldQueue
     public function handle(
         TradingEngineClient $client,
         TradingEngineCanonicalJson $canonicalJson,
+        TradingEnginePaperDeliveryTracker $deliveries,
     ): void {
         if (! $this->enabled()) {
             return;
@@ -48,60 +43,71 @@ class SubmitTradingEnginePaperEntry implements ShouldBeUnique, ShouldQueue
         $intent = TradingEnginePaperEntryIntent::query()->find($this->entryIntentId);
 
         if (! $intent instanceof TradingEnginePaperEntryIntent
-            || ! in_array($intent->status, ['pending', 'submitted'], true)
             || ! is_array($intent->payload)
             || $canonicalJson->hash($intent->payload) !== $intent->payload_sha256) {
             return;
         }
 
+        $attempt = $deliveries->beginEntryAttempt($intent);
+
+        if ($attempt === null) {
+            return;
+        }
+
+        $this->claimedAttempt = $attempt;
+
         try {
             $response = $client->executePaperEntry($intent->idempotency_key, $intent->payload);
-            DB::transaction(function () use ($response): void {
-                $current = TradingEnginePaperEntryIntent::query()
-                    ->lockForUpdate()
-                    ->find($this->entryIntentId);
-
-                if (! $current instanceof TradingEnginePaperEntryIntent) {
-                    throw new LogicException('The PAPER entry intent disappeared before response persistence.');
-                }
-
-                $identifiers = [
-                    'engine_operation_id' => $response['operationId'],
-                    'engine_wallet_id' => $response['walletId'],
-                    'engine_intent_id' => $response['intentId'],
-                    'engine_order_id' => $response['orderId'],
-                    'engine_fill_id' => $response['fillId'],
-                    'engine_position_id' => $response['positionId'],
-                    'engine_event_id' => $response['eventId'],
-                ];
-
-                foreach ($identifiers as $column => $value) {
-                    if ($current->{$column} !== null && $current->{$column} !== $value) {
-                        throw new LogicException('The PAPER entry response conflicts with persisted engine identity.');
-                    }
-                }
-
-                $current->forceFill([
-                    ...$identifiers,
-                    'status' => $current->status === 'projected' ? 'projected' : 'submitted',
-                    'last_error_code' => null,
-                    'submitted_at' => now(),
-                ])->save();
-            }, 3);
+            $deliveries->entryAcknowledged($intent, $response, $attempt);
         } catch (TradingEngineException $exception) {
-            $intent->forceFill([
-                'status' => $exception->retryable ? 'pending' : 'failed',
-                'last_error_code' => $exception->errorCode,
-            ])->save();
-
             if (! $exception->retryable) {
+                if ($this->conclusivelyRejected($exception)) {
+                    $deliveries->entryRejected($intent, $exception->errorCode, $attempt);
+                } else {
+                    $deliveries->entryAcceptanceUnknown($intent, $exception->errorCode, $attempt);
+                }
+
                 $this->fail($exception);
 
                 return;
             }
 
+            $deliveries->entryRetrying($intent, $exception->errorCode, $attempt);
+
+            throw $exception;
+        } catch (Throwable $exception) {
+            $deliveries->entryRetrying($intent, 'UNEXPECTED_FAILURE', $attempt);
+
             throw $exception;
         }
+    }
+
+    public function failed(?Throwable $exception): void
+    {
+        $intent = TradingEnginePaperEntryIntent::query()->find($this->entryIntentId);
+
+        if (! $intent instanceof TradingEnginePaperEntryIntent) {
+            return;
+        }
+
+        $errorCode = $exception instanceof TradingEngineException
+            ? $exception->errorCode
+            : 'JOB_FAILED';
+        app(TradingEnginePaperDeliveryTracker::class)->entryAcceptanceUnknown(
+            $intent,
+            $errorCode,
+            $this->claimedAttempt,
+        );
+    }
+
+    private function conclusivelyRejected(TradingEngineException $exception): bool
+    {
+        return $exception->responseStatus !== null
+            && in_array($exception->errorCode, [
+                'AUTHENTICATION_FAILED',
+                'REQUEST_CONFLICT',
+                'VALIDATION_FAILED',
+            ], true);
     }
 
     private function enabled(): bool
