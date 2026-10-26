@@ -149,6 +149,7 @@ describe('PostgreSQL token scanner workflow', () => {
       opportunities_existing_count: 0,
       skipped_count: 1,
       failed_count: 0,
+      provider_failures: [],
     });
     expect(discovery).toMatchObject({
       scan_execution_id: execution.id,

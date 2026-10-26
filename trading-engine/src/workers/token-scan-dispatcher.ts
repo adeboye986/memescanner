@@ -1225,7 +1225,7 @@ export class TokenScanDispatcher implements WorkflowDispatcher {
           opportunities_existing_count: result.counts.opportunitiesExisting,
           skipped_count: result.counts.skipped,
           failed_count: result.counts.failed,
-          provider_failures: result.providerFailures,
+          provider_failures: JSON.stringify(result.providerFailures),
           last_error_code: errorCode,
           completed_at: completedAt,
           updated_at: completedAt,
