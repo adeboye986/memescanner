@@ -14,6 +14,7 @@ import {
 import { startWorkflowPoller } from '../../src/workers/workflow-poller.js';
 import {
   createTestIdentity,
+  resetDatabase,
   startTestEnvironment,
   stopTestEnvironment,
   type TestEnvironment,
@@ -59,6 +60,7 @@ describe('PostgreSQL workflow leadership session', () => {
     const config = createTestIdentity(environment).config;
     firstDatabase = createDatabase(config);
     secondDatabase = createDatabase(config);
+    await resetDatabase(firstDatabase);
   });
 
   afterAll(async () => {
