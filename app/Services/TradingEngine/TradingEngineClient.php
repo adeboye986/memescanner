@@ -212,6 +212,62 @@ class TradingEngineClient
     }
 
     /**
+     * @return array{
+     *     schema_version: int,
+     *     scan_execution_id: string,
+     *     control_plane_user_id: string,
+     *     candidates: list<array<string, mixed>>,
+     *     pagination: array{page: int, per_page: int, total: int, last_page: int}
+     * }
+     */
+    public function tokenScanCandidates(
+        string $scanExecutionId,
+        int|string $controlPlaneUserId,
+        int $page = 1,
+        int $perPage = 20,
+    ): array {
+        if (config('services.trading_engine.scanner_integration_enabled', false) !== true) {
+            throw new TradingEngineException('INTEGRATION_DISABLED', 'Trading engine scanner integration is disabled.');
+        }
+
+        $controlPlaneUserId = (string) $controlPlaneUserId;
+        if (! $this->validEngineId($scanExecutionId)
+            || preg_match('/^[1-9][0-9]*$/D', $controlPlaneUserId) !== 1
+            || $page < 1
+            || $page > 10000
+            || $perPage < 1
+            || $perPage > 50) {
+            throw new TradingEngineException('VALIDATION_FAILED', 'The token scan candidate request is invalid.');
+        }
+
+        $query = http_build_query([
+            'control_plane_user_id' => $controlPlaneUserId,
+            'page' => $page,
+            'per_page' => $perPage,
+        ], '', '&', PHP_QUERY_RFC3986);
+        [$response, $correlationId, $traceparent] = $this->request(
+            'GET',
+            '/v1/token-scans/'.rawurlencode($scanExecutionId).'/candidates?'.$query,
+            'token-scans:candidates:read',
+        );
+        $this->requireStatus($response, [200]);
+        $this->requireResponseContext($response, $correlationId, $traceparent);
+        $result = $response->json();
+
+        if (! $this->validTokenScanCandidateResponse(
+            $result,
+            $scanExecutionId,
+            $controlPlaneUserId,
+            $page,
+            $perPage,
+        )) {
+            throw $this->invalidResponse($response->status());
+        }
+
+        return $result;
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      * @return array{operationId: string, walletId: string, intentId: string, orderId: string, fillId: string, positionId: string, eventId: string, status: string, duplicate: bool}
      */
@@ -588,6 +644,90 @@ class TradingEngineClient
         );
 
         return $date instanceof DateTimeImmutable && $date->format('Y-m-d\TH:i:s.v\Z') === $value;
+    }
+
+    private function validTokenScanCandidateResponse(
+        mixed $result,
+        string $scanExecutionId,
+        string $controlPlaneUserId,
+        int $page,
+        int $perPage,
+    ): bool {
+        if (! is_array($result)
+            || ! $this->hasExactKeys($result, ['schema_version', 'scan_execution_id', 'control_plane_user_id', 'candidates', 'pagination'])
+            || $result['schema_version'] !== 1
+            || $result['scan_execution_id'] !== $scanExecutionId
+            || $result['control_plane_user_id'] !== $controlPlaneUserId
+            || ! is_array($result['candidates'])
+            || ! is_array($result['pagination'])
+            || ! $this->hasExactKeys($result['pagination'], ['page', 'per_page', 'total', 'last_page'])
+            || $result['pagination']['page'] !== $page
+            || $result['pagination']['per_page'] !== $perPage
+            || ! is_int($result['pagination']['total'])
+            || $result['pagination']['total'] < 0
+            || ! is_int($result['pagination']['last_page'])
+            || $result['pagination']['last_page'] < 1
+            || count($result['candidates']) > $perPage) {
+            return false;
+        }
+
+        return collect($result['candidates'])->every(fn (mixed $candidate): bool => $this->validTokenScanCandidate($candidate));
+    }
+
+    private function validTokenScanCandidate(mixed $candidate): bool
+    {
+        if (! is_array($candidate)
+            || ! $this->hasExactKeys($candidate, [
+                'address', 'symbol', 'name', 'provider', 'state', 'reason_code',
+                'market', 'security_status', 'opportunity_id', 'evaluated_at',
+            ])
+            || ! is_string($candidate['address'])
+            || $candidate['address'] === ''
+            || mb_strlen($candidate['address']) > 128
+            || ! $this->nullableBoundedString($candidate['symbol'], 64)
+            || ! $this->nullableBoundedString($candidate['name'], 255)
+            || ! in_array($candidate['provider'], ['birdeye', 'dexscreener', 'geckoterminal'], true)
+            || ! in_array($candidate['state'], [
+                'discovered', 'skipped', 'qualified', 'qualified_downstream_failed',
+                'opportunity_created', 'opportunity_existing', 'failed',
+            ], true)
+            || ! $this->nullableSafeCode($candidate['reason_code'])
+            || ! in_array($candidate['security_status'], ['not_reported', 'unavailable', 'passed', 'failed'], true)
+            || (! is_null($candidate['opportunity_id']) && ! $this->validEngineId($candidate['opportunity_id']))
+            || ! $this->validTimestamp($candidate['evaluated_at'])) {
+            return false;
+        }
+
+        if ($candidate['market'] === null) {
+            return true;
+        }
+
+        if (! is_array($candidate['market'])
+            || ! $this->hasExactKeys($candidate['market'], [
+                'market_cap_usd', 'price_usd', 'liquidity_usd', 'volume_5m_usd', 'holders',
+            ])) {
+            return false;
+        }
+
+        foreach ($candidate['market'] as $value) {
+            $isNumber = is_int($value) || is_float($value);
+
+            if ($value !== null && (! $isNumber || ! is_finite((float) $value) || $value < 0)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function nullableBoundedString(mixed $value, int $maxLength): bool
+    {
+        return $value === null || (is_string($value) && $value !== '' && mb_strlen($value) <= $maxLength);
+    }
+
+    private function nullableSafeCode(mixed $value): bool
+    {
+        return $value === null || (is_string($value) && preg_match('/^[A-Z][A-Z0-9_]{0,127}$/D', $value) === 1);
     }
 
     private function nonEmptyString(mixed $value): bool

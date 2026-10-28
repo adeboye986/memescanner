@@ -15,6 +15,7 @@ import type { RecordPaperPositionCommandHandler } from '../../../src/application
 import type { StartTokenScanCommandHandler } from '../../../src/application/handlers/start-token-scan-command-handler.js';
 import type { EngineConfig } from '../../../src/config/env.js';
 import type { Database } from '../../../src/infrastructure/database/client.js';
+import type { TokenScanRepository } from '../../../src/infrastructure/database/repositories/token-scan-repository.js';
 import { ApplicationError } from '../../../src/shared/errors/application-error.js';
 import {
   registerHealthRoutes,
@@ -30,6 +31,7 @@ import { registerPaperEntryCommandRoutes } from '../../../src/interfaces/http/pa
 import { registerPaperFinancialObservationCommandRoutes } from '../../../src/interfaces/http/paper-financial-observation-command-routes.js';
 import { registerPaperPositionCommandRoutes } from '../../../src/interfaces/http/paper-position-command-routes.js';
 import { registerTokenScanCommandRoutes } from '../../../src/interfaces/http/token-scan-command-routes.js';
+import { registerTokenScanCandidateRoutes } from '../../../src/interfaces/http/token-scan-candidate-routes.js';
 import type { Kysely } from 'kysely';
 
 const correlationIdPattern = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -43,6 +45,7 @@ export interface AppDependencies {
   readonly noopHandler: AcceptNoopCommandHandler;
   readonly opportunityHandler: RecordOpportunityCommandHandler;
   readonly tokenScanHandler?: StartTokenScanCommandHandler;
+  readonly tokenScanRepository?: TokenScanRepository;
   readonly paperEntryHandler?: ExecutePaperEntryCommandHandler;
   readonly paperFinancialObservationHandler?: ObservePaperFinancialPositionCommandHandler;
   readonly paperPositionRegistrationHandler?: RecordPaperPositionCommandHandler;
@@ -195,6 +198,13 @@ export function buildApp(
   if (dependencies.tokenScanHandler !== undefined) {
     registerTokenScanCommandRoutes(app, {
       handler: dependencies.tokenScanHandler,
+      requireServiceAuth,
+    });
+  }
+  if (dependencies.tokenScanRepository !== undefined) {
+    registerTokenScanCandidateRoutes(app, {
+      database: dependencies.database,
+      repository: dependencies.tokenScanRepository,
       requireServiceAuth,
     });
   }

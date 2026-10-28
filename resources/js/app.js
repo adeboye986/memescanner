@@ -4,8 +4,10 @@ import { mountSolanaOpportunity } from './solana-opportunity';
 import { mountEthereumWalletCard } from './ethereum-wallet';
 import { createDashboardActivityPoller } from './dashboard-activity-poller';
 import { mountApplicationShell } from './application-shell';
+import { mountTokenScanner } from './token-scanner';
 
 mountApplicationShell();
+mountTokenScanner();
 mountWalletCard(document.querySelector('#solana-wallet'));
 mountEthereumWalletCard(document.querySelector('#ethereum-wallet'));
 mountEthereumOpportunity(document.querySelector('[data-ethereum-opportunity]'));

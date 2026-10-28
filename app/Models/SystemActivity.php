@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class SystemActivity extends Model
 {
@@ -53,5 +54,10 @@ class SystemActivity extends Model
     public function tradeOpportunities(): BelongsToMany
     {
         return $this->belongsToMany(TradeOpportunity::class, 'system_activity_trade_opportunities')->withTimestamps();
+    }
+
+    public function tradingEngineScanRequest(): HasOne
+    {
+        return $this->hasOne(TradingEngineScanRequest::class, 'system_activity_id');
     }
 }

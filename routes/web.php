@@ -23,14 +23,15 @@ use App\Http\Controllers\PasswordResetLinkController;
 use App\Http\Controllers\PrepareEthereumOpportunityController;
 use App\Http\Controllers\RegisteredUserController;
 use App\Http\Controllers\SettingsController;
-use App\Http\Controllers\SolanaSwapExecuteController;
 use App\Http\Controllers\SolanaOpportunityController;
+use App\Http\Controllers\SolanaSwapExecuteController;
 use App\Http\Controllers\SolanaSwapOrderController;
 use App\Http\Controllers\SolanaSwapQuoteController;
 use App\Http\Controllers\SolanaWalletConnectionController;
 use App\Http\Controllers\SystemActivityController;
 use App\Http\Controllers\TelegramWebhookController;
 use App\Http\Controllers\TestIntegrationController;
+use App\Http\Controllers\TokenScannerController;
 use App\Http\Controllers\TradeHistoryController;
 use App\Http\Controllers\UpdateSettingsController;
 use App\Http\Controllers\UserTelegramBotController;
@@ -56,6 +57,10 @@ Route::post('/dashboard/actions/{action}', DashboardActionController::class)
 Route::get('/dashboard/activity', SystemActivityController::class)
     ->middleware('auth')
     ->name('dashboard.activity');
+Route::middleware('auth')->prefix('scanner')->name('scanner.')->group(function (): void {
+    Route::get('/', [TokenScannerController::class, 'index'])->name('index');
+    Route::get('/{activity}', [TokenScannerController::class, 'show'])->whereNumber('activity')->name('show');
+});
 Route::get('/trades', TradeHistoryController::class)->middleware('auth')->name('trades.index');
 Route::post('/telegram/webhook/{publicId}', TelegramWebhookController::class)->where('publicId', '[A-Za-z0-9]{32}')->middleware('throttle:telegram-webhook')->name('telegram.user-webhook');
 Route::post('/telegram/webhook', TelegramWebhookController::class)->middleware('throttle:telegram-webhook')->name('telegram.webhook');

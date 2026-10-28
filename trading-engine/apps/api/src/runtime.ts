@@ -121,6 +121,7 @@ export async function startApi(
     noopHandler,
     opportunityHandler,
     tokenScanHandler,
+    tokenScanRepository: tokenScans,
     paperEntryHandler,
     paperFinancialObservationHandler,
     paperPositionRegistrationHandler,

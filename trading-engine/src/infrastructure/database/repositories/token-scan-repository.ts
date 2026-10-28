@@ -46,7 +46,54 @@ export interface TokenDiscoveryInput {
   readonly opportunityId: string | null;
 }
 
+export interface TokenScanCandidatePage {
+  readonly execution: Pick<TokenScanExecutionRecord, 'id' | 'control_plane_user_id'>;
+  readonly candidates: readonly TokenDiscoveryRecord[];
+  readonly total: number;
+}
+
 export class TokenScanRepository {
+  public async paginateCandidateDiagnostics(
+    database: Kysely<Database>,
+    scanExecutionId: string,
+    controlPlaneUserId: string,
+    page: number,
+    perPage: number,
+  ): Promise<TokenScanCandidatePage | null> {
+    const execution = await database
+      .selectFrom('token_scan_executions')
+      .select(['id', 'control_plane_user_id'])
+      .where('id', '=', scanExecutionId)
+      .where('control_plane_user_id', '=', controlPlaneUserId)
+      .executeTakeFirst();
+
+    if (execution === undefined) {
+      return null;
+    }
+
+    const baseCandidates = database
+      .selectFrom('token_discoveries')
+      .where('scan_execution_id', '=', scanExecutionId);
+    const [count, candidates] = await Promise.all([
+      baseCandidates
+        .select((expression) => expression.fn.countAll().as('count'))
+        .executeTakeFirstOrThrow(),
+      baseCandidates
+        .selectAll()
+        .orderBy('discovery_index', 'asc')
+        .orderBy('id', 'asc')
+        .limit(perPage)
+        .offset((page - 1) * perPage)
+        .execute(),
+    ]);
+
+    return {
+      execution,
+      candidates,
+      total: Number(count.count),
+    };
+  }
+
   public async insertExecution(
     connection: Connection,
     input: {

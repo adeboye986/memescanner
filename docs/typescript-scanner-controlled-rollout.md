@@ -30,6 +30,18 @@ The engine emits authenticated, replay-protected `token.scan.completed.v1` or `t
 
 Qualified opportunities use the existing version-1 opportunity command and `opportunity.recorded.v1` event, with source system `meme-scanner-trading-engine` and the scan execution ID. Laravel projects these as user-owned PAPER presentation records linked to the originating activity; it does not execute a legacy PAPER position from the projection.
 
+### Candidate diagnostics read contract
+
+The Token Scanner detail page reads engine-owned candidate evidence through `GET /v1/token-scans/{scanExecutionId}/candidates`. This is a version-1 internal service contract, not a browser-facing engine endpoint. Laravel authenticates to it with the dedicated `token-scans:candidates:read` scope and supplies the authenticated control-plane user ID, page, and page size. The engine returns `404` unless both the scan ID and control-plane user ID match the authoritative execution row.
+
+The request is bounded to pages 1–10,000 and 1–50 candidates per page. A successful response contains:
+
+- `schema_version: 1`, the scan execution ID, and the matching control-plane user ID;
+- a bounded candidate list containing only address, symbol, name, provider, candidate state, safe reason code, allowlisted market summary, summarized security status, opportunity ID, and evaluation timestamp; and
+- page, page size, total rows, and final page.
+
+The contract deliberately excludes raw provider responses, full market/security/qualification snapshots, credentials, request payloads, exception text, and database metadata. Laravel validates the exact response shape, identity, bounds, IDs, timestamps, enumerations, safe-code format, and non-negative finite metrics before rendering it. A malformed or unavailable response fails closed: aggregate terminal-event evidence remains visible while candidate diagnostics are labeled unavailable. Laravel never connects directly to the engine PostgreSQL database.
+
 ## Database prerequisites
 
 Apply only through the reviewed migration tooling while both scanner flags are disabled:
