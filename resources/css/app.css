@@ -15,39 +15,41 @@
 
 :root {
     color-scheme: dark;
-    --ms-app-background: #06111c;
-    --ms-sidebar-background: #07131f;
-    --ms-header-background: rgb(7 19 31 / 0.94);
-    --ms-surface: #0d1c2a;
-    --ms-surface-raised: #112334;
-    --ms-surface-hover: #142a3d;
-    --ms-border: #1d3144;
-    --ms-border-strong: #29465f;
-    --ms-text: #f7f9fc;
-    --ms-text-muted: #8ba0b5;
-    --ms-text-subtle: #62778c;
-    --ms-primary: #1687ff;
-    --ms-primary-hover: #2d96ff;
-    --ms-primary-soft: rgb(22 135 255 / 0.2);
-    --ms-primary-border: rgb(65 160 255 / 0.32);
-    --ms-focus: #45a6ff;
-    --ms-shadow: 0 18px 50px rgb(0 0 0 / 0.2);
-    --ms-logo-glow: 0 0 24px rgb(22 135 255 / 0.2);
+    --ms-sidebar-width: 15.5rem;
+    --ms-topbar-height: 4.5rem;
+    --ms-app-background: #07121d;
+    --ms-sidebar-background: #06111c;
+    --ms-header-background: rgb(7 18 29 / 0.96);
+    --ms-surface: #0c1b29;
+    --ms-surface-raised: #102232;
+    --ms-surface-hover: #13283a;
+    --ms-border: #192d40;
+    --ms-border-strong: #284259;
+    --ms-text: #f5f8fc;
+    --ms-text-muted: #9badbe;
+    --ms-text-subtle: #708497;
+    --ms-primary: #1677f2;
+    --ms-primary-hover: #2c8aff;
+    --ms-primary-soft: rgb(22 119 242 / 0.24);
+    --ms-primary-border: rgb(67 143 255 / 0.36);
+    --ms-focus: #51a4ff;
+    --ms-shadow: 0 20px 52px rgb(0 0 0 / 0.28);
+    --ms-logo-glow: 0 0 20px rgb(28 151 255 / 0.24);
 }
 
 :root[data-theme='light'] {
     color-scheme: light;
-    --ms-app-background: #f4f7fb;
+    --ms-app-background: #f5f7fa;
     --ms-sidebar-background: #ffffff;
-    --ms-header-background: rgb(255 255 255 / 0.92);
+    --ms-header-background: rgb(255 255 255 / 0.96);
     --ms-surface: #ffffff;
     --ms-surface-raised: #f7f9fc;
-    --ms-surface-hover: #eef4fa;
-    --ms-border: #dbe4ee;
-    --ms-border-strong: #becddd;
-    --ms-text: #101828;
-    --ms-text-muted: #52657a;
-    --ms-text-subtle: #728399;
+    --ms-surface-hover: #edf3f8;
+    --ms-border: #dbe3ec;
+    --ms-border-strong: #becbd9;
+    --ms-text: #122033;
+    --ms-text-muted: #53677c;
+    --ms-text-subtle: #76889b;
     --ms-primary: #0878ef;
     --ms-primary-hover: #0069dc;
     --ms-primary-soft: rgb(8 120 239 / 0.12);
@@ -167,7 +169,7 @@ body.ms-navigation-open {
     min-height: 100vh;
     overflow-x: hidden;
     background:
-        radial-gradient(circle at 74% -10%, rgb(22 135 255 / 0.06), transparent 28rem),
+        radial-gradient(circle at 62% -14%, rgb(22 119 242 / 0.055), transparent 32rem),
         var(--ms-app-background);
     color: var(--ms-text);
     font-family: var(--font-sans);
@@ -184,7 +186,7 @@ body.ms-navigation-open {
     inset: 0 auto 0 0;
     z-index: 50;
     display: flex;
-    width: min(17rem, 88vw);
+    width: min(var(--ms-sidebar-width), 88vw);
     flex-direction: column;
     border-right: 1px solid var(--ms-border);
     background: var(--ms-sidebar-background);
@@ -210,18 +212,18 @@ body.ms-navigation-open {
     display: flex;
     min-width: 0;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.625rem;
     color: var(--ms-text);
     text-decoration: none;
 }
 
 .ms-sidebar-header {
     display: flex;
-    min-height: 4.75rem;
+    min-height: var(--ms-topbar-height);
     align-items: center;
     gap: 0.75rem;
     border-bottom: 1px solid var(--ms-border);
-    padding: 0 1.25rem;
+    padding: 0 1rem;
 }
 
 .ms-sidebar-header .ms-brand {
@@ -244,8 +246,8 @@ body.ms-navigation-open {
 
 .ms-brand-mark {
     display: inline-flex;
-    width: 2.25rem;
-    height: 2.25rem;
+    width: 1.875rem;
+    height: 1.875rem;
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
@@ -256,9 +258,9 @@ body.ms-navigation-open {
 .ms-brand-name {
     overflow: hidden;
     color: var(--ms-text);
-    font-size: 0.95rem;
-    font-weight: 700;
-    letter-spacing: -0.015em;
+    font-size: 0.8125rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -266,20 +268,20 @@ body.ms-navigation-open {
 .ms-primary-navigation {
     display: flex;
     flex-direction: column;
-    gap: 0.375rem;
-    padding: 1.25rem 0.875rem;
+    gap: 0.25rem;
+    padding: 1rem 0.75rem;
 }
 
 .ms-nav-link {
     display: flex;
-    min-height: 2.75rem;
+    min-height: 2.5rem;
     align-items: center;
-    gap: 0.8rem;
+    gap: 0.7rem;
     border: 1px solid transparent;
-    border-radius: 0.5rem;
-    padding: 0.65rem 0.8rem;
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.7rem;
     color: var(--ms-text-muted);
-    font-size: 0.875rem;
+    font-size: 0.8125rem;
     font-weight: 500;
     text-decoration: none;
     transition: color 150ms ease, background 150ms ease, border-color 150ms ease, transform 150ms ease;
@@ -293,13 +295,15 @@ body.ms-navigation-open {
 
 .ms-nav-link.is-active {
     border-color: var(--ms-primary-border);
-    background: linear-gradient(90deg, var(--ms-primary-soft), rgb(22 135 255 / 0.12));
-    color: #eaf5ff;
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.02);
+    background: linear-gradient(90deg, rgb(24 66 139 / 0.92), rgb(24 61 120 / 0.82));
+    color: #ffffff;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.035), 0 5px 16px rgb(2 9 20 / 0.18);
 }
 
 [data-theme='light'] .ms-nav-link.is-active {
+    background: linear-gradient(90deg, #e6f0ff, #edf5ff);
     color: #075fbf;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.7), 0 4px 12px rgb(30 90 160 / 0.08);
 }
 
 .ms-nav-link.is-active svg {
@@ -312,14 +316,14 @@ body.ms-navigation-open {
 
 .ms-system-link {
     display: flex;
-    min-height: 4.25rem;
+    min-height: 4rem;
     align-items: center;
     gap: 0.75rem;
-    margin: 0 0.875rem;
+    margin: 0 0.75rem;
     border-top: 1px solid var(--ms-border);
-    padding: 1rem 0.75rem;
+    padding: 0.875rem 0.7rem;
     color: var(--ms-text-muted);
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     font-weight: 500;
     text-decoration: none;
 }
@@ -329,8 +333,8 @@ body.ms-navigation-open {
 }
 
 .ms-system-indicator {
-    width: 0.6rem;
-    height: 0.6rem;
+    width: 0.5rem;
+    height: 0.5rem;
     border: 2px solid #4daeff;
     border-radius: 999px;
     box-shadow: 0 0 0 4px rgb(22 135 255 / 0.1);
@@ -345,14 +349,14 @@ body.ms-navigation-open {
     top: 0;
     z-index: 30;
     display: flex;
-    height: 4.75rem;
+    height: var(--ms-topbar-height);
     align-items: center;
-    gap: 0.875rem;
+    gap: 0.75rem;
     border-bottom: 1px solid var(--ms-border);
     padding: 0 1rem;
     background: var(--ms-header-background);
-    box-shadow: 0 8px 30px rgb(0 0 0 / 0.05);
-    backdrop-filter: blur(18px);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.035);
+    backdrop-filter: blur(16px);
 }
 
 .ms-mobile-menu {
@@ -363,23 +367,23 @@ body.ms-navigation-open {
     min-width: 0;
     overflow: hidden;
     color: var(--ms-text);
-    font-size: 0.9rem;
-    font-weight: 700;
+    font-size: 0.8125rem;
+    font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .ms-navigation-search {
     display: none;
-    width: min(22rem, 38vw);
-    min-width: 13rem;
-    height: 2.7rem;
+    width: min(20rem, 36vw);
+    min-width: 12rem;
+    height: 2.25rem;
     align-items: center;
-    gap: 0.65rem;
+    gap: 0.5rem;
     border: 1px solid var(--ms-border-strong);
-    border-radius: 0.55rem;
-    padding: 0 0.75rem;
-    background: var(--ms-surface);
+    border-radius: 0.5rem;
+    padding: 0 0.65rem;
+    background: var(--ms-surface-raised);
     color: var(--ms-text-subtle);
     transition: border-color 150ms ease, box-shadow 150ms ease;
 }
@@ -396,7 +400,7 @@ body.ms-navigation-open {
     outline: 0;
     background: transparent;
     color: var(--ms-text);
-    font-size: 0.8rem;
+    font-size: 0.75rem;
 }
 
 .ms-navigation-search input::placeholder {
@@ -406,26 +410,26 @@ body.ms-navigation-open {
 .ms-navigation-search kbd {
     color: var(--ms-text-subtle);
     font-family: inherit;
-    font-size: 0.65rem;
+    font-size: 0.625rem;
 }
 
 .ms-topbar-actions {
     display: flex;
     align-items: center;
-    gap: 0.55rem;
+    gap: 0.25rem;
     margin-left: auto;
 }
 
 .ms-icon-button {
     display: inline-flex;
-    width: 2.7rem;
-    height: 2.7rem;
+    width: 2.25rem;
+    height: 2.25rem;
     flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--ms-border);
-    border-radius: 0.6rem;
-    background: var(--ms-surface);
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    background: transparent;
     color: var(--ms-text-muted);
     cursor: pointer;
     text-decoration: none;
@@ -449,13 +453,13 @@ body.ms-navigation-open {
 
 .ms-account-menu > summary {
     display: flex;
-    min-height: 2.85rem;
+    min-height: 2.5rem;
     cursor: pointer;
     list-style: none;
     align-items: center;
-    gap: 0.65rem;
-    border-radius: 0.65rem;
-    padding: 0.25rem;
+    gap: 0.5rem;
+    border-radius: 0.5rem;
+    padding: 0.2rem 0.35rem;
     color: var(--ms-text-muted);
 }
 
@@ -470,44 +474,30 @@ body.ms-navigation-open {
 
 .ms-avatar {
     display: inline-flex;
-    width: 2.15rem;
-    height: 2.15rem;
+    width: 1.75rem;
+    height: 1.75rem;
     align-items: center;
     justify-content: center;
     border: 1px solid rgb(255 255 255 / 0.18);
     border-radius: 999px;
     background: linear-gradient(145deg, #7393ff, #445ed1);
     color: #ffffff;
-    font-size: 0.72rem;
+    font-size: 0.625rem;
     font-weight: 700;
     box-shadow: 0 4px 14px rgb(45 76 190 / 0.25);
 }
 
-.ms-account-identity {
+.ms-account-name {
     display: none;
     min-width: 0;
-    line-height: 1.15;
-}
-
-.ms-account-identity strong,
-.ms-account-identity small {
-    display: block;
     overflow: hidden;
-    max-width: 9rem;
+    max-width: 8rem;
+    color: var(--ms-text);
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.2;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.ms-account-identity strong {
-    color: var(--ms-text);
-    font-size: 0.78rem;
-    font-weight: 650;
-}
-
-.ms-account-identity small {
-    margin-top: 0.2rem;
-    color: var(--ms-text-subtle);
-    font-size: 0.67rem;
 }
 
 .ms-account-popover {
@@ -547,6 +537,12 @@ body.ms-navigation-open {
 .ms-account-popover-header span {
     color: var(--ms-text-subtle);
     font-size: 0.72rem;
+}
+
+.ms-account-popover-header small {
+    color: var(--ms-primary-hover);
+    font-size: 0.68rem;
+    font-weight: 650;
 }
 
 .ms-account-popover a,
@@ -647,7 +643,7 @@ body.ms-navigation-open {
 }
 
 @media (min-width: 768px) {
-    .ms-account-identity {
+    .ms-account-name {
         display: block;
     }
 }
@@ -655,13 +651,13 @@ body.ms-navigation-open {
 @media (min-width: 1024px) {
     .ms-app-shell {
         display: grid;
-        grid-template-columns: 16.5rem minmax(0, 1fr);
+        grid-template-columns: var(--ms-sidebar-width) minmax(0, 1fr);
     }
 
     .ms-sidebar {
         position: sticky;
         top: 0;
-        width: 16.5rem;
+        width: var(--ms-sidebar-width);
         height: 100vh;
         box-shadow: none;
         transform: none;
@@ -679,13 +675,13 @@ body.ms-navigation-open {
     }
 
     .ms-topbar {
-        padding-right: 2rem;
-        padding-left: 2rem;
+        padding-right: 1.5rem;
+        padding-left: 1.5rem;
     }
 
     .ms-main-content {
-        gap: 1.75rem;
-        padding: 2rem;
+        gap: 1.5rem;
+        padding: 1.75rem;
     }
 }
 

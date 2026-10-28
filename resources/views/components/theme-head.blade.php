@@ -1,4 +1,4 @@
-<meta name="theme-color" content="#07111d" data-theme-color>
+<meta name="theme-color" content="#07121d" data-theme-color>
 <script>
     (() => {
         const root = document.documentElement;
@@ -19,7 +19,7 @@
         root.style.colorScheme = theme;
         document.querySelector('[data-theme-color]')?.setAttribute(
             'content',
-            theme === 'dark' ? '#07111d' : '#f4f7fb',
+            theme === 'dark' ? '#07121d' : '#f5f7fa',
         );
     })();
 </script>

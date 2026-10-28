@@ -74,7 +74,7 @@ test('applying a theme updates document state, browser color and accessible togg
     assert.equal(documentRef.documentElement.dataset.theme, 'dark');
     assert.equal(documentRef.documentElement.classList.contains('dark'), true);
     assert.equal(documentRef.documentElement.style.colorScheme, 'dark');
-    assert.equal(themeColor.attributes.get('content'), '#07111d');
+    assert.equal(themeColor.attributes.get('content'), '#07121d');
     assert.equal(toggle.attributes.get('aria-label'), 'Switch to light theme');
     assert.equal(toggle.attributes.get('aria-pressed'), 'true');
 });

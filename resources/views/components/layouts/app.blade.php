@@ -3,7 +3,12 @@
         {{ $slot }}
     </x-layouts.shell>
 @else
-    @php $applicationName = app(\App\Services\ApplicationSettingsService::class)->get('general.application_name'); @endphp
+    @php
+        $configuredApplicationName = trim((string) app(\App\Services\ApplicationSettingsService::class)->get('general.application_name'));
+        $applicationName = $configuredApplicationName === '' || strcasecmp($configuredApplicationName, 'Laravel') === 0
+            ? 'Meme Scanner'
+            : $configuredApplicationName;
+    @endphp
     <!DOCTYPE html>
     <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
         <head>
@@ -18,7 +23,7 @@
             <div class="ms-guest-shell">
                 <nav aria-label="Guest navigation" class="ms-guest-navigation">
                     <a href="{{ route('dashboard') }}" class="ms-brand" aria-label="{{ $applicationName }} home">
-                        <span class="ms-brand-mark"><x-app-icon name="brand" :size="29" /></span>
+                        <span class="ms-brand-mark"><x-app-icon name="brand" :size="27" /></span>
                         <span class="ms-brand-name">{{ $applicationName }}</span>
                     </a>
                     <div class="ms-guest-actions">

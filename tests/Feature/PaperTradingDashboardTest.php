@@ -7,6 +7,7 @@ use App\Models\PaperWallet;
 use App\Models\SystemActivity;
 use App\Models\TradeOpportunity;
 use App\Models\User;
+use App\Services\ApplicationSettingsService;
 use Tests\Concerns\RefreshesPaperTradingDatabase;
 use Tests\TestCase;
 
@@ -209,8 +210,22 @@ class PaperTradingDashboardTest extends TestCase
             ->assertSee('aria-label="Switch color theme"', false)
             ->assertSee('placeholder="Search navigation..."', false)
             ->assertSee('aria-label="Notification settings"', false)
+            ->assertSee('<span class="ms-brand-name">Meme Scanner</span>', false)
+            ->assertDontSee('<span class="ms-brand-name">Laravel</span>', false)
             ->assertSee($user->name)
             ->assertDontSee($user->name, false);
+    }
+
+    public function test_authenticated_shell_preserves_a_deliberately_customized_application_name(): void
+    {
+        app(ApplicationSettingsService::class)->update([
+            'general.application_name' => 'Scanner Operations',
+        ]);
+
+        $this->get(route('dashboard'))
+            ->assertOk()
+            ->assertSee('<span class="ms-brand-name">Scanner Operations</span>', false)
+            ->assertDontSee('<span class="ms-brand-name">Laravel</span>', false);
     }
 
     /**

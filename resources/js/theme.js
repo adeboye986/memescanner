@@ -34,7 +34,7 @@ export const applyTheme = (documentRef, theme) => {
 
     documentRef.querySelector('[data-theme-color]')?.setAttribute(
         'content',
-        resolvedTheme === 'dark' ? '#07111d' : '#f4f7fb',
+        resolvedTheme === 'dark' ? '#07121d' : '#f5f7fa',
     );
 
     documentRef.querySelectorAll('[data-theme-toggle]').forEach((button) => {

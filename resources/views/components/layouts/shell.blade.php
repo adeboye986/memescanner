@@ -1,7 +1,10 @@
 @props(['title' => null, 'administrator' => false])
 
 @php
-    $applicationName = app(\App\Services\ApplicationSettingsService::class)->get('general.application_name');
+    $configuredApplicationName = trim((string) app(\App\Services\ApplicationSettingsService::class)->get('general.application_name'));
+    $applicationName = $configuredApplicationName === '' || strcasecmp($configuredApplicationName, 'Laravel') === 0
+        ? 'Meme Scanner'
+        : $configuredApplicationName;
     $user = auth()->user();
     $isAdministrator = (bool) $administrator;
     $settingsUrl = $isAdministrator ? route('settings.index') : route('account.edit').'#account-settings';
@@ -41,7 +44,7 @@
             <aside id="app-sidebar" class="ms-sidebar" data-sidebar aria-label="Application navigation">
                 <div class="ms-sidebar-header">
                     <a href="{{ route('dashboard') }}" class="ms-brand" aria-label="{{ $applicationName }} overview">
-                        <span class="ms-brand-mark"><x-app-icon name="brand" :size="29" /></span>
+                        <span class="ms-brand-mark"><x-app-icon name="brand" :size="27" /></span>
                         <span class="ms-brand-name">{{ $applicationName }}</span>
                     </a>
                     <button type="button" class="ms-sidebar-close" data-sidebar-close aria-label="Close navigation">
@@ -58,7 +61,7 @@
                             @class(['ms-nav-link', 'is-active' => $item['active']])
                             @if($item['active']) aria-current="page" @endif
                         >
-                            <x-app-icon :name="$item['icon']" :size="19" />
+                            <x-app-icon :name="$item['icon']" :size="18" />
                             <span>{{ $item['label'] }}</span>
                         </a>
                     @endforeach
@@ -88,7 +91,7 @@
                     <span class="ms-mobile-brand">{{ $applicationName }}</span>
 
                     <div class="ms-navigation-search">
-                        <x-app-icon name="search" :size="17" />
+                        <x-app-icon name="search" :size="16" />
                         <label for="application-navigation-search" class="sr-only">Search navigation</label>
                         <input
                             id="application-navigation-search"
@@ -104,7 +107,7 @@
                     <div class="ms-topbar-actions">
                         <button
                             type="button"
-                            class="ms-icon-button"
+                            class="ms-icon-button ms-theme-toggle"
                             data-theme-toggle
                             aria-label="Switch color theme"
                             aria-pressed="false"
@@ -113,23 +116,21 @@
                             <span data-theme-icon="dark"><x-app-icon name="moon" :size="19" /></span>
                         </button>
 
-                        <a href="{{ route('telegram.settings') }}" class="ms-icon-button" aria-label="Notification settings" title="Notification settings">
-                            <x-app-icon name="bell" :size="19" />
+                        <a href="{{ route('telegram.settings') }}" class="ms-icon-button ms-notification-link" aria-label="Notification settings" title="Notification settings">
+                            <x-app-icon name="bell" :size="18" />
                         </a>
 
                         <details class="ms-account-menu" data-account-menu>
                             <summary>
                                 <span class="ms-avatar">{{ mb_strtoupper(mb_substr($user->name, 0, 1)) }}</span>
-                                <span class="ms-account-identity">
-                                    <strong>{{ $user->name }}</strong>
-                                    <small>{{ $isAdministrator ? 'Administrator' : 'Trader' }}</small>
-                                </span>
-                                <x-app-icon name="chevron-down" :size="16" />
+                                <strong class="ms-account-name">{{ $user->name }}</strong>
+                                <x-app-icon name="chevron-down" :size="14" />
                             </summary>
                             <div class="ms-account-popover">
                                 <div class="ms-account-popover-header">
                                     <strong>{{ $user->name }}</strong>
                                     <span>{{ $user->email }}</span>
+                                    <small>{{ $isAdministrator ? 'Administrator' : 'Trader' }}</small>
                                 </div>
                                 <a href="{{ route('account.edit') }}"><x-app-icon name="user" :size="17" /> Profile & security</a>
                                 <a href="{{ route('telegram.settings') }}"><x-app-icon name="telegram" :size="17" /> Telegram & notifications</a>
