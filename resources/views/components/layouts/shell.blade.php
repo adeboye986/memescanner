@@ -7,10 +7,11 @@
         : $configuredApplicationName;
     $user = auth()->user();
     $isAdministrator = (bool) $administrator;
+    $dashboardToolsUrl = route('dashboard', ['view' => 'tools']);
     $settingsUrl = $isAdministrator ? route('settings.index') : route('account.edit').'#account-settings';
-    $walletsUrl = $isAdministrator ? route('dashboard').'#wallets' : route('account.edit').'#wallets';
-    $scannerUrl = route('dashboard').'#scanner-controls';
-    $systemStatusUrl = route('dashboard').($isAdministrator ? '#system-status' : '#system-activity');
+    $walletsUrl = $isAdministrator ? $dashboardToolsUrl.'#wallets' : route('account.edit').'#wallets';
+    $scannerUrl = $dashboardToolsUrl.'#scanner-controls';
+    $systemStatusUrl = $dashboardToolsUrl.($isAdministrator ? '#system-status' : '#system-activity');
     $primaryNavigation = [
         ['label' => 'Overview', 'icon' => 'home', 'url' => route('dashboard'), 'active' => request()->routeIs('dashboard'), 'section' => 'overview'],
         ['label' => 'Token Scanner', 'icon' => 'search', 'url' => $scannerUrl, 'active' => false, 'section' => 'scanner'],

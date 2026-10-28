@@ -232,7 +232,7 @@
                     @endforeach
                     @if ($position->status === 'open')
                         <div class="flex items-center bg-slate-900/90 px-5 py-4 sm:col-span-2 lg:col-span-3">
-                            <a href="{{ route('dashboard') }}#positions-heading" class="text-sm font-semibold text-emerald-300 transition hover:text-emerald-200">View on Dashboard →</a>
+                            <a href="{{ route('dashboard', ['view' => 'tools']) }}#positions-heading" class="text-sm font-semibold text-emerald-300 transition hover:text-emerald-200">View on Dashboard →</a>
                         </div>
                     @endif
                 </dl>

@@ -106,7 +106,7 @@ class OperationalHealthTest extends TestCase
         Cache::store('file')->forever('operations.queue.health', ['last_run_at' => now()->subHour()->toIso8601String()]);
         $admin = User::factory()->create(['is_admin' => true]);
 
-        $this->actingAs($admin)->get(route('dashboard'))
+        $this->actingAs($admin)->get(route('dashboard', ['view' => 'tools']))
             ->assertOk()
             ->assertSee('Background Process Health')
             ->assertSee('STALE')

@@ -163,7 +163,7 @@ class TradingEnginePaperEntryProjectionTest extends TestCase
 
         config()->set('services.trading_engine.enabled', false);
         $this->withoutVite();
-        $this->actingAs($user)->get(route('dashboard'))
+        $this->actingAs($user)->get(route('dashboard', ['view' => 'tools']))
             ->assertOk()
             ->assertSee('Legacy Laravel Open PAPER Positions')
             ->assertSee('Engine-owned PAPER portfolio')

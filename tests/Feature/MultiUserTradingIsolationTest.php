@@ -78,7 +78,7 @@ class MultiUserTradingIsolationTest extends TestCase
     public function test_cross_user_position_read_and_close_are_denied(): void
     {
         $position = $this->position($this->userB);
-        $this->actingAs($this->userA)->get(route('dashboard'))->assertOk()->assertDontSee($position->symbol);
+        $this->actingAs($this->userA)->get(route('dashboard', ['view' => 'tools']))->assertOk()->assertDontSee($position->symbol);
         $this->post(route('paper-trades.close', $position))->assertNotFound();
         $this->assertSame('open', $position->fresh()->status);
     }
@@ -152,7 +152,7 @@ class MultiUserTradingIsolationTest extends TestCase
         $otherPosition = $this->position($this->userB, ['symbol' => 'OTHER-POS']);
 
         $this->actingAs($admin)->get(route('opportunities.show', $otherOpportunity))->assertNotFound();
-        $this->get(route('dashboard'))->assertOk()->assertDontSee('OTHER-POS');
+        $this->get(route('dashboard', ['view' => 'tools']))->assertOk()->assertDontSee('OTHER-POS');
         $this->get(route('trades.index'))->assertOk()->assertDontSee('OTHER-POS');
         $this->assertSame('open', $otherPosition->fresh()->status);
     }
@@ -163,7 +163,7 @@ class MultiUserTradingIsolationTest extends TestCase
         $admin = User::factory()->create(['is_admin' => true]);
         app(PaperWalletService::class)->forUser($admin, Chain::Solana)->update(['available_balance_sol' => 4.5]);
 
-        $this->actingAs($admin)->get(route('dashboard'))
+        $this->actingAs($admin)->get(route('dashboard', ['view' => 'tools']))
             ->assertOk()
             ->assertSee('Legacy Admin Ledgers')
             ->assertSee('1.2345 SOL')
@@ -187,7 +187,7 @@ class MultiUserTradingIsolationTest extends TestCase
     public function test_normal_user_cannot_trigger_platform_wide_manual_tracker(): void
     {
         $this->actingAs($this->userA)
-            ->get(route('dashboard'))
+            ->get(route('dashboard', ['view' => 'tools']))
             ->assertOk()
             ->assertDontSee('Track Positions Now');
 

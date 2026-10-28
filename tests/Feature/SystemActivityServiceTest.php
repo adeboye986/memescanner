@@ -213,4 +213,52 @@ class SystemActivityServiceTest extends TestCase
         $this->assertNotContains('OTHER USER', array_column($activities, 'label'));
         $this->assertNotContains('SCHEDULED SCAN', array_column($activities, 'label'));
     }
+
+    public function test_scanner_overview_queries_are_scoped_to_the_authenticated_user(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $other = User::factory()->create(['is_admin' => false]);
+        SystemActivity::factory()->create([
+            'user_id' => $user->id,
+            'action' => 'momentum-scan',
+            'label' => 'USER MOMENTUM SCAN',
+        ]);
+        SystemActivity::factory()->create([
+            'user_id' => $user->id,
+            'action' => 'token-scan',
+            'label' => 'LATEST USER SCAN',
+        ]);
+        SystemActivity::factory()->create([
+            'user_id' => $other->id,
+            'action' => 'token-scan',
+            'label' => 'OTHER USER SCAN',
+        ]);
+
+        $service = app(SystemActivityService::class);
+
+        $this->assertSame(2, $service->scannerCount($user));
+        $this->assertSame('LATEST USER SCAN', $service->latestScannerData($user)['label']);
+    }
+
+    public function test_scanner_summary_availability_distinguishes_reported_zero_from_missing_counts(): void
+    {
+        $activity = SystemActivity::factory()->create([
+            'action' => 'token-scan',
+            'result_summary' => [
+                'version' => 1,
+                'kind' => 'scanner_execution',
+                'scanner' => 'new-token',
+                'chain' => 'solana',
+                'outcome' => 'succeeded',
+                'counts' => ['examined' => 0],
+            ],
+        ]);
+
+        $summary = app(SystemActivityService::class)->present($activity)['result_summary'];
+
+        $this->assertSame(0, $summary['counts']['examined']);
+        $this->assertTrue($summary['availability']['counts']['examined']);
+        $this->assertFalse($summary['availability']['counts']['qualified']);
+        $this->assertFalse($summary['availability']['provider_failures']);
+    }
 }

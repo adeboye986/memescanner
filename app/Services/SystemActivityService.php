@@ -170,6 +170,27 @@ class SystemActivityService
             ->all();
     }
 
+    public function scannerCount(?User $user = null): int
+    {
+        $query = SystemActivity::query()
+            ->whereIn('action', ['token-scan', 'momentum-scan']);
+
+        return $this->scopeToUser($query, $user)->count();
+    }
+
+    /** @return array<string, mixed>|null */
+    public function latestScannerData(?User $user = null): ?array
+    {
+        $query = SystemActivity::query()
+            ->with('user:id,name')
+            ->whereIn('action', ['token-scan', 'momentum-scan']);
+        $activity = $this->scopeToUser($query, $user)
+            ->latest('id')
+            ->first();
+
+        return $activity ? $this->present($activity) : null;
+    }
+
     /** @return list<string> */
     public function runningActions(?User $user = null): array
     {
@@ -300,9 +321,12 @@ class SystemActivityService
             return null;
         }
 
+        $summaryCounts = is_array($summary['counts'] ?? null) ? $summary['counts'] : [];
         $counts = [];
+        $reportedCounts = [];
         foreach (['discovered', 'examined', 'qualified', 'qualified_candidates', 'opportunities_created', 'opportunities_existing', 'downstream_failed', 'skipped', 'failed', 'opportunities_correlated', 'exports_queued', 'exports_acknowledged'] as $field) {
-            $counts[$field] = max(0, (int) data_get($summary, 'counts.'.$field, 0));
+            $reportedCounts[$field] = array_key_exists($field, $summaryCounts);
+            $counts[$field] = max(0, (int) ($summaryCounts[$field] ?? 0));
         }
 
         $exports = [];
@@ -344,7 +368,25 @@ class SystemActivityService
             'error_code' => is_string($errorCode) && preg_match('/^[A-Z][A-Z0-9_]{0,127}$/D', $errorCode) === 1
                 ? $errorCode
                 : null,
+            'availability' => [
+                'counts' => $reportedCounts,
+                'provider_failures' => array_key_exists('provider_failures', $summary),
+            ],
         ];
+    }
+
+    private function scopeToUser(Builder $query, ?User $user): Builder
+    {
+        if ($user === null) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $query) use ($user): void {
+            $query->where('user_id', $user->id);
+            if ($user->is_admin) {
+                $query->orWhereNull('user_id');
+            }
+        });
     }
 
     private function activityTime(?SystemActivity $activity): ?Carbon

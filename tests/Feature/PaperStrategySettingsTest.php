@@ -124,7 +124,7 @@ class PaperStrategySettingsTest extends TestCase
             ['strategy_override' => $this->values(25, 60, 140)],
         ));
 
-        $this->get(route('dashboard'))
+        $this->get(route('dashboard', ['view' => 'tools']))
             ->assertSuccessful()
             ->assertDontSee('Save Strategy')
             ->assertSee('Position strategy snapshot')

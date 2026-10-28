@@ -47,7 +47,7 @@ class PaperTradingDashboardTest extends TestCase
         $this->createPosition(['symbol' => 'UNFUNDED', 'initial_investment_sol' => 0]);
         $this->createPosition(['symbol' => 'CLOSED', 'status' => 'closed']);
 
-        $response = $this->get(route('dashboard'));
+        $response = $this->get(route('dashboard', ['view' => 'tools']));
 
         $response
             ->assertOk()
@@ -82,7 +82,7 @@ class PaperTradingDashboardTest extends TestCase
             'last_valid_market_observation_at' => $timestamp,
         ]]);
 
-        $this->get(route('dashboard'))->assertSuccessful()
+        $this->get(route('dashboard', ['view' => 'tools']))->assertSuccessful()
             ->assertSeeText('automatic PAPER exit deferred: geckoterminal_cooldown')
             ->assertSeeText('Historical validated observation (not current): '.$timestamp)
             ->assertSeeText('dexscreener')
@@ -102,7 +102,7 @@ class PaperTradingDashboardTest extends TestCase
             ]]);
         }
 
-        $this->get(route('dashboard'))->assertSuccessful()
+        $this->get(route('dashboard', ['view' => 'tools']))->assertSuccessful()
             ->assertSeeText('Historical validated observation (not current): '.$timestamp)
             ->assertSeeText('Market cap: Unavailable')
             ->assertSeeText('Market cap: USD 0.00');
@@ -158,6 +158,92 @@ class PaperTradingDashboardTest extends TestCase
             ->assertViewHas('opportunitySummary', ['recent' => 2, 'pending' => 1]);
     }
 
+    public function test_overview_matches_the_approved_information_hierarchy_with_authorized_data(): void
+    {
+        $this->travelTo('2026-10-28 09:30:00');
+        auth()->user()->update(['name' => 'Daniel Scout']);
+
+        $this->createPosition(['symbol' => 'PRIVATE-POSITION']);
+        TradeOpportunity::factory()->count(2)->create(['qualified_at' => now()]);
+        SystemActivity::factory()->count(2)->create([
+            'user_id' => auth()->id(),
+            'action' => 'momentum-scan',
+            'command' => 'tokens:momentum',
+            'label' => 'Momentum Scan',
+        ]);
+        SystemActivity::factory()->create([
+            'user_id' => auth()->id(),
+            'action' => 'token-scan',
+            'command' => 'tokens:scan-new',
+            'label' => 'New Token Scan — Solana',
+            'chain' => 'solana',
+            'result_summary' => [
+                'version' => 1,
+                'kind' => 'scanner_execution',
+                'scanner' => 'new-token',
+                'chain' => 'solana',
+                'outcome' => 'succeeded_with_warnings',
+                'counts' => [
+                    'discovered' => 20,
+                    'examined' => 20,
+                    'qualified' => 0,
+                    'opportunities_created' => 0,
+                    'opportunities_existing' => 0,
+                    'skipped' => 12,
+                    'failed' => 8,
+                ],
+                'provider_failures' => [
+                    ['code' => 'PROVIDER_RATE_LIMITED', 'count' => 1],
+                ],
+            ],
+        ]);
+
+        $response = $this->get(route('dashboard'));
+
+        $response
+            ->assertOk()
+            ->assertViewIs('dashboard.overview')
+            ->assertSee('data-overview-screen', false)
+            ->assertSeeText('Good morning, Daniel!')
+            ->assertSeeTextInOrder(['Total Scans', '3', 'New Opportunities', '2', 'Legacy Positions', '1', 'Engine Positions', '0'])
+            ->assertSeeTextInOrder(['Latest Scan', 'Completed with warnings', 'Examined', '20', 'Qualified', '0', 'Failed', '8', 'Skipped', '12', 'Provider incidents', '1'])
+            ->assertSeeText('PROVIDER_RATE_LIMITED')
+            ->assertSeeText('Recent Activity')
+            ->assertSeeText('Quick Actions')
+            ->assertSeeText('Run New Scan')
+            ->assertDontSeeText('Execution Preference')
+            ->assertDontSeeText('Paper Strategy')
+            ->assertDontSeeText('Legacy Laravel Admin PAPER Wallets')
+            ->assertDontSeeText('Background Process Health');
+    }
+
+    public function test_overview_renders_unreported_scanner_metrics_as_unavailable_instead_of_zero(): void
+    {
+        SystemActivity::factory()->create([
+            'user_id' => auth()->id(),
+            'action' => 'token-scan',
+            'command' => 'tokens:scan-new',
+            'label' => 'New Token Scan — Solana',
+            'chain' => 'solana',
+            'result_summary' => [
+                'version' => 1,
+                'kind' => 'scanner_execution',
+                'scanner' => 'new-token',
+                'chain' => 'solana',
+                'outcome' => 'succeeded',
+                'counts' => ['examined' => 0],
+            ],
+        ]);
+
+        $response = $this->get(route('dashboard'));
+
+        $response
+            ->assertOk()
+            ->assertSeeText('Completed')
+            ->assertSee('aria-label="Not reported"', false);
+        $this->assertSame(4, substr_count($response->getContent(), 'aria-label="Not reported"'));
+    }
+
     public function test_admin_shell_renders_only_real_authorized_navigation(): void
     {
         $this->get(route('dashboard'))
@@ -189,8 +275,11 @@ class PaperTradingDashboardTest extends TestCase
             ->assertSee('Trader')
             ->assertDontSee('Administrator')
             ->assertDontSee('Platform Settings')
-            ->assertSee('Execution Preference')
-            ->assertSee('Paper Trading Dashboard');
+            ->assertSee('Latest Scan')
+            ->assertSee('Recent Activity')
+            ->assertSee('Quick Actions')
+            ->assertDontSee('Execution Preference')
+            ->assertDontSee('Paper Trading Dashboard');
     }
 
     public function test_authenticated_shell_exposes_accessible_theme_and_navigation_controls_and_escapes_identity(): void

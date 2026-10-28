@@ -181,7 +181,7 @@ class UserTradingPreferenceTest extends TestCase
         $user = User::factory()->create(['is_admin' => false]);
         app(UserTradingPreferenceService::class)->update($user, ExecutionMode::Live, EntryMode::Confirm);
 
-        $this->actingAs($user)->get(route('dashboard'))->assertOk()
+        $this->actingAs($user)->get(route('dashboard', ['view' => 'tools']))->assertOk()
             ->assertSee('name="execution_mode"', false)->assertSee('value="live" selected', false)
             ->assertSee('LIVE supports CONFIRM only')->assertDontSee('Live execution remains unavailable.')
             ->assertDontSee('<input type="hidden" name="execution_mode"', false);

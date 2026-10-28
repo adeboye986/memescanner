@@ -76,6 +76,8 @@ class PaperTradingDashboardController extends Controller
             ->get();
         $currentActivities = $activities->activeData($user);
         $activityCollection = collect($currentActivities);
+        $recentActivities = $activities->recentData(user: $user);
+        $latestScan = $activities->latestScannerData($user);
 
         $viewData = [
             'wallets' => $paperWallets,
@@ -90,7 +92,26 @@ class PaperTradingDashboardController extends Controller
                 ->all(),
             'currentActivity' => $activityCollection->where('triggered_by', 'manual')->sortByDesc('id')->first(),
             'currentActivities' => $currentActivities,
-            'recentActivities' => $activities->recentData(user: $user),
+            'recentActivities' => $recentActivities,
+            'overviewActivities' => $activityCollection
+                ->concat($recentActivities)
+                ->unique('id')
+                ->sortByDesc('id')
+                ->take(3)
+                ->map(fn (array $activity): array => [
+                    ...$activity,
+                    'overview_status' => $this->overviewStatus($activity),
+                ])
+                ->values()
+                ->all(),
+            'totalScans' => $activities->scannerCount($user),
+            'latestScan' => $this->presentOverviewScan($latestScan),
+            'greeting' => match (true) {
+                now()->hour < 12 => 'Good morning',
+                now()->hour < 18 => 'Good afternoon',
+                default => 'Good evening',
+            },
+            'greetingName' => collect(preg_split('/\s+/u', trim($user->name), -1, PREG_SPLIT_NO_EMPTY) ?: [])->first() ?? 'there',
             'runningActions' => $activityCollection
                 ->filter(fn (array $activity): bool => $activity['triggered_by'] === 'manual' || $activity['action'] === 'paper-track')
                 ->pluck('action_key')
@@ -129,7 +150,11 @@ class PaperTradingDashboardController extends Controller
             ];
         }
 
-        return view($user->is_admin ? 'dashboard.admin' : 'dashboard', $viewData);
+        if ($request->query('view') === 'tools') {
+            return view($user->is_admin ? 'dashboard.admin' : 'dashboard', $viewData);
+        }
+
+        return view('dashboard.overview', $viewData);
     }
 
     private function opportunityQuery(User $user): Builder
@@ -199,5 +224,78 @@ class PaperTradingDashboardController extends Controller
     private function formatPercent(float $percent): string
     {
         return rtrim(rtrim(number_format($percent, 2, '.', ''), '0'), '.');
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $activity
+     * @return array<string, mixed>|null
+     */
+    private function presentOverviewScan(?array $activity): ?array
+    {
+        if ($activity === null) {
+            return null;
+        }
+
+        $result = is_array($activity['result_summary'] ?? null) ? $activity['result_summary'] : null;
+        $reportedCount = fn (string $field): ?int => data_get($result, 'availability.counts.'.$field, false)
+            ? (int) data_get($result, 'counts.'.$field)
+            : null;
+        $providerIncidentCount = data_get($result, 'availability.provider_failures', false)
+            ? collect($result['provider_failures'])->sum('count')
+            : null;
+
+        return [
+            ...$activity,
+            'overview_status' => $this->overviewStatus($activity),
+            'scanner_label' => match ($result['scanner'] ?? null) {
+                'new-token' => 'New Token Scanner',
+                'momentum' => 'Momentum Scanner',
+                default => 'Token Scanner',
+            },
+            'chain_label' => match ($result['chain'] ?? $activity['chain'] ?? null) {
+                'solana' => 'Solana',
+                'ethereum' => 'Ethereum',
+                default => 'Network unavailable',
+            },
+            'overview_counts' => [
+                'examined' => $reportedCount('examined'),
+                'qualified' => $reportedCount('qualified'),
+                'failed' => $reportedCount('failed'),
+                'skipped' => $reportedCount('skipped'),
+                'provider_incidents' => $providerIncidentCount,
+            ],
+            'provider_failures' => $result['provider_failures'] ?? [],
+            'error_code' => $result['error_code'] ?? null,
+            'structured_result_available' => $result !== null,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $activity
+     * @return array{key: string, label: string}
+     */
+    private function overviewStatus(array $activity): array
+    {
+        $outcome = data_get($activity, 'result_summary.outcome');
+        $key = match (true) {
+            $activity['status'] === 'pending' => 'pending',
+            $activity['status'] === 'running' => 'running',
+            $activity['status'] === 'failed' || $outcome === 'failed' => 'failed',
+            $outcome === 'succeeded_with_warnings' => 'completed_with_warnings',
+            $activity['status'] === 'completed' || $outcome === 'succeeded' => 'completed',
+            default => 'unknown',
+        };
+
+        return [
+            'key' => $key,
+            'label' => match ($key) {
+                'pending' => 'Pending',
+                'running' => 'Running',
+                'completed' => 'Completed',
+                'completed_with_warnings' => 'Completed with warnings',
+                'failed' => 'Failed',
+                default => 'Status unavailable',
+            },
+        ];
     }
 }
