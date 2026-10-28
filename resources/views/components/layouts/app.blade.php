@@ -1,52 +1,39 @@
-<!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+@auth
+    <x-layouts.shell :title="$title ?? null">
+        {{ $slot }}
+    </x-layouts.shell>
+@else
     @php $applicationName = app(\App\Services\ApplicationSettingsService::class)->get('general.application_name'); @endphp
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta name="csrf-token" content="{{ csrf_token() }}">
-
-        <title>{{ isset($title) ? $title.' · '.$applicationName : $applicationName }}</title>
-
-        @vite(['resources/css/app.css', 'resources/js/app.js'])
-    </head>
-    <body class="min-h-screen bg-slate-950 font-sans text-slate-100 antialiased">
-        <div class="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_30%),radial-gradient(circle_at_top_right,rgba(59,130,246,0.08),transparent_28%)]">
-            <nav aria-label="Primary navigation" class="mx-auto flex w-full max-w-[1600px] items-center gap-2 px-4 pt-5 sm:px-6 lg:px-8">
-                <span class="mr-2 hidden text-sm font-bold tracking-tight text-white md:inline">{{ $applicationName }}</span>
-                <a href="{{ route('dashboard') }}" @class([
-                    'rounded-lg px-3 py-2 text-sm font-semibold transition',
-                    'bg-slate-800 text-white' => request()->routeIs('dashboard'),
-                    'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('dashboard'),
-                ])>Dashboard</a>
-                @auth
-                    <a href="{{ route('opportunities.index') }}" @class([
-                        'rounded-lg px-3 py-2 text-sm font-semibold transition',
-                        'bg-slate-800 text-white' => request()->routeIs('opportunities.*'),
-                        'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('opportunities.*'),
-                    ])>Opportunities</a>
-                @endauth
-                <a href="{{ route('trades.index') }}" @class([
-                    'rounded-lg px-3 py-2 text-sm font-semibold transition',
-                    'bg-slate-800 text-white' => request()->routeIs('trades.*'),
-                    'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('trades.*'),
-                ])>Trade History</a>
-                @can('manage-settings')
-                    <a href="{{ route('settings.index') }}" @class(['rounded-lg px-3 py-2 text-sm font-semibold transition', 'bg-slate-800 text-white' => request()->routeIs('settings.*'), 'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('settings.*')])>Settings</a>
-                @endcan
-                @auth
-                    <a href="{{ route('telegram.settings') }}" @class(['rounded-lg px-3 py-2 text-sm font-semibold transition', 'bg-slate-800 text-white' => request()->routeIs('telegram.*'), 'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('telegram.*')])>Telegram Bot</a>
-                    @unless(auth()->user()->is_admin)<a href="{{ route('onboarding') }}" @class(['rounded-lg px-3 py-2 text-sm font-semibold transition', 'bg-slate-800 text-white' => request()->routeIs('onboarding'), 'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('onboarding')])>Setup</a>@endunless
-                    <a href="{{ route('account.edit') }}" @class(['rounded-lg px-3 py-2 text-sm font-semibold transition', 'bg-slate-800 text-white' => request()->routeIs('account.*'), 'text-slate-400 hover:bg-slate-900 hover:text-white' => ! request()->routeIs('account.*')])>Account</a>
-                    <form method="POST" action="{{ route('logout') }}" class="ml-auto">@csrf<button class="rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-white">Sign Out</button></form>
-                @else
-                    <a href="{{ route('login') }}" class="ml-auto rounded-lg px-3 py-2 text-sm text-slate-400 hover:text-white">Sign In</a>
-                    <a href="{{ route('register') }}" class="rounded-lg bg-emerald-400 px-3 py-2 text-sm font-semibold text-slate-950">Register</a>
-                @endauth
-            </nav>
-            <main class="mx-auto flex max-w-[1600px] flex-col gap-8 px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
-                {{ $slot }}
-            </main>
-        </div>
-    </body>
-</html>
+    <!DOCTYPE html>
+    <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta name="csrf-token" content="{{ csrf_token() }}">
+            <title>{{ isset($title) ? $title.' · '.$applicationName : $applicationName }}</title>
+            <x-theme-head />
+            @vite(['resources/css/app.css', 'resources/js/app.js'])
+        </head>
+        <body class="ms-app-body">
+            <div class="ms-guest-shell">
+                <nav aria-label="Guest navigation" class="ms-guest-navigation">
+                    <a href="{{ route('dashboard') }}" class="ms-brand" aria-label="{{ $applicationName }} home">
+                        <span class="ms-brand-mark"><x-app-icon name="brand" :size="29" /></span>
+                        <span class="ms-brand-name">{{ $applicationName }}</span>
+                    </a>
+                    <div class="ms-guest-actions">
+                        <button type="button" class="ms-icon-button" data-theme-toggle aria-label="Switch color theme" aria-pressed="false">
+                            <span data-theme-icon="light"><x-app-icon name="sun" :size="19" /></span>
+                            <span data-theme-icon="dark"><x-app-icon name="moon" :size="19" /></span>
+                        </button>
+                        <a href="{{ route('login') }}">Sign in</a>
+                        <a href="{{ route('register') }}" class="ms-guest-primary">Create account</a>
+                    </div>
+                </nav>
+                <main class="ms-guest-content">
+                    {{ $slot }}
+                </main>
+            </div>
+        </body>
+    </html>
+@endauth

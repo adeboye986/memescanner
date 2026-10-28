@@ -161,29 +161,56 @@ class PaperTradingDashboardTest extends TestCase
     {
         $this->get(route('dashboard'))
             ->assertOk()
-            ->assertSee('Administrator navigation')
-            ->assertSee('Laravel Scanners')
-            ->assertSee('Laravel Queue & Tracker', false)
+            ->assertSee('aria-label="Application navigation"', false)
+            ->assertSee('Token Scanner')
             ->assertSee('Opportunities')
-            ->assertSee('Trade History')
-            ->assertSee('Platform Settings')
-            ->assertSee('Telegram Bot')
-            ->assertSee('Sign Out')
+            ->assertSee('Trading')
+            ->assertSee('Wallets')
+            ->assertSee('Settings')
+            ->assertSee('System status')
+            ->assertSee('Administrator')
+            ->assertSee('Sign out')
             ->assertDontSee('KYC')
             ->assertDontSee('Support Tickets')
             ->assertDontSee('Billing');
     }
 
-    public function test_normal_user_keeps_customer_layout_without_admin_navigation(): void
+    public function test_normal_user_uses_shared_shell_without_admin_only_destinations(): void
     {
         $user = User::factory()->create(['is_admin' => false]);
 
         $this->actingAs($user)->get(route('dashboard'))
             ->assertOk()
-            ->assertDontSee('Administrator navigation')
+            ->assertSee('aria-label="Application navigation"', false)
+            ->assertSee('Token Scanner')
+            ->assertSee('Wallets')
+            ->assertSee('Settings')
+            ->assertSee('Trader')
+            ->assertDontSee('Administrator')
             ->assertDontSee('Platform Settings')
             ->assertSee('Execution Preference')
             ->assertSee('Paper Trading Dashboard');
+    }
+
+    public function test_authenticated_shell_exposes_accessible_theme_and_navigation_controls_and_escapes_identity(): void
+    {
+        $user = User::factory()->create([
+            'is_admin' => false,
+            'name' => '<script>alert("shell")</script>',
+        ]);
+
+        $response = $this->actingAs($user)->get(route('dashboard'));
+
+        $response
+            ->assertOk()
+            ->assertSee('meme-scanner-theme')
+            ->assertSee('data-theme-toggle', false)
+            ->assertSee('data-sidebar-close', false)
+            ->assertSee('aria-label="Switch color theme"', false)
+            ->assertSee('placeholder="Search navigation..."', false)
+            ->assertSee('aria-label="Notification settings"', false)
+            ->assertSee($user->name)
+            ->assertDontSee($user->name, false);
     }
 
     /**

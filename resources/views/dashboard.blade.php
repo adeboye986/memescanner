@@ -170,7 +170,7 @@
     </section>
 
     <div class="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <section aria-labelledby="controls-heading" class="flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10 sm:p-6">
+        <section id="scanner-controls" aria-labelledby="controls-heading" class="flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10 sm:p-6">
             <div>
                 <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Manual Laravel Operations</p>
                 <h2 id="controls-heading" class="mt-1 text-xl font-semibold text-white">Laravel Scanner Commands</h2>

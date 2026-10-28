@@ -3,7 +3,9 @@ import { mountWalletCard } from './solana-wallet';
 import { mountSolanaOpportunity } from './solana-opportunity';
 import { mountEthereumWalletCard } from './ethereum-wallet';
 import { createDashboardActivityPoller } from './dashboard-activity-poller';
+import { mountApplicationShell } from './application-shell';
 
+mountApplicationShell();
 mountWalletCard(document.querySelector('#solana-wallet'));
 mountEthereumWalletCard(document.querySelector('#ethereum-wallet'));
 mountEthereumOpportunity(document.querySelector('[data-ethereum-opportunity]'));
@@ -11,23 +13,6 @@ mountSolanaOpportunity(document.querySelector('[data-solana-opportunity]'));
 
 const closeModal = document.querySelector('#close-position-modal');
 const closeForm = document.querySelector('#close-position-form');
-const adminSidebar = document.querySelector('#admin-sidebar');
-const adminSidebarToggle = document.querySelector('#admin-sidebar-toggle');
-const adminSidebarBackdrop = document.querySelector('#admin-sidebar-backdrop');
-
-const setAdminSidebarOpen = (open) => {
-    adminSidebar?.classList.toggle('-translate-x-full', !open);
-    adminSidebarBackdrop?.classList.toggle('hidden', !open);
-    adminSidebarToggle?.setAttribute('aria-expanded', String(open));
-};
-
-adminSidebarToggle?.addEventListener('click', () => setAdminSidebarOpen(adminSidebarToggle.getAttribute('aria-expanded') !== 'true'));
-adminSidebarBackdrop?.addEventListener('click', () => setAdminSidebarOpen(false));
-adminSidebar?.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => {
-    if (window.innerWidth < 1024) {
-        setAdminSidebarOpen(false);
-    }
-}));
 
 const executionModeInputs = document.querySelectorAll('input[name="execution_mode"]');
 const entryModeInputs = document.querySelectorAll('input[name="entry_mode"]');
