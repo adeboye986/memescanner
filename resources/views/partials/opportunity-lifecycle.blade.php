@@ -1,12 +1,12 @@
-<section class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 sm:p-6" aria-labelledby="opportunity-lifecycle-heading">
+<section aria-labelledby="opportunity-lifecycle-heading">
     <div>
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Durable workflow evidence</p>
-        <h2 id="opportunity-lifecycle-heading" class="mt-2 text-lg font-semibold text-white">Opportunity lifecycle</h2>
+        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-300">Durable workflow evidence</p>
+        <h2 id="opportunity-lifecycle-heading" class="mt-1.5 text-base font-semibold text-white">Opportunity lifecycle</h2>
         <p class="mt-1 text-sm text-slate-500">Only persisted relationships are shown. Unknown and unavailable stages are not inferred from timestamps.</p>
     </div>
-    <ol class="mt-5 grid gap-3 lg:grid-cols-2">
+    <ol class="mt-4 grid gap-2.5 lg:grid-cols-2">
         @foreach($engineLifecycle as $step)
-            <li class="rounded-xl border border-slate-800 bg-slate-950/55 p-4">
+            <li class="rounded-lg border border-slate-800 bg-slate-950/55 p-3.5">
                 <div class="flex items-start justify-between gap-3">
                     <h3 class="text-sm font-semibold text-slate-200">{{ $step['label'] }}</h3>
                     <span @class([

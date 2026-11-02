@@ -49,6 +49,158 @@ class OpportunityWorkflowTest extends TestCase
         $this->get(route('opportunities.show', $shown))->assertSuccessful()->assertSee('Demo Coin')->assertSee('0x12345678901234567890')->assertSee('Approve Opportunity')->assertSee('Ethereum Security Coverage')->assertDontSee('Security Score');
     }
 
+    public function test_opportunity_list_search_and_filters_are_user_scoped(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $otherUser = User::factory()->create(['is_admin' => false]);
+
+        TradeOpportunity::factory()->create([
+            'user_id' => $user->id,
+            'chain' => 'solana',
+            'symbol' => 'MONCAT',
+            'name' => 'Moon Cat',
+            'address' => 'matching-solana-address',
+            'status' => TradeOpportunityStatus::Qualified,
+            'entry_mode' => EntryMode::Signal,
+            'price' => 0.00001234,
+            'market_cap' => 1_250_000,
+            'security_data' => ['score' => 92],
+            'qualification_data' => ['owner' => 'trading-engine'],
+        ]);
+        TradeOpportunity::factory()->create([
+            'user_id' => $user->id,
+            'chain' => 'solana',
+            'symbol' => 'MONLOW',
+            'name' => 'Moon Low',
+            'status' => TradeOpportunityStatus::Qualified,
+            'entry_mode' => EntryMode::Signal,
+            'security_data' => ['score' => 55],
+        ]);
+        TradeOpportunity::factory()->create([
+            'user_id' => $otherUser->id,
+            'chain' => 'solana',
+            'symbol' => 'MONCAT',
+            'name' => 'Other User Moon Cat',
+            'status' => TradeOpportunityStatus::Qualified,
+            'entry_mode' => EntryMode::Signal,
+            'security_data' => ['score' => 99],
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('opportunities.index', [
+                'tab' => 'active',
+                'search' => 'mon',
+                'chain' => 'solana',
+                'status' => 'qualified',
+                'entry_mode' => 'signal',
+                'score_band' => 'strong',
+            ]))
+            ->assertSuccessful()
+            ->assertSee('data-opportunities-screen', false)
+            ->assertSee('data-opportunity-table', false)
+            ->assertSee('MONCAT')
+            ->assertDontSee('MONLOW')
+            ->assertDontSee('Other User Moon Cat')
+            ->assertViewHas('opportunities', function ($opportunities): bool {
+                $rows = collect($opportunities->items());
+
+                return $opportunities->total() === 1
+                    && $rows->pluck('symbol')->all() === ['MONCAT']
+                    && $rows->pluck('source_owner')->all() === ['TypeScript engine projection'];
+            });
+    }
+
+    public function test_opportunity_tabs_preserve_business_lifecycle_states_and_labels(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+
+        foreach ([
+            ['ACTIVEONE', TradeOpportunityStatus::Qualified],
+            ['REVIEWONE', TradeOpportunityStatus::PendingConfirmation],
+            ['IGNOREDONE', TradeOpportunityStatus::Ignored],
+            ['HISTORYONE', TradeOpportunityStatus::Executed],
+        ] as [$symbol, $status]) {
+            TradeOpportunity::factory()->create([
+                'user_id' => $user->id,
+                'symbol' => $symbol,
+                'status' => $status,
+            ]);
+        }
+
+        $this->actingAs($user)
+            ->get(route('opportunities.index'))
+            ->assertSuccessful()
+            ->assertSee('ACTIVEONE')
+            ->assertSee('REVIEWONE')
+            ->assertSee('data-opportunity-status="qualified"', false)
+            ->assertSee('data-opportunity-status="pending_confirmation"', false)
+            ->assertSee('New')
+            ->assertSee('Review')
+            ->assertDontSee('IGNOREDONE')
+            ->assertDontSee('HISTORYONE');
+
+        $this->get(route('opportunities.index', ['tab' => 'ignored']))
+            ->assertSuccessful()
+            ->assertSee('IGNOREDONE')
+            ->assertDontSee('ACTIVEONE')
+            ->assertDontSee('HISTORYONE');
+
+        $this->get(route('opportunities.index', ['tab' => 'history']))
+            ->assertSuccessful()
+            ->assertSee('HISTORYONE')
+            ->assertDontSee('ACTIVEONE')
+            ->assertDontSee('IGNOREDONE');
+    }
+
+    public function test_opportunity_pagination_retains_filters_and_unavailable_values_are_not_zero(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+
+        foreach (range(1, 16) as $index) {
+            TradeOpportunity::factory()->create([
+                'user_id' => $user->id,
+                'symbol' => 'PAGE'.str_pad((string) $index, 2, '0', STR_PAD_LEFT),
+                'status' => TradeOpportunityStatus::Qualified,
+                'price' => null,
+                'market_cap' => null,
+                'security_data' => [],
+            ]);
+        }
+
+        $response = $this->actingAs($user)->get(route('opportunities.index', [
+            'tab' => 'active',
+            'search' => 'PAGE',
+            'chain' => 'solana',
+        ]));
+
+        $response
+            ->assertSuccessful()
+            ->assertSee('aria-label="Unavailable"', false)
+            ->assertViewHas('opportunities', fn ($opportunities): bool => $opportunities->total() === 16
+                && $opportunities->count() === 15
+                && str_contains((string) $opportunities->nextPageUrl(), 'search=PAGE')
+                && str_contains((string) $opportunities->nextPageUrl(), 'chain=solana'));
+
+        $this->get(route('opportunities.index', ['tab' => 'active', 'search' => 'PAGE', 'chain' => 'solana', 'page' => 2]))
+            ->assertSuccessful()
+            ->assertViewHas('opportunities', fn ($opportunities): bool => $opportunities->total() === 16 && $opportunities->count() === 1);
+    }
+
+    public function test_opportunity_list_has_truthful_empty_and_invalid_filter_states(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+
+        $this->actingAs($user)
+            ->get(route('opportunities.index'))
+            ->assertSuccessful()
+            ->assertSee('data-opportunity-empty-state', false)
+            ->assertSee('No active opportunities');
+
+        $this->get(route('opportunities.index', ['tab' => 'not-a-real-tab']))
+            ->assertRedirect()
+            ->assertSessionHasErrors('tab');
+    }
+
     public function test_signal_is_visible_but_never_creates_a_position(): void
     {
         app(ApplicationSettingsService::class)->update(['trading.entry_mode' => 'signal']);

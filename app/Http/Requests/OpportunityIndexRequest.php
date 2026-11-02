@@ -27,9 +27,12 @@ class OpportunityIndexRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'tab' => ['nullable', Rule::in(['active', 'ignored', 'history'])],
+            'search' => ['nullable', 'string', 'max:120'],
             'status' => ['nullable', Rule::enum(TradeOpportunityStatus::class)],
             'chain' => ['nullable', Rule::enum(Chain::class)],
             'entry_mode' => ['nullable', Rule::enum(EntryMode::class)],
+            'score_band' => ['nullable', Rule::in(['strong', 'moderate', 'elevated'])],
         ];
     }
 }

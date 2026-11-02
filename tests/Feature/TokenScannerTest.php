@@ -46,6 +46,8 @@ class TokenScannerTest extends TestCase
             ->assertSee('Provider Status')
             ->assertSee('Run New Scan')
             ->assertSee(route('dashboard.actions.store', 'token-scan'), false)
+            ->assertSee('data-tab-strip', false)
+            ->assertSee('[scrollbar-width:none]', false)
             ->assertSee(route('dashboard.actions.store', 'momentum-scan'), false)
             ->assertSee('data-theme-toggle', false)
             ->assertSee('data-latest-scan-card', false)

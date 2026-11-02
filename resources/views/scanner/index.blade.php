@@ -23,7 +23,11 @@
             </div>
         @endif
 
-        <nav class="flex gap-7 overflow-x-auto border-b border-slate-800" aria-label="Token Scanner sections">
+        <nav
+            class="flex gap-7 overflow-x-auto overflow-y-hidden border-b border-slate-800 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label="Token Scanner sections"
+            data-tab-strip
+        >
             @foreach(['new' => 'New Token Scanner', 'history' => 'Scan History', 'providers' => 'Provider Status'] as $tab => $label)
                 <a href="{{ $tabUrl($tab) }}" @class([
                     'relative -mb-px shrink-0 whitespace-nowrap border-b-2 px-1 pb-2.5 text-xs font-medium transition',

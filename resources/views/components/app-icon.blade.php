@@ -22,6 +22,9 @@
             <circle cx="10.75" cy="10.75" r="6.25" stroke="currentColor" stroke-width="{{ $strokeWidth }}"/>
             <path d="m15.5 15.5 4 4" stroke="currentColor" stroke-width="{{ $strokeWidth }}" stroke-linecap="round"/>
             @break
+        @case('filter')
+            <path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor" stroke-width="{{ $strokeWidth }}" stroke-linecap="round"/>
+            @break
         @case('opportunity')
             <path d="m12 3 7.5 5v8L12 21l-7.5-5V8L12 3Z" stroke="currentColor" stroke-width="{{ $strokeWidth }}" stroke-linejoin="round"/>
             <path d="m12 7-3 5h3l-1 5 4-6h-3l2-4h-2Z" fill="currentColor"/>

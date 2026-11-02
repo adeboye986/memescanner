@@ -74,6 +74,10 @@ class OpportunityPresentationTest extends TestCase
         $this->actingAs($this->admin)->get(route('opportunities.show', $opportunity))
             ->assertSee('Volume was not captured by the scanner')
             ->assertSee('No Solana security snapshot was stored')
+            ->assertSee('data-opportunity-detail', false)
+            ->assertSee('Workflow evidence &amp; technical details', false)
+            ->assertSee('Evidence source')
+            ->assertSee('Laravel opportunity record')
             ->assertSee('unavailable');
     }
 
