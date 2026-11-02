@@ -48,8 +48,46 @@ class TokenScannerTest extends TestCase
             ->assertSee(route('dashboard.actions.store', 'token-scan'), false)
             ->assertSee(route('dashboard.actions.store', 'momentum-scan'), false)
             ->assertSee('data-theme-toggle', false)
+            ->assertSee('data-latest-scan-card', false)
+            ->assertSee('data-latest-scan-state="empty"', false)
+            ->assertSee('Latest Scan Result')
+            ->assertSee('Candidate Outcomes')
             ->assertDontSee('Manual Scanner &amp; Operations', false)
             ->assertDontSee('PAPER Strategy');
+    }
+
+    public function test_scanner_overview_renders_the_october_warning_fixture_in_the_reference_card_structure(): void
+    {
+        $user = User::factory()->create();
+        $activity = $this->scanActivity($user, [
+            'result_summary' => $this->warningSummary(),
+            'finished_at' => now(),
+        ]);
+        TradingEngineScanRequest::factory()->create([
+            'system_activity_id' => $activity->id,
+            'user_id' => $user->id,
+            'engine_scan_execution_id' => self::ENGINE_SCAN_ID,
+            'status' => TradingEngineScanRequest::STATUS_PROJECTED,
+        ]);
+
+        $this->actingAs($user)
+            ->get(route('scanner.index'))
+            ->assertOk()
+            ->assertSee('data-latest-scan-card', false)
+            ->assertSee('data-latest-scan-state="completed_with_warnings"', false)
+            ->assertSee('Completed with warnings')
+            ->assertSee(self::ENGINE_SCAN_ID)
+            ->assertSee('Candidate Outcomes')
+            ->assertSee('PROVIDER_RATE_LIMITED')
+            ->assertSeeText('candidate evaluations failed')
+            ->assertSeeText('provider incident was recorded')
+            ->assertSeeText('candidates were skipped separately by eligibility rules')
+            ->assertViewHas('latestScan', fn (array $scan): bool => $scan['status_key'] === 'completed_with_warnings'
+                && $scan['counts']['examined'] === 20
+                && $scan['counts']['failed'] === 8
+                && $scan['counts']['skipped'] === 12
+                && $scan['counts']['qualified'] === 0
+                && $scan['provider_warning_count'] === 1);
     }
 
     public function test_scan_history_and_details_are_user_scoped(): void

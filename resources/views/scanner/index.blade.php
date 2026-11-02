@@ -4,10 +4,10 @@
 @endphp
 
 <x-layouts.shell title="Token Scanner" :administrator="(bool) auth()->user()->is_admin">
-    <div class="mx-auto flex w-full max-w-[74rem] flex-col gap-4 sm:gap-5" data-scanner-screen>
-        <header class="flex flex-col gap-1">
-            <h1 class="text-2xl font-semibold tracking-[-0.025em] text-white sm:text-[1.75rem]">Token Scanner</h1>
-            <p class="text-sm text-slate-400">Discover and analyze new meme tokens across supported networks.</p>
+    <div class="mx-auto flex w-full max-w-[58rem] flex-col gap-3.5 sm:gap-4" data-scanner-screen data-scanner-content>
+        <header class="flex flex-col gap-0.5">
+            <h1 class="text-[1.45rem] font-semibold leading-7 tracking-[-0.025em] text-white">Token Scanner</h1>
+            <p class="text-[13px] leading-5 text-slate-400">Discover and analyze new meme tokens across supported networks.</p>
         </header>
 
         @if(session('success'))
@@ -23,10 +23,10 @@
             </div>
         @endif
 
-        <nav class="flex gap-6 border-b border-slate-800" aria-label="Token Scanner sections">
+        <nav class="flex gap-7 overflow-x-auto border-b border-slate-800" aria-label="Token Scanner sections">
             @foreach(['new' => 'New Token Scanner', 'history' => 'Scan History', 'providers' => 'Provider Status'] as $tab => $label)
                 <a href="{{ $tabUrl($tab) }}" @class([
-                    'relative -mb-px border-b-2 px-1 pb-3 text-xs font-medium transition',
+                    'relative -mb-px shrink-0 whitespace-nowrap border-b-2 px-1 pb-2.5 text-xs font-medium transition',
                     'border-sky-400 text-sky-300' => $activeTab === $tab,
                     'border-transparent text-slate-400 hover:text-slate-200' => $activeTab !== $tab,
                 ]) @if($activeTab === $tab) aria-current="page" @endif>{{ $label }}</a>
@@ -34,12 +34,12 @@
         </nav>
 
         @if($activeTab === 'new')
-            <section class="rounded-lg border border-slate-700/80 bg-slate-900/75 p-4 shadow-lg shadow-black/10" aria-labelledby="run-scan-heading">
+            <section class="rounded-lg border border-slate-700/80 bg-slate-900/80 p-4 shadow-lg shadow-black/10" aria-labelledby="run-scan-heading">
                 <h2 id="run-scan-heading" class="text-sm font-semibold text-white">Run New Scan</h2>
                 <form
                     method="POST"
                     action="{{ route('dashboard.actions.store', 'token-scan') }}"
-                    class="mt-4"
+                    class="mt-3.5"
                     data-token-scan-form
                     data-new-token-action="{{ route('dashboard.actions.store', 'token-scan') }}"
                     data-momentum-action="{{ route('dashboard.actions.store', 'momentum-scan') }}"
@@ -48,47 +48,40 @@
                     data-running-actions='@json($runningActions)'
                 >
                     @csrf
-                    <div class="grid gap-3 sm:grid-cols-3">
-                        <label class="grid gap-1.5 text-[11px] font-medium text-slate-300">
+                    <div class="grid gap-2.5 sm:grid-cols-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(10rem,0.72fr)]">
+                        <label class="grid gap-1.5 text-[10px] font-medium text-slate-300">
                             Network
-                            <select name="chain" data-scan-network class="min-h-10 rounded-md border border-slate-700 bg-slate-950/40 px-3 text-xs text-slate-100">
+                            <select name="chain" data-scan-network class="min-h-10 w-full rounded-md border border-slate-700/90 bg-slate-950/50 px-3 text-xs text-slate-100">
                                 @foreach($chains as $chain)
                                     <option value="{{ $chain->value }}" @selected(old('chain', 'solana') === $chain->value)>{{ $chain->label() }}</option>
                                 @endforeach
                             </select>
                         </label>
-                        <label class="grid gap-1.5 text-[11px] font-medium text-slate-300">
+                        <label class="grid gap-1.5 text-[10px] font-medium text-slate-300">
                             Scan Type
-                            <select data-scan-type class="min-h-10 rounded-md border border-slate-700 bg-slate-950/40 px-3 text-xs text-slate-100">
+                            <select data-scan-type class="min-h-10 w-full rounded-md border border-slate-700/90 bg-slate-950/50 px-3 text-xs text-slate-100">
                                 <option value="token-scan">New Token</option>
                                 <option value="momentum-scan">Momentum</option>
                             </select>
                         </label>
-                        <div class="grid gap-1.5 text-[11px] font-medium text-slate-300">
+                        <div class="grid gap-1.5 text-[10px] font-medium text-slate-300 sm:col-span-2 md:col-span-1">
                             Platform policy
-                            <div class="flex min-h-10 items-center rounded-md border border-slate-700 bg-slate-950/25 px-3 text-xs text-slate-300" data-scan-policy>
+                            <div class="flex min-h-10 items-center rounded-md border border-slate-700/90 bg-slate-950/35 px-3 text-xs text-slate-300" data-scan-policy>
                                 Max chase {{ rtrim(rtrim(number_format($scannerConfiguration['max_chase_percent'], 2), '0'), '.') }}%
                             </div>
                         </div>
                     </div>
-                    <p class="mt-2 text-[10px] leading-4 text-slate-500" data-scan-help>
+                    <p class="mt-1.5 text-[10px] leading-4 text-slate-500" data-scan-help>
                         New-token candidates are evaluated with the current authorized platform policy. Provider budgets are managed server-side and cannot be edited here.
                     </p>
-                    <button type="submit" data-scan-submit class="mt-4 flex min-h-10 w-full items-center justify-center rounded-md bg-blue-600 px-4 text-xs font-semibold text-white shadow-sm shadow-blue-950/30 transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-55" @disabled(in_array($defaultActionKey, $runningActions, true))>
+                    <button type="submit" data-scan-submit class="mt-3 flex min-h-10 w-full items-center justify-center rounded-md border border-blue-400/30 bg-blue-600 px-4 text-xs font-semibold text-white shadow-sm shadow-blue-950/35 transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-55" @disabled(in_array($defaultActionKey, $runningActions, true))>
                         <span data-scan-submit-label>{{ in_array($defaultActionKey, $runningActions, true) ? 'Scan already running' : 'Start Scan' }}</span>
                     </button>
                     <noscript><p class="mt-2 text-xs text-amber-200">JavaScript is required to switch scanner type. Without it, this form starts the New Token Scanner only.</p></noscript>
                 </form>
             </section>
 
-            @if($latestScan)
-                @include('scanner.partials.scan-summary', ['scan' => $latestScan])
-            @else
-                <section class="rounded-lg border border-dashed border-slate-700 bg-slate-900/45 px-5 py-10 text-center">
-                    <h2 class="text-sm font-semibold text-white">No scans yet</h2>
-                    <p class="mt-1 text-xs text-slate-400">Start an authorized scan to create the first result. Nothing runs automatically.</p>
-                </section>
-            @endif
+            @include('scanner.partials.scan-summary', ['scan' => $latestScan])
         @elseif($activeTab === 'history')
             <section class="rounded-lg border border-slate-700/80 bg-slate-900/75 p-4 shadow-lg shadow-black/10" aria-labelledby="scan-history-heading">
                 <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
