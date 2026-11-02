@@ -24,6 +24,9 @@ class TradeHistoryRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'tab' => ['sometimes', Rule::in(['positions', 'history', 'performance'])],
+            'source' => ['sometimes', Rule::in(['engine', 'legacy'])],
+            'search' => ['sometimes', 'string', 'max:100'],
             'status' => ['sometimes', Rule::in(['all', 'open', 'closed'])],
             'result' => ['sometimes', Rule::in(['all', 'wins', 'losses', 'break-even'])],
             'exit_type' => ['sometimes', Rule::in(['all', 'manual', 'stop-loss', 'full-target', 'protected-floor', 'other'])],
@@ -32,12 +35,17 @@ class TradeHistoryRequest extends FormRequest
         ];
     }
 
-    /** @return array{status: string, result: string, exit_type: string, chain: string} */
+    /** @return array{tab: string, source: string, search: string, status: string, result: string, exit_type: string, chain: string} */
     public function filters(): array
     {
         $validated = $this->validated();
+        $isLegacyHistoryLink = ! array_key_exists('tab', $validated)
+            && $this->hasAny(['status', 'result', 'exit_type', 'chain']);
 
         return [
+            'tab' => $validated['tab'] ?? ($isLegacyHistoryLink ? 'history' : 'positions'),
+            'source' => $validated['source'] ?? ($isLegacyHistoryLink ? 'legacy' : 'engine'),
+            'search' => trim((string) ($validated['search'] ?? '')),
             'status' => $validated['status'] ?? 'all',
             'result' => $validated['result'] ?? 'all',
             'exit_type' => $validated['exit_type'] ?? 'all',

@@ -1,4 +1,4 @@
-<section class="mb-8 rounded-2xl border border-cyan-400/20 bg-slate-900/60 p-5 sm:p-6">
+<section id="engine-paper-portfolio" class="mb-8 rounded-2xl border border-cyan-400/20 bg-slate-900/60 p-5 sm:p-6">
     <div class="mb-5">
         <p class="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">TypeScript Trading Engine · Simulated PAPER</p>
         <h2 class="mt-2 text-xl font-semibold text-white">Engine-owned PAPER portfolio</h2>

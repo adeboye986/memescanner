@@ -18,6 +18,7 @@ class TradeHistoryControllerTest extends TestCase
 
         $this->refreshPaperTradingDatabase();
         $this->withoutVite();
+        config(['app.key' => 'base64:'.base64_encode(str_repeat('t', 32))]);
         $this->actingAs(User::factory()->create(['is_admin' => true]));
     }
 
@@ -32,11 +33,14 @@ class TradeHistoryControllerTest extends TestCase
         ]);
         $this->createPosition(['symbol' => 'SCANNER_ONLY', 'initial_investment_sol' => 0]);
 
-        $response = $this->get(route('trades.index'));
+        $response = $this->get(route('trades.index', [
+            'tab' => 'history',
+            'source' => 'legacy',
+        ]));
 
         $response
             ->assertOk()
-            ->assertSee('Trade History & Performance', false)
+            ->assertSee('data-trading-screen', false)
             ->assertSee('FUNDED')
             ->assertSee('Manual Close')
             ->assertSee('+100.00%')
@@ -95,7 +99,10 @@ class TradeHistoryControllerTest extends TestCase
             ]);
         }
 
-        $response = $this->get(route('trades.index'));
+        $response = $this->get(route('trades.index', [
+            'tab' => 'history',
+            'source' => 'legacy',
+        ]));
 
         foreach ($cases as [, $label]) {
             $response->assertSee($label);
@@ -158,9 +165,12 @@ class TradeHistoryControllerTest extends TestCase
     {
         $this->createPosition(['status' => 'closed', 'trade_pnl_sol' => 0]);
 
-        $response = $this->get(route('trades.index'));
+        $response = $this->get(route('trades.index', [
+            'tab' => 'performance',
+            'source' => 'legacy',
+        ]));
 
-        $response->assertOk()->assertSee('N/A');
+        $response->assertOk()->assertSee('aria-label="Unavailable"', false);
         $this->assertNull(app(PaperTradeHistoryService::class)->performanceSummary()['win_rate']);
     }
 
