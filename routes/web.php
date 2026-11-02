@@ -37,6 +37,7 @@ use App\Http\Controllers\UpdateSettingsController;
 use App\Http\Controllers\UserTelegramBotController;
 use App\Http\Controllers\UserTradingPreferenceController;
 use App\Http\Controllers\VerifyEmailController;
+use App\Http\Controllers\WalletController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -62,6 +63,7 @@ Route::middleware('auth')->prefix('scanner')->name('scanner.')->group(function (
     Route::get('/{activity}', [TokenScannerController::class, 'show'])->whereNumber('activity')->name('show');
 });
 Route::get('/trades', TradeHistoryController::class)->middleware('auth')->name('trades.index');
+Route::get('/wallets', WalletController::class)->middleware('auth')->name('wallets.index');
 Route::post('/telegram/webhook/{publicId}', TelegramWebhookController::class)->where('publicId', '[A-Za-z0-9]{32}')->middleware('throttle:telegram-webhook')->name('telegram.user-webhook');
 Route::post('/telegram/webhook', TelegramWebhookController::class)->middleware('throttle:telegram-webhook')->name('telegram.webhook');
 

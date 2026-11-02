@@ -15,7 +15,7 @@ class SolanaWalletConnectionTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_account_wallet_card_shows_only_the_current_users_verified_wallet(): void
+    public function test_wallet_screen_shows_only_the_current_users_verified_wallet(): void
     {
         $owner = User::factory()->create(['is_admin' => false]);
         $other = User::factory()->create(['is_admin' => false]);
@@ -26,13 +26,13 @@ class SolanaWalletConnectionTest extends TestCase
             'signature' => base64_encode(sodium_crypto_sign_detached($challenge->message, $secret)),
         ])->assertOk();
 
-        $this->get(route('account.edit'))->assertOk()->assertSee('Connected / Verified')->assertSee($address);
-        $this->actingAs($other)->get(route('account.edit'))->assertOk()
-            ->assertSee('No live wallet is connected.')->assertDontSee($address)
+        $this->get(route('wallets.index'))->assertOk()->assertSee('Verified')->assertSee($address);
+        $this->actingAs($other)->get(route('wallets.index'))->assertOk()
+            ->assertSee('No verified Solana wallet')->assertDontSee($address)
             ->assertSee(route('wallets.solana.challenge'))->assertSee(route('wallets.solana.verify'));
 
         $owner->connectedWallets()->update(['disconnected_at' => now()]);
-        $this->actingAs($owner)->get(route('account.edit'))->assertOk()->assertDontSee($address);
+        $this->actingAs($owner)->get(route('wallets.index'))->assertOk()->assertDontSee($address);
     }
 
     public function test_challenge_uses_configured_product_branding(): void
@@ -526,7 +526,7 @@ class SolanaWalletConnectionTest extends TestCase
         $this->assertDatabaseCount('connected_wallets', 0);
     }
 
-    public function test_disconnected_wallet_is_not_shown_on_account_page(): void
+    public function test_disconnected_wallet_is_not_shown_on_wallet_page(): void
     {
         $user = User::factory()->create([
             'email_verified_at' => now(),
@@ -550,9 +550,9 @@ class SolanaWalletConnectionTest extends TestCase
             ->assertOk();
 
         $this->actingAs($user)
-            ->get(route('account.edit'))
+            ->get(route('wallets.index'))
             ->assertOk()
-            ->assertSee('No live wallet is connected.')
+            ->assertSee('No verified Solana wallet')
             ->assertDontSee($address);
     }
 
@@ -576,7 +576,7 @@ class SolanaWalletConnectionTest extends TestCase
         )->assertOk();
 
         $this->actingAs($user)
-            ->get(route('account.edit'))
+            ->get(route('wallets.index'))
             ->assertOk()
             ->assertSee('Change wallet');
     }

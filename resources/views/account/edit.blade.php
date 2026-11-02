@@ -2,9 +2,10 @@
     <header class="border-b border-slate-800 pb-7"><p class="text-xs font-semibold uppercase tracking-[0.2em] text-sky-400">Account</p><h1 class="mt-2 text-3xl font-semibold text-white">Profile & security</h1></header>
     @if(session('success'))<div class="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-200">{{ session('success') }}</div>@endif
     @if($errors->any())<div class="rounded-xl border border-red-400/20 bg-red-400/10 p-4 text-sm text-red-200">{{ $errors->first() }}</div>@endif
-    <section id="wallets" aria-label="Connected wallets" class="flex flex-col gap-6">
-        @include('account.wallet')
-        @include('account.ethereum-wallet')
+    <section id="wallets" aria-labelledby="wallets-heading" class="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+        <h2 id="wallets-heading" class="text-xl font-semibold text-white">Wallets have moved</h2>
+        <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-400">Connected blockchain wallets, transaction history, and separate PAPER balances now live in the dedicated Wallets workspace.</p>
+        <a href="{{ route('wallets.index') }}" class="mt-4 inline-flex rounded-xl bg-sky-400 px-5 py-3 font-semibold text-slate-950">Open Wallets</a>
     </section>
     <div id="account-settings" class="grid gap-6 lg:grid-cols-2">
         <form method="POST" action="{{ route('account.update') }}" class="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-6">@csrf @method('PUT')

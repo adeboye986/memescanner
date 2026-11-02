@@ -1,4 +1,5 @@
 import { VersionedTransaction } from '@solana/web3.js';
+import { closeWalletDialog, openWalletDialog, setWalletVerificationStatus } from './wallets-page.js';
 
 export function detectWallets(browser) {
     const candidates = [browser.phantom?.solana, browser.solflare, browser.solana];
@@ -299,6 +300,7 @@ export function mountWalletCard(card) {
     const feedback = card.querySelector('[data-wallet-feedback]');
     const picker = card.querySelector('[data-wallet-picker]');
     const options = card.querySelector('[data-wallet-options]');
+    const pickerCancel = card.querySelector('[data-wallet-picker-cancel]');
     const disconnect = card.querySelector('[data-wallet-disconnect]');
     const disconnectConfirmation = card.querySelector('[data-wallet-disconnect-confirmation]');
     const disconnectCancel = card.querySelector('[data-wallet-disconnect-cancel]');
@@ -501,12 +503,12 @@ export function mountWalletCard(card) {
         if (busy) return;
         busy = true;
         connect.disabled = true;
-        picker.hidden = true;
+        closeWalletDialog(picker);
         card.setAttribute('aria-busy', 'true');
         try {
             const verified = await verifyWallet(selected, post, say);
             activeWallet = selected.wallet;
-            card.querySelector('[data-wallet-status]').textContent = 'Connected / Verified';
+            setWalletVerificationStatus(card.querySelector('[data-wallet-status]'), true);
             card.querySelector('[data-wallet-empty]').hidden = true;
             card.querySelector('[data-wallet-details]').hidden = false;
             const address = card.querySelector('[data-wallet-address]');
@@ -541,8 +543,6 @@ export function mountWalletCard(card) {
             say('No supported Solana wallet detected. Install and unlock Phantom or Solflare, then reload this page. Use a browser with the wallet extension enabled.');
             return;
         }
-        if (wallets.length === 1) { run(wallets[0]); return; }
-        picker.hidden = false;
         say('');
         wallets.forEach((selected) => {
             const button = document.createElement('button');
@@ -552,7 +552,12 @@ export function mountWalletCard(card) {
             button.addEventListener('click', () => run(selected));
             options.append(button);
         });
+        openWalletDialog(picker);
         options.querySelector('button')?.focus();
+    });
+    pickerCancel?.addEventListener('click', () => {
+        closeWalletDialog(picker);
+        connect.focus();
     });
 
     disconnect?.addEventListener('click', () => {
@@ -573,7 +578,7 @@ export function mountWalletCard(card) {
         say('Disconnecting wallet…');
         try {
             await disconnectWallet(post);
-            card.querySelector('[data-wallet-status]').textContent = 'Not connected';
+            setWalletVerificationStatus(card.querySelector('[data-wallet-status]'), false);
             card.querySelector('[data-wallet-empty]').hidden = false;
             card.querySelector('[data-wallet-details]').hidden = true;
             const address = card.querySelector('[data-wallet-address]');

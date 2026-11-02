@@ -9,7 +9,7 @@
     $isAdministrator = (bool) $administrator;
     $dashboardToolsUrl = route('dashboard', ['view' => 'tools']);
     $settingsUrl = $isAdministrator ? route('settings.index') : route('account.edit').'#account-settings';
-    $walletsUrl = $isAdministrator ? $dashboardToolsUrl.'#wallets' : route('account.edit').'#wallets';
+    $walletsUrl = route('wallets.index');
     $scannerUrl = route('scanner.index');
     $systemStatusUrl = $dashboardToolsUrl.($isAdministrator ? '#system-status' : '#system-activity');
     $primaryNavigation = [
@@ -17,7 +17,7 @@
         ['label' => 'Token Scanner', 'icon' => 'search', 'url' => $scannerUrl, 'active' => request()->routeIs('scanner.*'), 'section' => 'scanner'],
         ['label' => 'Opportunities', 'icon' => 'opportunity', 'url' => route('opportunities.index'), 'active' => request()->routeIs('opportunities.*'), 'section' => 'opportunities'],
         ['label' => 'Trading', 'icon' => 'trading', 'url' => route('trades.index'), 'active' => request()->routeIs('trades.*'), 'section' => 'trading'],
-        ['label' => 'Wallets', 'icon' => 'wallet', 'url' => $walletsUrl, 'active' => false, 'section' => 'wallets'],
+        ['label' => 'Wallets', 'icon' => 'wallet', 'url' => $walletsUrl, 'active' => request()->routeIs('wallets.*'), 'section' => 'wallets'],
         ['label' => 'Settings', 'icon' => 'settings', 'url' => $settingsUrl, 'active' => request()->routeIs('settings.*', 'account.*', 'telegram.*'), 'section' => 'settings'],
     ];
 @endphp

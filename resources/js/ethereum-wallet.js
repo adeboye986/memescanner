@@ -1,4 +1,5 @@
 import { hexlify, parseEther, toQuantity, toUtf8Bytes } from 'ethers';
+import { closeWalletDialog, openWalletDialog, setWalletVerificationStatus } from './wallets-page.js';
 
 function providerName(provider, info = {}) {
     if (provider?.isPhantom || /phantom/i.test(info.rdns ?? info.name ?? '')) return 'phantom';
@@ -443,6 +444,8 @@ export function mountEthereumWalletCard(card) {
     };
     let recovery = activeAddress ? recoveryFor(activeAddress) : null;
     const recoveryButton = card.querySelector('[data-eth-report-retry]');
+    const picker = card.querySelector('[data-eth-picker]');
+    const pickerCancel = card.querySelector('[data-eth-picker-cancel]');
     const recoverBroadcast = async () => {
         const current = recovery;
         if (!current?.pending()) {
@@ -468,24 +471,23 @@ export function mountEthereumWalletCard(card) {
 
     card.querySelector('[data-eth-connect]')?.addEventListener('click', () => {
         const wallets = detectEthereumWallets(window, announced);
-        const picker = card.querySelector('[data-eth-picker]');
         const options = card.querySelector('[data-eth-options]');
         options.replaceChildren();
         if (!wallets.length) return say('No Ethereum wallet was detected. Install Phantom, MetaMask, or another EIP-1193 wallet.');
-        picker.hidden = false;
         wallets.forEach((selected) => {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'rounded-xl border border-slate-700 px-4 py-3 text-sm text-slate-100 hover:border-violet-400';
             button.textContent = selected.label;
             button.addEventListener('click', async () => {
-                picker.hidden = true;
+                closeWalletDialog(picker);
                 try {
                     const verified = await verifyEthereumWallet(selected, post, say);
                     activeWallet = selected.wallet;
                     activeAddress = verified.address.toLowerCase();
                     recovery = recoveryFor(activeAddress);
-                    card.querySelector('[data-eth-status]').textContent = 'Connected / Verified';
+                    setWalletVerificationStatus(card.querySelector('[data-eth-status]'), true);
+                    card.querySelector('[data-eth-empty]').hidden = true;
                     card.querySelector('[data-eth-details]').hidden = false;
                     card.querySelector('[data-eth-provider]').textContent = selected.label;
                     const address = card.querySelector('[data-eth-address]');
@@ -504,12 +506,19 @@ export function mountEthereumWalletCard(card) {
             });
             options.append(button);
         });
+        openWalletDialog(picker);
+        options.querySelector('button')?.focus();
+    });
+    pickerCancel?.addEventListener('click', () => {
+        closeWalletDialog(picker);
+        card.querySelector('[data-eth-connect]')?.focus();
     });
 
     card.querySelector('[data-eth-disconnect]')?.addEventListener('click', async () => {
         try {
             await post('disconnect', {});
-            card.querySelector('[data-eth-status]').textContent = 'Not connected';
+            setWalletVerificationStatus(card.querySelector('[data-eth-status]'), false);
+            card.querySelector('[data-eth-empty]').hidden = false;
             card.querySelector('[data-eth-details]').hidden = true;
             card.querySelector('[data-eth-disconnect]').hidden = true;
             activeWallet = null;

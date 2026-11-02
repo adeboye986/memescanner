@@ -13,12 +13,6 @@ class AccountSettingsController extends Controller
     {
         return view('account.edit', [
             'user' => $request->user(),
-            'connectedWallet' => $request->user()->connectedWallets()
-                ->where('chain', 'solana')->whereNotNull('verified_at')
-                ->whereNull('disconnected_at')->first(),
-            'ethereumWallet' => $request->user()->connectedWallets()
-                ->where('chain', 'ethereum')->whereNotNull('verified_at')
-                ->whereNull('disconnected_at')->first(),
         ]);
     }
 

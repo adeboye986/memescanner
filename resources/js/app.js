@@ -5,9 +5,11 @@ import { mountEthereumWalletCard } from './ethereum-wallet';
 import { createDashboardActivityPoller } from './dashboard-activity-poller';
 import { mountApplicationShell } from './application-shell';
 import { mountTokenScanner } from './token-scanner';
+import { mountWalletsPage } from './wallets-page';
 
 mountApplicationShell();
 mountTokenScanner();
+mountWalletsPage(document.querySelector('[data-wallets-page]'));
 mountWalletCard(document.querySelector('#solana-wallet'));
 mountEthereumWalletCard(document.querySelector('#ethereum-wallet'));
 mountEthereumOpportunity(document.querySelector('[data-ethereum-opportunity]'));
