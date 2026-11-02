@@ -1,3 +1,7 @@
+import {
+  BirdeyeRequestGate,
+  type BirdeyeRequestGateOptions,
+} from './birdeye-request-gate.js';
 import type { ScannerHttpClient } from './scanner-http-client.js';
 import {
   ScannerProviderError,
@@ -30,12 +34,17 @@ export interface BirdeyeOverview {
 }
 
 export class BirdeyeScannerProvider {
+  private readonly requestGate: BirdeyeRequestGate;
+
   public constructor(
     private readonly client: ScannerHttpClient,
     private readonly baseUrl: URL,
     private readonly apiKey: string,
     private readonly timeoutMs: number,
-  ) {}
+    requestGateOptions: BirdeyeRequestGateOptions = {},
+  ) {
+    this.requestGate = new BirdeyeRequestGate(requestGateOptions);
+  }
 
   public async newListings(limit = 20, signal?: AbortSignal): Promise<readonly BirdeyeListing[]> {
     const url = new URL('/defi/v2/tokens/new_listing', this.baseUrl);
@@ -99,14 +108,17 @@ export class BirdeyeScannerProvider {
   }
 
   private request(url: URL, signal?: AbortSignal): Promise<unknown> {
-    return this.client.json(url, {
-      headers: {
-        'X-API-KEY': this.apiKey,
-        'x-chain': 'solana',
-      },
-      timeoutMs: this.timeoutMs,
-      provider: 'birdeye',
-      ...(signal === undefined ? {} : { signal }),
-    });
+    return this.requestGate.executeGet(
+      async () => this.client.json(url, {
+        headers: {
+          'X-API-KEY': this.apiKey,
+          'x-chain': 'solana',
+        },
+        timeoutMs: this.timeoutMs,
+        provider: 'birdeye',
+        ...(signal === undefined ? {} : { signal }),
+      }),
+      signal,
+    );
   }
 }

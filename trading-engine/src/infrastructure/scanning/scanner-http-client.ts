@@ -13,6 +13,7 @@ export class ScannerProviderError extends Error {
     public readonly retryable: boolean,
     public readonly statusCode: number | null = null,
     public readonly provider: ScannerProviderName | null = null,
+    public readonly retryAfterMs: number | null = null,
   ) {
     super('Scanner provider request failed');
     this.name = 'ScannerProviderError';
@@ -67,6 +68,9 @@ export class ScannerHttpClient {
     }
 
     if (response.status < 200 || response.status >= 300) {
+      const retryAfterMs = response.status === 429
+        ? parseRetryAfterMs(response.headers.get('retry-after'))
+        : null;
       await response.body?.cancel();
       const authenticationFailure = response.status === 401 || response.status === 403;
       const timeoutFailure = response.status === 408;
@@ -82,6 +86,7 @@ export class ScannerHttpClient {
           && (timeoutFailure || response.status === 429 || response.status >= 500),
         response.status,
         request.provider ?? null,
+        retryAfterMs,
       );
     }
 
@@ -109,6 +114,28 @@ export class ScannerHttpClient {
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error
     && error.name === 'TimeoutError';
+}
+
+function parseRetryAfterMs(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  const trimmedValue = value.trim();
+
+  if (/^\d+$/.test(trimmedValue)) {
+    const seconds = Number(trimmedValue);
+
+    return Number.isSafeInteger(seconds) && seconds <= Number.MAX_SAFE_INTEGER / 1_000
+      ? seconds * 1_000
+      : null;
+  }
+
+  const retryAt = Date.parse(trimmedValue);
+
+  return Number.isFinite(retryAt)
+    ? Math.max(0, retryAt - Date.now())
+    : null;
 }
 
 export function objectValue(value: unknown): Readonly<Record<string, unknown>> | undefined {

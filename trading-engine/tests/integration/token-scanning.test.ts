@@ -15,6 +15,7 @@ import { OpportunityRepository } from '../../src/infrastructure/database/reposit
 import { OpportunityEvaluationRepository } from '../../src/infrastructure/database/repositories/opportunity-evaluation-repository.js';
 import { OutboxRepository } from '../../src/infrastructure/database/repositories/outbox-repository.js';
 import { TokenScanRepository } from '../../src/infrastructure/database/repositories/token-scan-repository.js';
+import type { BirdeyeRequestGateOptions } from '../../src/infrastructure/scanning/birdeye-request-gate.js';
 import { BirdeyeScannerProvider } from '../../src/infrastructure/scanning/birdeye-scanner-provider.js';
 import { DexScreenerScannerProvider } from '../../src/infrastructure/scanning/dexscreener-scanner-provider.js';
 import { GeckoTerminalScannerProvider } from '../../src/infrastructure/scanning/geckoterminal-scanner-provider.js';
@@ -33,6 +34,14 @@ import {
 const address = 'So11111111111111111111111111111111111111112';
 const lowLiquidityAddress = '11111111111111111111111111111111';
 const traceparent = '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01';
+const immediateBirdeyeRequestGate = {
+  minimumRequestIntervalMs: 0,
+  retryBaseDelayMs: 0,
+  maximumRetryDelayMs: 0,
+  maximumRetryAfterMs: 0,
+  maximumJitterMs: 0,
+  random: (): number => 0,
+} satisfies BirdeyeRequestGateOptions;
 
 describe('PostgreSQL token scanner workflow', () => {
   let environment: TestEnvironment;
@@ -91,6 +100,7 @@ describe('PostgreSQL token scanner workflow', () => {
         new URL('https://public-api.birdeye.so'),
         'test-key',
         1_000,
+        immediateBirdeyeRequestGate,
       ),
       dexscreener: new DexScreenerScannerProvider(scannerHttp, 1_000),
       geckoTerminal: new GeckoTerminalScannerProvider(scannerHttp, 1_000),
@@ -224,6 +234,7 @@ describe('PostgreSQL token scanner workflow', () => {
       new URL('https://public-api.birdeye.so'),
       'test-key',
       1_000,
+      immediateBirdeyeRequestGate,
     );
     vi.spyOn(birdeye, 'newListings').mockRejectedValue(
       new Error('Bearer private-value https://user:password@example.test/path?api_key=private'),
@@ -293,7 +304,12 @@ describe('PostgreSQL token scanner workflow', () => {
 
   it('retries rate limits within bounds and becomes terminal on the fifth attempt', async () => {
     const accepted = await handler.execute(startCommand());
-    const rateLimited: typeof fetch = () => Promise.resolve(new Response('', { status: 429 }));
+    let providerRequests = 0;
+    const rateLimited: typeof fetch = () => {
+      providerRequests += 1;
+
+      return Promise.resolve(new Response('', { status: 429 }));
+    };
     const dispatcher = scannerDispatcher(database, scans, rateLimited);
 
     for (let attempt = 1; attempt <= 5; attempt += 1) {
@@ -339,6 +355,77 @@ describe('PostgreSQL token scanner workflow', () => {
       error_code: 'PROVIDER_RATE_LIMITED',
       provider_failures: ['PROVIDER_RATE_LIMITED'],
     });
+    expect(providerRequests).toBe(15);
+  });
+
+  it('preserves every October 28 candidate outcome when Birdeye rate limits persist', async () => {
+    const accepted = await handler.execute(startCommand());
+    const providerRequests: string[] = [];
+    const dispatcher = scannerDispatcher(database, scans, october28ProviderFetch(providerRequests));
+
+    await expect(dispatcher.dispatchBatch()).resolves.toEqual({ didWork: true });
+
+    const execution = await database
+      .selectFrom('token_scan_executions')
+      .selectAll()
+      .where('id', '=', accepted.scanExecutionId)
+      .executeTakeFirstOrThrow();
+    const discoveries = await database
+      .selectFrom('token_discoveries')
+      .select(['state', 'reason_code'])
+      .where('scan_execution_id', '=', accepted.scanExecutionId)
+      .orderBy('discovery_index')
+      .execute();
+    const opportunityCount = await database
+      .selectFrom('opportunities')
+      .select(({ fn }) => fn.countAll<number>().as('count'))
+      .executeTakeFirstOrThrow();
+    const terminal = await database
+      .selectFrom('event_outbox')
+      .selectAll()
+      .where('event_type', '=', 'token.scan.completed.v1')
+      .executeTakeFirstOrThrow();
+
+    expect(execution).toMatchObject({
+      state: 'succeeded_with_warnings',
+      attempt_count: 1,
+      discovered_count: 20,
+      examined_count: 20,
+      qualified_count: 0,
+      opportunities_created_count: 0,
+      opportunities_existing_count: 0,
+      skipped_count: 12,
+      failed_count: 8,
+      provider_failures: ['PROVIDER_RATE_LIMITED'],
+    });
+    expect(discoveries).toEqual([
+      ...Array.from({ length: 11 }, () => ({
+        state: 'skipped',
+        reason_code: 'DISCOVERY_LIQUIDITY_BELOW_MINIMUM',
+      })),
+      { state: 'skipped', reason_code: 'HOLDERS_BELOW_MINIMUM' },
+      ...Array.from({ length: 8 }, () => ({
+        state: 'failed',
+        reason_code: 'PROVIDER_RATE_LIMITED',
+      })),
+    ]);
+    expect(opportunityCount.count).toBe(0);
+    expect(terminal.envelope.payload).toMatchObject({
+      outcome: 'succeeded_with_warnings',
+      counts: {
+        discovered: 20,
+        examined: 20,
+        qualified: 0,
+        opportunities_created: 0,
+        opportunities_existing: 0,
+        skipped: 12,
+        failed: 8,
+      },
+      provider_failures: ['PROVIDER_RATE_LIMITED'],
+      error_code: null,
+    });
+    expect(providerRequests.filter((path) => path === '/defi/v2/tokens/new_listing')).toHaveLength(1);
+    expect(providerRequests.filter((path) => path === '/defi/token_overview')).toHaveLength(25);
   });
 
   it('classifies a retryable database failure without publishing a terminal event', async () => {
@@ -496,6 +583,7 @@ function scannerDispatcher(
       new URL('https://public-api.birdeye.so'),
       'test-key',
       1_000,
+      immediateBirdeyeRequestGate,
     ),
     dexscreener: new DexScreenerScannerProvider(scannerHttp, 1_000),
     geckoTerminal: new GeckoTerminalScannerProvider(scannerHttp, 1_000),
@@ -617,4 +705,50 @@ function providerResponse(input: Parameters<typeof fetch>[0]): Response {
 
 function providerFetch(): typeof fetch {
   return (input): Promise<Response> => Promise.resolve(providerResponse(input));
+}
+
+function october28ProviderFetch(requests: string[]): typeof fetch {
+  const listings = Array.from({ length: 20 }, (_, index) => ({
+    address: `october-mint-${String(index + 1).padStart(2, '0')}`,
+    symbol: `OCT${index + 1}`,
+    name: `October token ${index + 1}`,
+    liquidity: index < 11 ? 99 : 6_000,
+  }));
+
+  return (input): Promise<Response> => {
+    const url = input instanceof URL
+      ? input
+      : input instanceof Request
+        ? new URL(input.url)
+        : new URL(input);
+    requests.push(url.pathname);
+
+    if (url.pathname === '/defi/v2/tokens/new_listing') {
+      return Promise.resolve(Response.json({ data: { items: listings } }));
+    }
+
+    if (url.pathname === '/defi/token_overview') {
+      if (url.searchParams.get('address') === 'october-mint-12') {
+        return Promise.resolve(Response.json({
+          data: {
+            symbol: 'OCT12',
+            name: 'October token 12',
+            price: 0.001,
+            marketCap: 10_000,
+            liquidity: 6_000,
+            holder: 4,
+            v1m: 1_000,
+            buy1m: 70,
+            sell1m: 30,
+            uniqueWallet5m: 30,
+            priceChange5mPercent: 10,
+          },
+        }));
+      }
+
+      return Promise.resolve(new Response('', { status: 429 }));
+    }
+
+    return Promise.reject(new Error(`Unexpected scanner provider request: ${url.hostname}${url.pathname}`));
+  };
 }
