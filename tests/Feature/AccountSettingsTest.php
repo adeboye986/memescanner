@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\TelegramIdentity;
 use App\Models\User;
 use Illuminate\Auth\Notifications\VerifyEmail;
 use Illuminate\Support\Facades\Hash;
@@ -52,5 +53,72 @@ class AccountSettingsTest extends TestCase
         $this->actingAs($user)->put(route('account.update'), ['name' => 'Owner', 'email' => 'legacy@example.com'])->assertSessionHasErrors('email');
 
         $this->assertSame('owner@example.com', $user->fresh()->email);
+    }
+
+    public function test_settings_screen_organizes_only_supported_user_preferences(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+
+        $trading = $this->actingAs($user)->get(route('account.edit'))->assertOk();
+
+        $trading->assertSee('data-settings-screen', false)
+            ->assertSee('data-settings-section="trading"', false)
+            ->assertSee('Settings')
+            ->assertSee('Manage your account, trading preferences, and notifications.')
+            ->assertSee('data-theme-toggle', false)
+            ->assertSee('data-theme-icon="light"', false)
+            ->assertSee('data-theme-icon="dark"', false)
+            ->assertSee('overflow-x-auto', false)
+            ->assertSee('Trading Preferences')
+            ->assertSee('Risk Management')
+            ->assertSee('Notifications')
+            ->assertSee('Security')
+            ->assertSee('name="execution_mode"', false)
+            ->assertSee('action="'.route('dashboard.trading-preferences.update').'"', false)
+            ->assertSee('LIVE AUTO and LIVE SIGNAL are unavailable.')
+            ->assertDontSee('Diagnostics')
+            ->assertDontSee('Two-factor authentication is enabled.');
+
+        $this->get(route('account.edit', ['section' => 'general']))->assertOk()
+            ->assertSee('action="'.route('account.update').'"', false)
+            ->assertSee(route('wallets.index'), false);
+        $this->get(route('account.edit', ['section' => 'risk']))->assertOk()
+            ->assertSee('action="'.route('dashboard.paper-strategy.update').'"', false)
+            ->assertSee('Existing positions retain their stored strategy snapshot.');
+        $this->get(route('account.edit', ['section' => 'security']))->assertOk()
+            ->assertSee('action="'.route('account.password.update').'"', false)
+            ->assertSee('not currently supported');
+    }
+
+    public function test_settings_notifications_are_user_scoped_and_do_not_expose_platform_secrets(): void
+    {
+        $user = User::factory()->create(['is_admin' => false]);
+        $otherUser = User::factory()->create(['is_admin' => false]);
+        TelegramIdentity::factory()->create(['user_id' => $user->id, 'telegram_username' => 'owned_identity']);
+        TelegramIdentity::factory()->create(['user_id' => $otherUser->id, 'telegram_username' => 'other_identity']);
+
+        $response = $this->actingAs($user)->get(route('account.edit', ['section' => 'notifications']))->assertOk();
+
+        $response->assertSee('@owned_identity')
+            ->assertDontSee('other_identity')
+            ->assertSee(route('telegram.settings'), false)
+            ->assertDontSee('telegram.bot_token')
+            ->assertDontSee('telegram.webhook_secret');
+    }
+
+    public function test_diagnostics_section_is_available_only_to_administrators(): void
+    {
+        $customer = User::factory()->create(['is_admin' => false]);
+        $administrator = User::factory()->create(['is_admin' => true]);
+
+        $this->actingAs($customer)->get(route('account.edit', ['section' => 'diagnostics']))->assertOk()
+            ->assertSee('data-settings-section="trading"', false)
+            ->assertDontSee('Administrator diagnostics');
+
+        $this->actingAs($administrator)->get(route('account.edit', ['section' => 'diagnostics']))->assertOk()
+            ->assertSee('data-settings-section="diagnostics"', false)
+            ->assertSee('Administrator diagnostics')
+            ->assertSee(route('settings.index'), false)
+            ->assertSee(route('dashboard', ['view' => 'tools']).'#system-status', false);
     }
 }

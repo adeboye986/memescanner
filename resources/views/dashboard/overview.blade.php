@@ -1,7 +1,7 @@
 @php
     $toolsUrl = route('dashboard', ['view' => 'tools']);
-    $walletsUrl = auth()->user()->is_admin ? $toolsUrl.'#wallets' : route('account.edit').'#wallets';
-    $tradingSettingsUrl = auth()->user()->is_admin ? route('settings.index') : $toolsUrl.'#trading-preferences';
+    $walletsUrl = route('wallets.index');
+    $tradingSettingsUrl = route('account.edit', ['section' => 'trading']);
     $summaryCards = [
         [
             'label' => 'Total Scans',

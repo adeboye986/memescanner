@@ -8,7 +8,7 @@
     $user = auth()->user();
     $isAdministrator = (bool) $administrator;
     $dashboardToolsUrl = route('dashboard', ['view' => 'tools']);
-    $settingsUrl = $isAdministrator ? route('settings.index') : route('account.edit').'#account-settings';
+    $settingsUrl = route('account.edit', ['section' => 'trading']);
     $walletsUrl = route('wallets.index');
     $scannerUrl = route('scanner.index');
     $systemStatusUrl = $dashboardToolsUrl.($isAdministrator ? '#system-status' : '#system-activity');
@@ -117,7 +117,7 @@
                             <span data-theme-icon="dark"><x-app-icon name="moon" :size="19" /></span>
                         </button>
 
-                        <a href="{{ route('telegram.settings') }}" class="ms-icon-button ms-notification-link" aria-label="Notification settings" title="Notification settings">
+                        <a href="{{ route('account.edit', ['section' => 'notifications']) }}" class="ms-icon-button ms-notification-link" aria-label="Notification settings" title="Notification settings">
                             <x-app-icon name="bell" :size="18" />
                         </a>
 
@@ -133,8 +133,9 @@
                                     <span>{{ $user->email }}</span>
                                     <small>{{ $isAdministrator ? 'Administrator' : 'Trader' }}</small>
                                 </div>
-                                <a href="{{ route('account.edit') }}"><x-app-icon name="user" :size="17" /> Profile & security</a>
-                                <a href="{{ route('telegram.settings') }}"><x-app-icon name="telegram" :size="17" /> Telegram & notifications</a>
+                                <a href="{{ route('account.edit', ['section' => 'general']) }}"><x-app-icon name="user" :size="17" /> Profile</a>
+                                <a href="{{ route('account.edit', ['section' => 'security']) }}"><x-app-icon name="shield" :size="17" /> Security</a>
+                                <a href="{{ route('account.edit', ['section' => 'notifications']) }}"><x-app-icon name="telegram" :size="17" /> Telegram & notifications</a>
                                 @unless($isAdministrator)
                                     <a href="{{ route('onboarding') }}"><x-app-icon name="setup" :size="17" /> Setup</a>
                                 @endunless

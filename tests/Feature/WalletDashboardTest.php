@@ -149,9 +149,9 @@ class WalletDashboardTest extends TestCase
         $user = User::factory()->create(['is_admin' => false]);
 
         $this->actingAs($user)
-            ->get(route('account.edit').'#wallets')
+            ->get(route('account.edit', ['section' => 'general']))
             ->assertOk()
-            ->assertSee('Wallets have moved')
+            ->assertSee('Connected wallets')
             ->assertSee(route('wallets.index'), false)
             ->assertDontSee('data-wallet-connect', false)
             ->assertDontSee('data-eth-connect', false)

@@ -38,9 +38,10 @@ class PaperStrategySettingsTest extends TestCase
     public function test_user_can_update_personal_strategy(): void
     {
         $user = User::factory()->create(['is_admin' => false]);
+        $settingsUrl = route('account.edit', ['section' => 'risk']);
         $this->actingAs($user);
-        $this->post(route('dashboard.paper-strategy.update'), $this->values(15, 75, 180))
-            ->assertRedirect(route('dashboard'))
+        $this->from($settingsUrl)->post(route('dashboard.paper-strategy.update'), $this->values(15, 75, 180))
+            ->assertRedirect($settingsUrl)
             ->assertSessionHas('success');
 
         $setting = PaperStrategySetting::query()->where('user_id', $user->id)->where('name', 'default')->firstOrFail();

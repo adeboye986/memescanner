@@ -175,16 +175,20 @@ class UserTradingPreferenceTest extends TestCase
         $this->assertSame(EntryMode::Signal, $result->entry_mode);
     }
 
-    public function test_dashboard_and_onboarding_show_actual_live_preference_and_explicit_selector(): void
+    public function test_settings_and_onboarding_show_actual_live_preference_and_dashboard_keeps_compatibility_link(): void
     {
         $this->withoutVite();
         $user = User::factory()->create(['is_admin' => false]);
         app(UserTradingPreferenceService::class)->update($user, ExecutionMode::Live, EntryMode::Confirm);
 
-        $this->actingAs($user)->get(route('dashboard', ['view' => 'tools']))->assertOk()
+        $this->actingAs($user)->get(route('account.edit', ['section' => 'trading']))->assertOk()
             ->assertSee('name="execution_mode"', false)->assertSee('value="live" selected', false)
-            ->assertSee('LIVE supports CONFIRM only')->assertDontSee('Live execution remains unavailable.')
+            ->assertSee('LIVE is limited to CONFIRM')->assertDontSee('Live execution remains unavailable.')
             ->assertDontSee('<input type="hidden" name="execution_mode"', false);
+        $this->get(route('dashboard', ['view' => 'tools']))->assertOk()
+            ->assertSee('Preference controls now live in Settings.')
+            ->assertSee(route('account.edit', ['section' => 'trading']), false)
+            ->assertDontSee('name="execution_mode"', false);
         $this->get(route('onboarding'))->assertOk()->assertSee('Current: LIVE + CONFIRM');
     }
 }

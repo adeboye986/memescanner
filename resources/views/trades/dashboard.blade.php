@@ -12,6 +12,8 @@
     ], $changes), fn (mixed $value, string $key): bool => ! in_array($value, ['', 'all'], true) || in_array($key, ['tab', 'source'], true), ARRAY_FILTER_USE_BOTH);
     $tabUrl = fn (string $tab): string => route('trades.index', $queryFor(['tab' => $tab, 'page' => null]));
     $sourceUrl = fn (string $source): string => route('trades.index', $queryFor(['source' => $source, 'page' => null]));
+    $tradingSettingsUrl = route('account.edit', ['section' => 'trading']);
+    $riskSettingsUrl = route('account.edit', ['section' => 'risk']);
     $toolsUrl = route('dashboard', ['view' => 'tools']);
     $records = $activeTab === 'positions' ? $trading['positions'] : ($activeTab === 'history' ? $trading['history'] : null);
     $summaryCards = [
@@ -32,7 +34,7 @@
                 </div>
                 <p class="mt-0.5 text-[13px] leading-5 text-slate-400">Monitor simulated positions, stored trade history, and source-specific performance. Entry preference: {{ str($entryMode)->upper() }}.</p>
             </div>
-            <a href="{{ $toolsUrl }}#trading-preferences" class="inline-flex min-h-9 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-900/80 px-3 text-[11px] font-semibold text-slate-300 transition hover:border-slate-600 hover:bg-slate-800">
+            <a href="{{ $tradingSettingsUrl }}" class="inline-flex min-h-9 shrink-0 items-center justify-center rounded-md border border-slate-700 bg-slate-900/80 px-3 text-[11px] font-semibold text-slate-300 transition hover:border-slate-600 hover:bg-slate-800">
                 Trading settings
             </a>
         </header>
@@ -169,7 +171,7 @@
         <section class="flex flex-col gap-2 rounded-lg border border-slate-800 bg-slate-900/45 px-4 py-3 text-[11px] text-slate-500 sm:flex-row sm:items-center sm:justify-between">
             <p>Strategy, risk policy, and source evidence remain server-managed. This page does not activate LIVE trading.</p>
             <div class="flex flex-wrap gap-3">
-                <a href="{{ $toolsUrl }}#paper-strategy" class="font-semibold text-sky-300 hover:text-sky-200">PAPER strategy</a>
+                <a href="{{ $riskSettingsUrl }}" class="font-semibold text-sky-300 hover:text-sky-200">PAPER strategy</a>
                 <a href="{{ $toolsUrl }}{{ $activeSource === 'engine' ? '#engine-paper-portfolio' : '#positions-heading' }}" class="font-semibold text-sky-300 hover:text-sky-200">Compatibility details</a>
             </div>
         </section>

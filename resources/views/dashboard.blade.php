@@ -82,13 +82,13 @@
         </section>
     @endcan
 
-    <form id="trading-preferences" method="POST" action="{{ route('dashboard.trading-preferences.update') }}" class="flex flex-wrap items-end gap-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-        @csrf @method('PUT')
-        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Execution Preference<select name="execution_mode" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white">@foreach(['paper' => 'PAPER', 'live' => 'LIVE'] as $value => $label)<option value="{{ $value }}" @selected(old('execution_mode', $executionMode) === $value)>{{ $label }}</option>@endforeach</select></label>
-        <label class="grid gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Entry Mode<select name="entry_mode" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white">@foreach(['signal' => 'Signal', 'confirm' => 'Confirm', 'auto' => 'Auto'] as $value => $label)<option value="{{ $value }}" @selected(old('entry_mode', $entryMode) === $value)>{{ $label }}</option>@endforeach</select></label>
-        <button class="rounded-xl bg-violet-400 px-5 py-2.5 text-sm font-semibold text-slate-950">Save Preferences</button>
-        <p class="text-xs text-slate-500">LIVE supports CONFIRM only for Ethereum opportunities and requires browser wallet signing. AUTO and SIGNAL are PAPER only.</p>
-    </form>
+    <section id="trading-preferences" class="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500">Trading Preferences</p>
+            <p class="mt-1 text-sm text-slate-300">Your current preference is {{ strtoupper($executionMode) }} · {{ strtoupper($entryMode) }}. Preference controls now live in Settings.</p>
+        </div>
+        <a href="{{ route('account.edit', ['section' => 'trading']) }}" class="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white">Open Settings</a>
+    </section>
 
     <section aria-labelledby="wallet-heading" class="flex flex-col gap-4">
         <div class="flex items-center justify-between gap-4">
@@ -140,33 +140,13 @@
         @endif
     </section>
 
-    <section id="paper-strategy" aria-labelledby="strategy-heading" class="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10 sm:p-6">
-        <div class="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Risk Management</p>
-                <h2 id="strategy-heading" class="mt-1 text-xl font-semibold text-white">Paper Trading Strategy</h2>
-                <p class="mt-2 max-w-2xl text-sm text-slate-400">These defaults are snapshotted when a new position opens. Existing positions keep their own strategy.</p>
-            </div>
-            <div class="grid grid-cols-3 gap-2 text-center text-xs">
-                <div class="rounded-xl bg-red-400/10 px-3 py-2 text-red-300"><span class="block text-slate-500">Stop Loss</span>-{{ number_format($paperStrategy['stop_loss_percent'], 2) }}%</div>
-                <div class="rounded-xl bg-amber-400/10 px-3 py-2 text-amber-300"><span class="block text-slate-500">Level 1</span>+{{ number_format($paperStrategy['protection_level_1_percent'], 2) }}%</div>
-                <div class="rounded-xl bg-emerald-400/10 px-3 py-2 text-emerald-300"><span class="block text-slate-500">Level 2</span>+{{ number_format($paperStrategy['protection_level_2_percent'], 2) }}%</div>
-            </div>
+    <section id="paper-strategy" aria-labelledby="strategy-heading" class="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-black/10 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Risk Management</p>
+            <h2 id="strategy-heading" class="mt-1 text-lg font-semibold text-white">PAPER strategy moved to Settings</h2>
+            <p class="mt-1 text-sm text-slate-400">Existing positions keep their stored snapshot. Adjust defaults for new positions in the Risk Management section.</p>
         </div>
-
-        <form method="POST" action="{{ route('dashboard.paper-strategy.update') }}" class="mt-6 grid gap-4 md:grid-cols-3 lg:grid-cols-[1fr_1fr_1fr_auto] lg:items-end">
-            @csrf
-            <label class="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Stop Loss %
-                <input name="stop_loss_percent" type="number" min="0.01" max="99.99" step="0.01" required value="{{ old('stop_loss_percent', $paperStrategy['stop_loss_percent']) }}" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm font-semibold normal-case text-slate-100 focus:border-emerald-400 focus:outline-none">
-            </label>
-            <label class="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Protection Level 1 %
-                <input name="protection_level_1_percent" type="number" min="0.01" step="0.01" required value="{{ old('protection_level_1_percent', $paperStrategy['protection_level_1_percent']) }}" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm font-semibold normal-case text-slate-100 focus:border-emerald-400 focus:outline-none">
-            </label>
-            <label class="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Protection Level 2 %
-                <input name="protection_level_2_percent" type="number" min="0.02" step="0.01" required value="{{ old('protection_level_2_percent', $paperStrategy['protection_level_2_percent']) }}" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm font-semibold normal-case text-slate-100 focus:border-emerald-400 focus:outline-none">
-            </label>
-            <button type="submit" class="rounded-xl bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300">Save Strategy</button>
-        </form>
+        <a href="{{ route('account.edit', ['section' => 'risk']) }}" class="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl border border-slate-700 px-4 text-sm font-semibold text-slate-200">Open Risk Management</a>
     </section>
 
     <div class="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">

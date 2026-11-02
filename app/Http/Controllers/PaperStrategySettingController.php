@@ -14,8 +14,6 @@ class PaperStrategySettingController extends Controller
     ): RedirectResponse {
         $strategies->updateForUser($request->user(), $request->validated());
 
-        return redirect()
-            ->route('dashboard')
-            ->with('success', 'Your paper-trading strategy was updated. New positions will use these settings.');
+        return back()->with('success', 'Your paper-trading strategy was updated. New positions will use these settings.');
     }
 }
